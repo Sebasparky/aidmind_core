@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Search, ChevronDown, MoreHorizontal, X } from "lucide-react";
+import { Search, ChevronDown, MoreHorizontal, X, FileEdit, FolderPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -7,8 +7,15 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { CaseItem, Case } from "./CaseItem";
 import { useDashboard } from "@/contexts/DashboardContext";
+import { StartNoteModal } from "./StartNoteModal";
 
 const activeCases: Case[] = [
   {
@@ -71,6 +78,7 @@ export function CasesPanel() {
   const [activeCasesOpen, setActiveCasesOpen] = useState(true);
   const [closedCasesOpen, setClosedCasesOpen] = useState(false);
   const [localSearch, setLocalSearch] = useState("");
+  const [startNoteOpen, setStartNoteOpen] = useState(false);
 
   // Combine global and local search
   const effectiveSearch = searchQuery || localSearch;
@@ -112,11 +120,28 @@ export function CasesPanel() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-semibold text-foreground">My Cases</h2>
-        <Button className="gap-1">
-          New Case
-          <ChevronDown className="h-4 w-4 ml-1" />
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button className="gap-1">
+              Start Note
+              <ChevronDown className="h-4 w-4 ml-1" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuItem onClick={() => setStartNoteOpen(true)} className="gap-2">
+              <FileEdit className="h-4 w-4" />
+              Start Note
+            </DropdownMenuItem>
+            <DropdownMenuItem className="gap-2">
+              <FolderPlus className="h-4 w-4" />
+              New Case
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
+
+      {/* Start Note Modal */}
+      <StartNoteModal open={startNoteOpen} onOpenChange={setStartNoteOpen} />
 
       {/* Search */}
       <div className="relative mb-4">
