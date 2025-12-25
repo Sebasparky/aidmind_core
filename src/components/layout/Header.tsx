@@ -1,4 +1,4 @@
-import { Search, Bell, ChevronDown, X } from "lucide-react";
+import { Search, Bell, ChevronDown, X, Check, FileText, Calendar, MessageSquare } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -6,18 +6,54 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useDashboard } from "@/contexts/DashboardContext";
 import { useState, useEffect } from "react";
 import { useDebounce } from "@/hooks/use-debounce";
+
+// Mock updates data
+const mockUpdates = [
+  {
+    id: "1",
+    icon: FileText,
+    description: "Case notes approved for A. J.",
+    timestamp: "2h ago",
+    read: false,
+  },
+  {
+    id: "2",
+    icon: Calendar,
+    description: "Task due date changed: Follow up on housing",
+    timestamp: "4h ago",
+    read: false,
+  },
+  {
+    id: "3",
+    icon: MessageSquare,
+    description: "Supervisor comment on Medical support case",
+    timestamp: "Yesterday",
+    read: true,
+  },
+  {
+    id: "4",
+    icon: FileText,
+    description: "Document review completed for C. T.",
+    timestamp: "2 days ago",
+    read: true,
+  },
+];
 
 export function Header() {
   const navigate = useNavigate();
   const { searchQuery, setSearchQuery, clearSearch } = useDashboard();
   const [localSearch, setLocalSearch] = useState(searchQuery);
   const debouncedSearch = useDebounce(localSearch, 200);
+  const [updates, setUpdates] = useState(mockUpdates);
+
+  const unreadCount = updates.filter((u) => !u.read).length;
 
   // Sync debounced value to context
   useEffect(() => {
@@ -34,6 +70,10 @@ export function Header() {
   const handleClearSearch = () => {
     setLocalSearch("");
     clearSearch();
+  };
+
+  const handleMarkAllRead = () => {
+    setUpdates((prev) => prev.map((u) => ({ ...u, read: true })));
   };
 
   return (
@@ -86,16 +126,73 @@ export function Header() {
 
       {/* Right: Notifications + User */}
       <div className="flex items-center gap-4">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="relative"
-          aria-label="Notifications"
-        >
-          <Bell className="h-5 w-5 text-muted-foreground" />
-          <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-status-danger rounded-full" />
-        </Button>
+        {/* Bell/Updates Dropdown */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="relative"
+              aria-label="Recent updates"
+            >
+              <Bell className="h-5 w-5 text-muted-foreground" />
+              {unreadCount > 0 && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-status-danger rounded-full" />
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-80 bg-popover">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+              <span className="text-sm font-medium text-foreground">Recent Updates</span>
+              {unreadCount > 0 && (
+                <button
+                  onClick={handleMarkAllRead}
+                  className="text-xs text-primary hover:text-primary/80 transition-colors flex items-center gap-1"
+                >
+                  <Check className="h-3 w-3" />
+                  Mark all as read
+                </button>
+              )}
+            </div>
+            <div className="max-h-[300px] overflow-y-auto">
+              {updates.map((update) => {
+                const Icon = update.icon;
+                return (
+                  <DropdownMenuItem
+                    key={update.id}
+                    className="flex items-start gap-3 px-3 py-3 cursor-pointer"
+                  >
+                    <div className="flex-shrink-0 mt-0.5">
+                      <Icon className="h-4 w-4 text-muted-foreground" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-sm leading-snug ${update.read ? "text-muted-foreground" : "text-foreground"}`}>
+                        {update.description}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{update.timestamp}</p>
+                    </div>
+                    {!update.read && (
+                      <div className="flex-shrink-0 mt-1.5">
+                        <span className="w-2 h-2 bg-primary rounded-full block" />
+                      </div>
+                    )}
+                  </DropdownMenuItem>
+                );
+              })}
+            </div>
+            <DropdownMenuSeparator />
+            <div className="px-3 py-2">
+              <button
+                disabled
+                className="text-xs text-muted-foreground/60 cursor-not-allowed"
+              >
+                View all updates
+              </button>
+            </div>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
+        {/* User Menu */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
