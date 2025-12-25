@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, MoreHorizontal, Clock, Check, Pencil, CheckCircle2, ArrowUpCircle, ArrowDownCircle, Trash2, RotateCcw, Eye } from "lucide-react";
+import { ChevronDown, MoreHorizontal, Clock, Check, Pencil, CheckCircle2, ArrowUpCircle, ArrowDownCircle, Trash2, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/alert-dialog";
 
 interface TaskItemProps {
-  task: Task & { requiresSupervisorReview?: boolean };
+  task: Task;
   onComplete: (taskId: string) => void;
   onEdit: (task: Task) => void;
   onDelete: (taskId: string) => void;
@@ -128,7 +128,7 @@ export function TaskItem({
           )}
 
           {task.caseLabel && (
-            <div className="mt-2.5 flex items-center gap-2">
+            <div className="mt-2.5">
               <Badge
                 variant="outline"
                 className="text-xs font-normal bg-background/50 border-border/60 text-muted-foreground"
@@ -136,12 +136,6 @@ export function TaskItem({
                 <span className="w-1.5 h-1.5 rounded-full bg-primary/60 mr-1.5" />
                 {task.caseLabel}
               </Badge>
-              {task.requiresSupervisorReview && (
-                <span className="flex items-center gap-1 text-[10px] text-muted-foreground bg-secondary/80 px-1.5 py-0.5 rounded">
-                  <Eye className="h-3 w-3" />
-                  Supervisor review
-                </span>
-              )}
             </div>
           )}
 
