@@ -12,7 +12,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       <Header />
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <Sidebar />
-        <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        <main className="flex-1 overflow-y-auto p-6 bg-[hsl(var(--canvas))]">{children}</main>
       </div>
     </div>
   );
