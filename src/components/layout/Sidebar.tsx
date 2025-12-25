@@ -53,10 +53,10 @@ const scheduleItems = [
 ];
 
 const typeColors = {
-  call: "text-schedule-call bg-schedule-call/10",
-  meeting: "text-schedule-meeting bg-schedule-meeting/10",
-  deadline: "text-schedule-deadline bg-schedule-deadline/10",
-  document: "text-amber-500 bg-amber-500/10",
+  call: "text-schedule-call bg-[hsl(var(--schedule-call)/0.12)]",
+  meeting: "text-schedule-meeting bg-[hsl(var(--schedule-meeting)/0.12)]",
+  deadline: "text-schedule-deadline bg-[hsl(var(--schedule-deadline)/0.12)]",
+  document: "text-schedule-document bg-[hsl(var(--schedule-document)/0.12)]",
 };
 
 export function Sidebar() {
