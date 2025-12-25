@@ -156,12 +156,6 @@ const Calendar = () => {
     }
   };
 
-  // Handle double-click on day - open Add Event modal
-  const handleDayDoubleClick = (date: Date) => {
-    setPrefillDate(date);
-    setModalOpen(true);
-  };
-
   // Close agenda panel
   const handleCloseAgenda = () => {
     setSelectedDate(null);
@@ -300,7 +294,6 @@ const Calendar = () => {
                               : ""
                           }`}
                           onClick={() => handleDayClick(day)}
-                          onDoubleClick={() => handleDayDoubleClick(day)}
                         >
                           <span
                             className={`inline-flex items-center justify-center w-7 h-7 rounded-full text-sm ${
