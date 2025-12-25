@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { X, Calendar as CalendarIcon } from "lucide-react";
+import { Calendar as CalendarIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,17 +18,18 @@ import {
 } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
-import { format } from "date-fns";
+import { format, parse } from "date-fns";
 import { cn } from "@/lib/utils";
-import { useDashboard, availableCases } from "@/contexts/DashboardContext";
+import { useDashboard, availableCases, Task } from "@/contexts/DashboardContext";
 
 interface AddTaskModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  editTask?: Task | null;
 }
 
-export function AddTaskModal({ open, onOpenChange }: AddTaskModalProps) {
-  const { addTask } = useDashboard();
+export function AddTaskModal({ open, onOpenChange, editTask }: AddTaskModalProps) {
+  const { addTask, updateTask } = useDashboard();
   const [title, setTitle] = useState("");
   const [caseId, setCaseId] = useState<string>("");
   const [dueDate, setDueDate] = useState<Date | undefined>();
@@ -36,18 +37,26 @@ export function AddTaskModal({ open, onOpenChange }: AddTaskModalProps) {
   const [titleError, setTitleError] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
 
-  // Reset form when modal opens
+  const isEditMode = !!editTask;
+
+  // Reset or populate form when modal opens
   useEffect(() => {
     if (open) {
-      setTitle("");
-      setCaseId("");
-      setDueDate(undefined);
-      setPriority("NORMAL");
+      if (editTask) {
+        setTitle(editTask.title);
+        setCaseId(editTask.caseId || "");
+        setDueDate(parseDueDateString(editTask.dueDate));
+        setPriority(editTask.priority);
+      } else {
+        setTitle("");
+        setCaseId("");
+        setDueDate(undefined);
+        setPriority("NORMAL");
+      }
       setTitleError(false);
-      // Autofocus title input
       setTimeout(() => titleInputRef.current?.focus(), 100);
     }
-  }, [open]);
+  }, [open, editTask]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,15 +68,20 @@ export function AddTaskModal({ open, onOpenChange }: AddTaskModalProps) {
     }
 
     const selectedCase = availableCases.find((c) => c.id === caseId);
-    
-    addTask({
+    const taskData = {
       title: title.trim(),
       caseId: caseId || undefined,
       caseLabel: selectedCase?.label,
       clientLabel: selectedCase?.client,
       dueDate: dueDate ? formatDueDate(dueDate) : undefined,
       priority,
-    });
+    };
+
+    if (isEditMode && editTask) {
+      updateTask(editTask.id, taskData);
+    } else {
+      addTask(taskData);
+    }
 
     onOpenChange(false);
   };
@@ -84,7 +98,7 @@ export function AddTaskModal({ open, onOpenChange }: AddTaskModalProps) {
       <DialogContent className="sm:max-w-[480px] bg-card border-border">
         <DialogHeader>
           <DialogTitle className="text-lg font-semibold text-foreground">
-            Add New Task
+            {isEditMode ? "Edit Task" : "Add New Task"}
           </DialogTitle>
         </DialogHeader>
 
@@ -190,7 +204,7 @@ export function AddTaskModal({ open, onOpenChange }: AddTaskModalProps) {
             >
               Cancel
             </Button>
-            <Button type="submit">Create Task</Button>
+            <Button type="submit">{isEditMode ? "Save Changes" : "Create Task"}</Button>
           </div>
         </form>
       </DialogContent>
@@ -215,4 +229,34 @@ function formatDueDate(date: Date): string {
     return "Tomorrow";
   }
   return format(date, "MMM d");
+}
+
+function parseDueDateString(dueDate?: string): Date | undefined {
+  if (!dueDate) return undefined;
+  
+  const lower = dueDate.toLowerCase();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  if (lower.includes("today")) {
+    return today;
+  }
+  if (lower.includes("tomorrow")) {
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return tomorrow;
+  }
+  
+  // Try to parse "Apr 28" format
+  try {
+    const cleanDate = dueDate.split("·")[0].trim();
+    const parsed = parse(cleanDate, "MMM d", new Date());
+    if (!isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  } catch {
+    // Fall through
+  }
+  
+  return undefined;
 }

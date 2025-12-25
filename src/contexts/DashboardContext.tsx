@@ -23,6 +23,9 @@ interface DashboardContextType {
   completeTask: (taskId: string) => void;
   undoCompleteTask: (taskId: string) => void;
   addTask: (task: Omit<Task, "id" | "createdAt" | "status">) => void;
+  updateTask: (taskId: string, updates: Partial<Omit<Task, "id" | "createdAt">>) => void;
+  deleteTask: (taskId: string) => void;
+  restoreTask: (taskId: string) => void;
   activeTasks: Task[];
   completedTasks: Task[];
 }
@@ -149,6 +152,75 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     setTasks((prev) => [newTask, ...prev]);
   }, []);
 
+  const updateTask = useCallback((taskId: string, updates: Partial<Omit<Task, "id" | "createdAt">>) => {
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.id === taskId ? { ...task, ...updates } : task
+      )
+    );
+  }, []);
+
+  const deleteTask = useCallback((taskId: string) => {
+    let deletedTask: Task | null = null;
+    
+    setTasks((prev) => {
+      deletedTask = prev.find((t) => t.id === taskId) || null;
+      return prev.filter((t) => t.id !== taskId);
+    });
+
+    // Show undo toast for delete
+    if (deletedTask) {
+      const taskToRestore = deletedTask;
+      const { dismiss } = toast({
+        description: "Task deleted",
+        action: (
+          <button
+            onClick={() => {
+              setTasks((prev) => [...prev, taskToRestore]);
+              dismiss();
+            }}
+            className="text-sm font-medium text-primary hover:text-primary/80 transition-colors px-3 py-1 rounded-md bg-primary/10 hover:bg-primary/20"
+          >
+            Undo
+          </button>
+        ),
+        duration: 5000,
+      });
+    }
+  }, []);
+
+  const restoreTask = useCallback((taskId: string) => {
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.id === taskId
+          ? { ...task, status: "ACTIVE" as const, completedAt: undefined }
+          : task
+      )
+    );
+
+    const { dismiss } = toast({
+      description: "Task restored",
+      action: (
+        <button
+          onClick={() => {
+            setTasks((prev) =>
+              prev.map((task) =>
+                task.id === taskId
+                  ? { ...task, status: "COMPLETED" as const, completedAt: new Date() }
+                  : task
+              )
+            );
+            dismiss();
+          }}
+          className="text-sm font-medium text-primary hover:text-primary/80 transition-colors px-3 py-1 rounded-md bg-primary/10 hover:bg-primary/20"
+        >
+          Undo
+        </button>
+      ),
+      duration: 5000,
+    });
+  }, []);
+
   const activeTasks = useMemo(
     () => tasks.filter((t) => t.status === "ACTIVE"),
     [tasks]
@@ -172,6 +244,9 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         completeTask,
         undoCompleteTask,
         addTask,
+        updateTask,
+        deleteTask,
+        restoreTask,
         activeTasks,
         completedTasks,
       }}

@@ -42,13 +42,22 @@ function parseDueDate(dueDate?: string): Date {
 }
 
 export function TaskList() {
-  const { searchQuery, activeTasks, completedTasks, completeTask } = useDashboard();
+  const { 
+    searchQuery, 
+    activeTasks, 
+    completedTasks, 
+    completeTask,
+    updateTask,
+    deleteTask,
+    restoreTask,
+  } = useDashboard();
   const [highPriorityOpen, setHighPriorityOpen] = useState(true);
   const [upcomingOpen, setUpcomingOpen] = useState(true);
   const [sortMode, setSortMode] = useState<SortMode>("dueDate");
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>("all");
   const [viewFilter, setViewFilter] = useState<ViewFilter>("active");
   const [addTaskOpen, setAddTaskOpen] = useState(false);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
 
   // Filter and sort active tasks
   const filteredActiveTasks = useMemo(() => {
@@ -122,6 +131,22 @@ export function TaskList() {
 
   const displayedTasks = viewFilter === "active" ? filteredActiveTasks : filteredCompletedTasks;
   const showNoResults = searchQuery.trim() && displayedTasks.length === 0;
+
+  const handleEdit = (task: Task) => {
+    setEditingTask(task);
+    setAddTaskOpen(true);
+  };
+
+  const handleModalClose = (open: boolean) => {
+    setAddTaskOpen(open);
+    if (!open) {
+      setEditingTask(null);
+    }
+  };
+
+  const handleChangePriority = (taskId: string, priority: "NORMAL" | "HIGH") => {
+    updateTask(taskId, { priority });
+  };
 
   return (
     <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden bg-card rounded-xl border border-border p-5">
@@ -273,6 +298,10 @@ export function TaskList() {
                         key={task.id}
                         task={task}
                         onComplete={completeTask}
+                        onEdit={handleEdit}
+                        onDelete={deleteTask}
+                        onRestore={restoreTask}
+                        onChangePriority={handleChangePriority}
                       />
                     ))}
                   </div>
@@ -306,6 +335,10 @@ export function TaskList() {
                         key={task.id}
                         task={task}
                         onComplete={completeTask}
+                        onEdit={handleEdit}
+                        onDelete={deleteTask}
+                        onRestore={restoreTask}
+                        onChangePriority={handleChangePriority}
                       />
                     ))}
                   </div>
@@ -332,7 +365,11 @@ export function TaskList() {
                 <TaskItem
                   key={task.id}
                   task={task}
-                  onComplete={() => {}}
+                  onComplete={completeTask}
+                  onEdit={handleEdit}
+                  onDelete={deleteTask}
+                  onRestore={restoreTask}
+                  onChangePriority={handleChangePriority}
                   isCompleted
                 />
               ))
@@ -349,8 +386,12 @@ export function TaskList() {
         )}
       </div>
 
-      {/* Add Task Modal */}
-      <AddTaskModal open={addTaskOpen} onOpenChange={setAddTaskOpen} />
+      {/* Add/Edit Task Modal */}
+      <AddTaskModal 
+        open={addTaskOpen} 
+        onOpenChange={handleModalClose} 
+        editTask={editingTask}
+      />
     </div>
   );
 }
