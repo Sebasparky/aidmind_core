@@ -10,6 +10,9 @@
     --background: 210 20% 98%;
     --foreground: 222 47% 11%;
 
+    /* Canvas - light neutral background for main content area */
+    --canvas: 214 32% 96%;
+
     --card: 0 0% 100%;
     --card-foreground: 222 47% 11%;
 

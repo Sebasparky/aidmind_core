@@ -54,9 +54,9 @@ export function TaskList() {
   const [upcomingOpen, setUpcomingOpen] = useState(true);
 
   return (
-    <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden">
+    <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden bg-card rounded-xl border border-border p-5">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-semibold text-foreground">My Tasks</h1>
           <Badge
@@ -108,7 +108,7 @@ export function TaskList() {
       </div>
 
       {/* Task Groups */}
-      <div className="bg-card rounded-xl shadow-card overflow-y-auto flex-1 min-h-0">
+      <div className="overflow-y-auto flex-1 min-h-0 -mx-5 px-5">
         {/* High Priority Section */}
         <Collapsible open={highPriorityOpen} onOpenChange={setHighPriorityOpen}>
           <CollapsibleTrigger asChild>

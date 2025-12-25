@@ -6,9 +6,8 @@ import { Separator } from "@/components/ui/separator";
 const Index = () => {
   return (
     <DashboardLayout>
-      <div className="flex h-full min-h-0 gap-8">
+      <div className="flex h-full min-h-0 gap-6">
         <TaskList />
-        <Separator orientation="vertical" className="h-auto self-stretch bg-border" />
         <CasesPanel />
       </div>
     </DashboardLayout>

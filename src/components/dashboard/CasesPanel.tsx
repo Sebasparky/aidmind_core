@@ -47,9 +47,9 @@ export function CasesPanel() {
   const [closedCasesOpen, setClosedCasesOpen] = useState(false);
 
   return (
-    <div className="w-[380px] flex-shrink-0 flex flex-col h-full overflow-hidden bg-muted/30 rounded-xl p-4 -m-4">
+    <div className="w-[380px] flex-shrink-0 flex flex-col h-full overflow-hidden bg-card rounded-xl border border-border p-5">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-5">
         <h2 className="text-xl font-semibold text-foreground">My Cases</h2>
         <Button className="gap-1">
           New Case
@@ -68,8 +68,8 @@ export function CasesPanel() {
         />
       </div>
 
-      {/* Cases Card */}
-      <div className="bg-card rounded-xl shadow-card overflow-y-auto flex-1 min-h-0">
+      {/* Cases List */}
+      <div className="overflow-y-auto flex-1 min-h-0 -mx-5 px-5">
         {/* Active Cases */}
         <Collapsible open={activeCasesOpen} onOpenChange={setActiveCasesOpen}>
           <CollapsibleTrigger asChild>
