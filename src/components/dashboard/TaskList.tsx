@@ -127,7 +127,7 @@ export function TaskList() {
             </button>
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <div className="divide-y divide-border">
+            <div className="divide-y divide-border/60">
               {highPriorityTasks.map((task) => (
                 <TaskItem key={task.id} task={task} />
               ))}
@@ -153,7 +153,7 @@ export function TaskList() {
             </button>
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <div className="divide-y divide-border">
+            <div className="divide-y divide-border/60">
               {upcomingTasks.map((task) => (
                 <TaskItem key={task.id} task={task} />
               ))}

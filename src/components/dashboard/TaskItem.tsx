@@ -38,12 +38,16 @@ const statusConfig = {
 
 export function TaskItem({ task }: TaskItemProps) {
   const status = statusConfig[task.status];
+  const isHighPriority = task.status === "high" || task.status === "overdue";
 
   return (
-    <div className="group flex items-start gap-4 p-4 hover:bg-secondary/50 rounded-lg transition-colors">
+    <div className={cn(
+      "group flex items-start gap-4 py-5 px-4 hover:bg-secondary/30 transition-colors relative",
+      isHighPriority && "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[3px] before:rounded-full before:bg-status-danger/30"
+    )}>
       <Checkbox
         id={`task-${task.id}`}
-        className="mt-1 border-muted-foreground/40"
+        className="mt-1 border-muted-foreground/30"
         aria-label={`Mark "${task.title}" as complete`}
       />
 

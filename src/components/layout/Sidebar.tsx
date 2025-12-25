@@ -82,12 +82,12 @@ export function Sidebar() {
           <Separator className="mx-4 bg-border" />
 
           {/* Schedule Items - Scrollable */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-1">
+          <div className="flex-1 overflow-y-auto p-4 space-y-2">
             {scheduleItems.map((item, index) => {
               const Icon = item.icon;
               return (
                 <div key={item.id}>
-                  <div className="flex gap-3 py-3 px-2 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer">
+                  <div className="flex gap-3 py-3.5 px-2 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer">
                     <div
                       className={cn(
                         "w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0",
@@ -109,13 +109,13 @@ export function Sidebar() {
                       <p className="text-sm text-muted-foreground truncate mt-0.5">
                         {item.title}
                       </p>
-                      <p className="text-xs text-muted-foreground mt-1">
+                      <p className="text-xs font-medium text-foreground/70 mt-1.5">
                         {item.time}
                       </p>
                     </div>
                   </div>
                   {index < scheduleItems.length - 1 && (
-                    <Separator className="my-1 bg-border/50" />
+                    <Separator className="my-1.5 bg-border/40" />
                   )}
                 </div>
               );
