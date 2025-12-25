@@ -1,4 +1,4 @@
-import { CheckCircle2, AlertTriangle, MinusCircle } from "lucide-react";
+import { CheckCircle2, AlertTriangle, MinusCircle, Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 
@@ -9,6 +9,8 @@ export interface Case {
   updatedAt: string;
   status: "active" | "high-risk" | "resolved";
   showActiveBadge?: boolean;
+  lastInteraction?: string;
+  requiresSupervisorReview?: boolean;
 }
 
 interface CaseItemProps {
@@ -57,12 +59,28 @@ export function CaseItem({ caseData }: CaseItemProps) {
       </div>
 
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-foreground">
-          Client: {caseData.client}
-        </p>
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-medium text-foreground">
+            Client: {caseData.client}
+          </p>
+          {caseData.requiresSupervisorReview && (
+            <span className="flex items-center gap-1 text-[10px] text-muted-foreground bg-secondary px-1.5 py-0.5 rounded">
+              <Eye className="h-3 w-3" />
+              Review required
+            </span>
+          )}
+        </div>
         <p className="text-xs text-muted-foreground truncate">
           {caseData.caseName}
         </p>
+        
+        {/* Last interaction context */}
+        {caseData.lastInteraction && (
+          <p className="text-xs text-muted-foreground/80 truncate mt-1 italic">
+            {caseData.lastInteraction}
+          </p>
+        )}
+        
         <div className="flex items-center gap-2 mt-1.5">
           {showBadge ? (
             <Badge

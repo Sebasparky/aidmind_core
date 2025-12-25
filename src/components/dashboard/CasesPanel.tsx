@@ -17,6 +17,7 @@ const activeCases: Case[] = [
     caseName: "Housing assistance — intake",
     updatedAt: "Updated 1 hour ago",
     status: "active",
+    lastInteraction: "Phone call yesterday",
   },
   {
     id: "2",
@@ -24,6 +25,8 @@ const activeCases: Case[] = [
     caseName: "Medical support case",
     updatedAt: "",
     status: "high-risk",
+    lastInteraction: "In-person visit 3 days ago",
+    requiresSupervisorReview: true,
   },
   {
     id: "3",
@@ -31,6 +34,7 @@ const activeCases: Case[] = [
     caseName: "Job placement review",
     updatedAt: "Updated Mar 25",
     status: "active",
+    lastInteraction: "Follow-up call due tomorrow",
   },
   {
     id: "4",
@@ -39,6 +43,7 @@ const activeCases: Case[] = [
     updatedAt: "",
     status: "active",
     showActiveBadge: true,
+    lastInteraction: "Meeting scheduled for Apr 30",
   },
 ];
 
