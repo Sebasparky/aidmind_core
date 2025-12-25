@@ -12,6 +12,8 @@ export interface Task {
   dueDate: string;
   dueUrgency?: "today" | "tomorrow" | "future";
   status: "high" | "overdue" | "info" | "normal";
+  priority: "high" | "medium" | "low";
+  createdAt: Date;
 }
 
 interface TaskItemProps {

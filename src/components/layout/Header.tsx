@@ -1,4 +1,4 @@
-import { Search, Bell, ChevronDown } from "lucide-react";
+import { Search, Bell, ChevronDown, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -8,12 +8,42 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Link, useNavigate } from "react-router-dom";
+import { useDashboard } from "@/contexts/DashboardContext";
+import { useState, useEffect } from "react";
+import { useDebounce } from "@/hooks/use-debounce";
 
 export function Header() {
+  const navigate = useNavigate();
+  const { searchQuery, setSearchQuery, clearSearch } = useDashboard();
+  const [localSearch, setLocalSearch] = useState(searchQuery);
+  const debouncedSearch = useDebounce(localSearch, 200);
+
+  // Sync debounced value to context
+  useEffect(() => {
+    setSearchQuery(debouncedSearch);
+  }, [debouncedSearch, setSearchQuery]);
+
+  // Handle logo click - navigate to dashboard and reset UI
+  const handleLogoClick = () => {
+    clearSearch();
+    setLocalSearch("");
+    navigate("/dashboard");
+  };
+
+  const handleClearSearch = () => {
+    setLocalSearch("");
+    clearSearch();
+  };
+
   return (
     <header className="h-16 border-b border-border bg-card px-6 flex items-center justify-between">
       {/* Left: Logo */}
-      <div className="flex items-center gap-2">
+      <button
+        onClick={handleLogoClick}
+        className="flex items-center gap-2 hover:opacity-80 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-lg"
+        aria-label="Go to dashboard"
+      >
         <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
           <svg
             viewBox="0 0 24 24"
@@ -28,7 +58,7 @@ export function Header() {
           </svg>
         </div>
         <span className="text-xl font-semibold text-foreground">AidMind</span>
-      </div>
+      </button>
 
       {/* Center: Search */}
       <div className="flex-1 max-w-xl mx-8">
@@ -37,9 +67,20 @@ export function Header() {
           <Input
             type="search"
             placeholder="Search cases, tasks, notes..."
-            className="pl-10 h-10 bg-secondary border-border"
+            className="pl-10 pr-10 h-10 bg-secondary border-border"
             aria-label="Search cases, tasks, and notes"
+            value={localSearch}
+            onChange={(e) => setLocalSearch(e.target.value)}
           />
+          {localSearch && (
+            <button
+              onClick={handleClearSearch}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              aria-label="Clear search"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
 
