@@ -26,7 +26,7 @@ const statusConfig = {
   },
   overdue: {
     label: "Overdue",
-    badgeClass: "badge-danger",
+    badgeClass: "badge-critical",
     accentClass: "priority-accent-high",
   },
   info: {
@@ -49,37 +49,37 @@ export function TaskItem({ task }: TaskItemProps) {
   return (
     <div
       className={cn(
-        "group flex items-start gap-4 py-5 px-4 hover:bg-secondary/30 transition-colors relative",
+        "group flex items-start gap-4 py-6 px-4 hover:bg-secondary/30 transition-colors relative",
         status.accentClass
       )}
     >
       <Checkbox
         id={`task-${task.id}`}
-        className="mt-1 border-muted-foreground/30"
+        className="mt-0.5 border-muted-foreground/25"
         aria-label={`Mark "${task.title}" as complete`}
       />
 
       <div className="flex-1 min-w-0">
         <label
           htmlFor={`task-${task.id}`}
-          className="text-sm font-medium text-foreground cursor-pointer block"
+          className="text-sm font-medium text-foreground cursor-pointer block leading-snug"
         >
           {task.title}
         </label>
 
-        <div className="flex items-center gap-1 mt-1">
-          <span className="text-xs text-muted-foreground">
+        <div className="flex items-center gap-1 mt-1.5">
+          <span className="text-xs text-muted-foreground/70">
             Client: {task.client}
           </span>
-          <ChevronDown className="h-3 w-3 text-muted-foreground" />
+          <ChevronDown className="h-3 w-3 text-muted-foreground/50" />
         </div>
 
-        <div className="mt-2">
+        <div className="mt-2.5">
           <Badge
             variant="outline"
-            className="text-xs font-normal bg-background border-border"
+            className="text-xs font-normal bg-background/50 border-border/60 text-muted-foreground"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-primary mr-1.5" />
+            <span className="w-1.5 h-1.5 rounded-full bg-primary/60 mr-1.5" />
             {task.caseTag}
           </Badge>
         </div>
