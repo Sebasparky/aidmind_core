@@ -1,3 +1,4 @@
+// Dashboard context for task and search state management
 import { createContext, useContext, useState, ReactNode, useCallback, useMemo } from "react";
 import { toast } from "@/hooks/use-toast";
 
