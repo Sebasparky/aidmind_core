@@ -54,7 +54,7 @@ export function TaskList() {
   const [upcomingOpen, setUpcomingOpen] = useState(true);
 
   return (
-    <div className="flex-1 min-w-0">
+    <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
@@ -108,7 +108,7 @@ export function TaskList() {
       </div>
 
       {/* Task Groups */}
-      <div className="bg-card rounded-xl shadow-card overflow-hidden">
+      <div className="bg-card rounded-xl shadow-card overflow-y-auto flex-1 min-h-0">
         {/* High Priority Section */}
         <Collapsible open={highPriorityOpen} onOpenChange={setHighPriorityOpen}>
           <CollapsibleTrigger asChild>
@@ -138,7 +138,7 @@ export function TaskList() {
         {/* Upcoming Section */}
         <Collapsible open={upcomingOpen} onOpenChange={setUpcomingOpen}>
           <CollapsibleTrigger asChild>
-            <button className="w-full flex items-center gap-2 px-4 py-3 bg-secondary/50 hover:bg-secondary transition-colors text-left border-t border-border">
+            <button className="w-full flex items-center gap-2 px-4 py-3 bg-secondary/50 hover:bg-secondary transition-colors text-left border-t-2 border-border mt-2">
               <ChevronDown
                 className={`h-4 w-4 text-muted-foreground transition-transform ${
                   upcomingOpen ? "" : "-rotate-90"

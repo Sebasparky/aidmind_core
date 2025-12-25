@@ -59,7 +59,7 @@ export function Sidebar() {
   const [activeNav, setActiveNav] = useState("today");
 
   return (
-    <aside className="w-[280px] bg-sidebar flex flex-col h-full">
+    <aside className="w-[280px] bg-sidebar flex flex-col h-full self-stretch flex-shrink-0">
       {/* Navigation */}
       <nav className="p-4 space-y-1" role="navigation" aria-label="Time filters">
         {navItems.map((item) => {
