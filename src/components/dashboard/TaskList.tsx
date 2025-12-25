@@ -56,12 +56,12 @@ export function TaskList() {
   return (
     <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden bg-card rounded-xl border border-border p-5">
       {/* Header */}
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-semibold text-foreground">My Tasks</h1>
           <Badge
             variant="secondary"
-            className="text-xs font-medium px-2 py-0.5"
+            className="text-xs font-normal px-2 py-0.5 text-muted-foreground"
           >
             32
           </Badge>

@@ -174,20 +174,22 @@
 }
 
 @layer components {
-  /* Card shadows */
-  .card-shadow {
-    box-shadow: var(--shadow-md);
+  /* Card shadows - Use sparingly, prefer borders */
+  .shadow-card {
+    box-shadow: none;
   }
 
-  .card-shadow-lg {
-    box-shadow: var(--shadow-lg);
+  .shadow-card-hover {
+    box-shadow: 0 2px 8px -2px hsl(0 0% 0% / 0.06);
   }
 
-  /* Status badges - Semantic, muted */
-  .badge-success {
-    @apply bg-[hsl(var(--badge-success-bg))] text-[hsl(var(--badge-success-text))] font-medium;
+  /* Badge hierarchy system */
+  /* Critical tier - Overdue, High Risk */
+  .badge-critical {
+    @apply bg-[hsl(var(--status-danger)/0.12)] text-[hsl(var(--status-danger))] font-semibold;
   }
 
+  /* Priority tier - High */
   .badge-danger {
     @apply bg-[hsl(var(--badge-danger-bg))] text-[hsl(var(--badge-danger-text))] font-medium;
   }
@@ -196,20 +198,25 @@
     @apply bg-[hsl(var(--badge-warning-bg))] text-[hsl(var(--badge-warning-text))] font-medium;
   }
 
+  /* Informational tier - Info, Active */
   .badge-info {
-    @apply bg-[hsl(var(--badge-info-bg))] text-[hsl(var(--badge-info-text))] font-medium;
+    @apply bg-[hsl(var(--badge-info-bg))] text-[hsl(var(--badge-info-text))] font-normal;
+  }
+  
+  .badge-success {
+    @apply bg-[hsl(var(--badge-success-bg))] text-[hsl(var(--badge-success-text))] font-normal;
   }
   
   .badge-neutral {
-    @apply bg-[hsl(var(--badge-neutral-bg))] text-[hsl(var(--badge-neutral-text))] font-medium;
+    @apply bg-[hsl(var(--badge-neutral-bg))] text-[hsl(var(--badge-neutral-text))] font-normal;
   }
   
-  /* Priority accent bars */
+  /* Priority accent bars - Subtle, rounded */
   .priority-accent-high {
-    @apply before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full before:bg-[hsl(var(--status-danger)/0.5)];
+    @apply before:absolute before:left-0 before:top-4 before:bottom-4 before:w-[2.5px] before:rounded-full before:bg-[hsl(var(--status-danger)/0.35)];
   }
   
   .priority-accent-warning {
-    @apply before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full before:bg-[hsl(var(--status-warning)/0.4)];
+    @apply before:absolute before:left-0 before:top-4 before:bottom-4 before:w-[2.5px] before:rounded-full before:bg-[hsl(var(--status-warning)/0.3)];
   }
 }

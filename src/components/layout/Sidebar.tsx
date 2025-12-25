@@ -64,33 +64,33 @@ export function Sidebar() {
     <aside className="w-[280px] bg-sidebar flex flex-col h-full self-stretch flex-shrink-0">
       {/* Today Schedule Block - Primary Content */}
       <div className="p-4 flex-1 flex flex-col min-h-0">
-        <div className="bg-card rounded-xl shadow-card flex flex-col flex-1 min-h-0 overflow-hidden">
+        <div className="bg-card rounded-xl border border-border flex flex-col flex-1 min-h-0 overflow-hidden">
           {/* Header */}
           <div className="flex items-center justify-between p-4 pb-3 flex-shrink-0">
             <h3 className="font-semibold text-foreground flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-status-success/10 flex items-center justify-center">
+              <div className="w-7 h-7 rounded-lg bg-[hsl(var(--status-success)/0.08)] flex items-center justify-center">
                 <Calendar className="h-4 w-4 text-status-success" />
               </div>
               <span className="text-base">Today's Schedule</span>
             </h3>
-            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            <div className="flex items-center gap-1 text-xs text-muted-foreground/70">
               <Clock className="h-3.5 w-3.5" />
               <span>{scheduleItems.length} items</span>
             </div>
           </div>
 
-          <Separator className="mx-4 bg-border" />
+          <Separator className="mx-4 bg-border/80" />
 
           {/* Schedule Items - Scrollable */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-2">
+          <div className="flex-1 overflow-y-auto p-4 space-y-1">
             {scheduleItems.map((item, index) => {
               const Icon = item.icon;
               return (
                 <div key={item.id}>
-                  <div className="flex gap-3 py-3.5 px-2 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer">
+                  <div className="flex gap-3 py-4 px-2 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer">
                     <div
                       className={cn(
-                        "w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0",
+                        "w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0",
                         typeColors[item.type]
                       )}
                     >
@@ -106,27 +106,27 @@ export function Sidebar() {
                           ? "Deadline"
                           : "Document Review"}
                       </p>
-                      <p className="text-sm text-muted-foreground truncate mt-0.5">
+                      <p className="text-sm text-muted-foreground/80 truncate mt-0.5">
                         {item.title}
                       </p>
-                      <p className="text-xs font-medium text-foreground/70 mt-1.5">
+                      <p className="text-xs font-medium text-foreground/60 mt-1.5">
                         {item.time}
                       </p>
                     </div>
                   </div>
                   {index < scheduleItems.length - 1 && (
-                    <Separator className="my-1.5 bg-border/40" />
+                    <Separator className="my-2 bg-border/50" />
                   )}
                 </div>
               );
             })}
           </div>
 
-          {/* View Full Calendar Link */}
+          {/* View Full Calendar Link - Quieter */}
           <div className="p-4 pt-0 flex-shrink-0">
             <Link
               to="/calendar"
-              className="flex items-center justify-between w-full px-4 py-3 bg-muted/50 hover:bg-muted rounded-lg text-sm text-primary hover:text-primary/80 transition-colors font-medium"
+              className="flex items-center justify-between w-full px-4 py-2.5 bg-muted/30 hover:bg-muted/50 rounded-lg text-sm text-muted-foreground hover:text-foreground transition-colors"
             >
               <span>View Full Calendar</span>
               <ChevronRight className="h-4 w-4" />
