@@ -47,7 +47,7 @@ export function CasesPanel() {
   const [closedCasesOpen, setClosedCasesOpen] = useState(false);
 
   return (
-    <div className="w-[380px] flex-shrink-0 flex flex-col h-full overflow-hidden bg-card rounded-xl border border-border p-5">
+    <div className="w-[380px] flex-shrink-0 flex flex-col h-full overflow-hidden bg-card rounded-xl border border-border p-5 border-l-2">
       {/* Header */}
       <div className="flex items-center justify-between mb-5">
         <h2 className="text-xl font-semibold text-foreground">My Cases</h2>
