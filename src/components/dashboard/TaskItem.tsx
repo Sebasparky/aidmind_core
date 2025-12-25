@@ -1,4 +1,4 @@
-import { ChevronDown, MoreHorizontal } from "lucide-react";
+import { ChevronDown, MoreHorizontal, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,7 @@ export interface Task {
   client: string;
   caseTag: string;
   dueDate: string;
+  dueUrgency?: "today" | "tomorrow" | "future";
   status: "high" | "overdue" | "info" | "normal";
 }
 
@@ -20,31 +21,38 @@ interface TaskItemProps {
 const statusConfig = {
   high: {
     label: "High",
-    className: "badge-danger font-medium",
+    badgeClass: "badge-danger",
+    accentClass: "priority-accent-high",
   },
   overdue: {
     label: "Overdue",
-    className: "bg-status-danger text-status-danger-foreground font-medium",
+    badgeClass: "badge-danger",
+    accentClass: "priority-accent-high",
   },
   info: {
     label: "Info",
-    className: "badge-info font-medium",
+    badgeClass: "badge-info",
+    accentClass: "",
   },
   normal: {
     label: "",
-    className: "",
+    badgeClass: "",
+    accentClass: "",
   },
 };
 
 export function TaskItem({ task }: TaskItemProps) {
   const status = statusConfig[task.status];
   const isHighPriority = task.status === "high" || task.status === "overdue";
+  const isDueToday = task.dueUrgency === "today" || task.dueDate.toLowerCase().includes("today");
 
   return (
-    <div className={cn(
-      "group flex items-start gap-4 py-5 px-4 hover:bg-secondary/30 transition-colors relative",
-      isHighPriority && "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[3px] before:rounded-full before:bg-status-danger/30"
-    )}>
+    <div
+      className={cn(
+        "group flex items-start gap-4 py-5 px-4 hover:bg-secondary/30 transition-colors relative",
+        status.accentClass
+      )}
+    >
       <Checkbox
         id={`task-${task.id}`}
         className="mt-1 border-muted-foreground/30"
@@ -78,17 +86,22 @@ export function TaskItem({ task }: TaskItemProps) {
       </div>
 
       <div className="flex items-center gap-3 flex-shrink-0">
-        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+        {/* Due date with urgency styling */}
+        <div
+          className={cn(
+            "flex items-center gap-1.5 text-xs",
+            isDueToday ? "text-due-today font-medium" : "text-due-soon"
+          )}
+        >
+          {isDueToday && <Clock className="h-3 w-3" />}
           <span>{task.dueDate}</span>
-          <ChevronDown className="h-3 w-3" />
+          <ChevronDown className="h-3 w-3 text-muted-foreground" />
         </div>
 
+        {/* Status badge */}
         {status.label && (
           <Badge
-            className={cn(
-              "text-xs px-2 py-0.5 border-0",
-              status.className
-            )}
+            className={cn("text-xs px-2 py-0.5 border-0", status.badgeClass)}
           >
             {status.label}
           </Badge>

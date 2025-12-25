@@ -57,6 +57,51 @@ export default {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
+        // Semantic status colors
+        status: {
+          success: {
+            DEFAULT: "hsl(var(--status-success))",
+            foreground: "hsl(var(--status-success-foreground))",
+            muted: "hsl(var(--status-success-muted))",
+            "muted-foreground": "hsl(var(--status-success-muted-foreground))",
+          },
+          warning: {
+            DEFAULT: "hsl(var(--status-warning))",
+            foreground: "hsl(var(--status-warning-foreground))",
+            muted: "hsl(var(--status-warning-muted))",
+            "muted-foreground": "hsl(var(--status-warning-muted-foreground))",
+          },
+          danger: {
+            DEFAULT: "hsl(var(--status-danger))",
+            foreground: "hsl(var(--status-danger-foreground))",
+            muted: "hsl(var(--status-danger-muted))",
+            "muted-foreground": "hsl(var(--status-danger-muted-foreground))",
+          },
+          info: {
+            DEFAULT: "hsl(var(--status-info))",
+            foreground: "hsl(var(--status-info-foreground))",
+            muted: "hsl(var(--status-info-muted))",
+            "muted-foreground": "hsl(var(--status-info-muted-foreground))",
+          },
+          neutral: {
+            DEFAULT: "hsl(var(--status-neutral))",
+            muted: "hsl(var(--status-neutral-muted))",
+            "muted-foreground": "hsl(var(--status-neutral-muted-foreground))",
+          },
+        },
+        // Schedule colors
+        schedule: {
+          call: "hsl(var(--schedule-call))",
+          meeting: "hsl(var(--schedule-meeting))",
+          deadline: "hsl(var(--schedule-deadline))",
+          document: "hsl(var(--schedule-document))",
+        },
+        // Deadline urgency
+        due: {
+          today: "hsl(var(--due-today))",
+          soon: "hsl(var(--due-soon))",
+          later: "hsl(var(--due-later))",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",

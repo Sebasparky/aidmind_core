@@ -57,28 +57,58 @@
     --sidebar-ring: 217 91% 60%;
     --sidebar-muted: 215 16% 47%;
 
-    /* Status colors */
-    --status-success: 142 71% 45%;
+    /* Semantic Status Colors - Muted, accessible tones */
+    /* Success - Muted green for active/ok states */
+    --status-success: 152 44% 42%;
     --status-success-foreground: 0 0% 100%;
-    --status-warning: 38 92% 50%;
+    --status-success-muted: 152 35% 92%;
+    --status-success-muted-foreground: 152 44% 32%;
+    
+    /* Warning - Muted amber for attention states */
+    --status-warning: 38 65% 50%;
     --status-warning-foreground: 0 0% 100%;
-    --status-danger: 0 84% 60%;
+    --status-warning-muted: 38 55% 92%;
+    --status-warning-muted-foreground: 38 55% 35%;
+    
+    /* Danger - Muted red for high priority/risk */
+    --status-danger: 0 55% 55%;
     --status-danger-foreground: 0 0% 100%;
-    --status-info: 217 91% 60%;
+    --status-danger-muted: 0 45% 94%;
+    --status-danger-muted-foreground: 0 50% 40%;
+    
+    /* Info - Muted blue for informational states */
+    --status-info: 217 55% 55%;
     --status-info-foreground: 0 0% 100%;
+    --status-info-muted: 217 50% 94%;
+    --status-info-muted-foreground: 217 50% 40%;
+    
+    /* Neutral - For resolved/inactive states */
+    --status-neutral: 215 16% 47%;
+    --status-neutral-muted: 215 16% 94%;
+    --status-neutral-muted-foreground: 215 16% 40%;
 
-    /* Badge backgrounds (lighter versions) */
-    --badge-success-bg: 142 71% 95%;
-    --badge-success-text: 142 71% 35%;
-    --badge-danger-bg: 0 84% 95%;
-    --badge-danger-text: 0 84% 45%;
-    --badge-info-bg: 217 91% 95%;
-    --badge-info-text: 217 91% 45%;
+    /* Badge backgrounds (semantic, muted) */
+    --badge-success-bg: 152 35% 92%;
+    --badge-success-text: 152 44% 32%;
+    --badge-danger-bg: 0 45% 94%;
+    --badge-danger-text: 0 50% 40%;
+    --badge-warning-bg: 38 55% 92%;
+    --badge-warning-text: 38 55% 35%;
+    --badge-info-bg: 217 50% 94%;
+    --badge-info-text: 217 50% 40%;
+    --badge-neutral-bg: 215 16% 94%;
+    --badge-neutral-text: 215 16% 40%;
 
-    /* Schedule item colors */
-    --schedule-call: 142 71% 45%;
-    --schedule-meeting: 217 91% 60%;
-    --schedule-deadline: 0 84% 60%;
+    /* Schedule item colors - Muted, icon-only */
+    --schedule-call: 152 44% 42%;
+    --schedule-meeting: 217 55% 55%;
+    --schedule-deadline: 0 55% 55%;
+    --schedule-document: 38 55% 45%;
+    
+    /* Deadline urgency */
+    --due-today: 222 47% 11%;
+    --due-soon: 215 16% 47%;
+    --due-later: 215 16% 60%;
 
     /* Shadows */
     --shadow-sm: 0 1px 2px 0 hsl(0 0% 0% / 0.05);
@@ -153,16 +183,33 @@
     box-shadow: var(--shadow-lg);
   }
 
-  /* Status badges */
+  /* Status badges - Semantic, muted */
   .badge-success {
-    @apply bg-[hsl(var(--badge-success-bg))] text-[hsl(var(--badge-success-text))];
+    @apply bg-[hsl(var(--badge-success-bg))] text-[hsl(var(--badge-success-text))] font-medium;
   }
 
   .badge-danger {
-    @apply bg-[hsl(var(--badge-danger-bg))] text-[hsl(var(--badge-danger-text))];
+    @apply bg-[hsl(var(--badge-danger-bg))] text-[hsl(var(--badge-danger-text))] font-medium;
+  }
+  
+  .badge-warning {
+    @apply bg-[hsl(var(--badge-warning-bg))] text-[hsl(var(--badge-warning-text))] font-medium;
   }
 
   .badge-info {
-    @apply bg-[hsl(var(--badge-info-bg))] text-[hsl(var(--badge-info-text))];
+    @apply bg-[hsl(var(--badge-info-bg))] text-[hsl(var(--badge-info-text))] font-medium;
+  }
+  
+  .badge-neutral {
+    @apply bg-[hsl(var(--badge-neutral-bg))] text-[hsl(var(--badge-neutral-text))] font-medium;
+  }
+  
+  /* Priority accent bars */
+  .priority-accent-high {
+    @apply before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full before:bg-[hsl(var(--status-danger)/0.5)];
+  }
+  
+  .priority-accent-warning {
+    @apply before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full before:bg-[hsl(var(--status-warning)/0.4)];
   }
 }
