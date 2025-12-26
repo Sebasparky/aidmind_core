@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Search, ChevronDown, MoreHorizontal, X, FileEdit, FolderPlus } from "lucide-react";
+import { Search, ChevronDown, MoreHorizontal, X, FileEdit } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -131,10 +131,6 @@ export function CasesPanel() {
             <DropdownMenuItem onClick={() => setStartNoteOpen(true)} className="gap-2">
               <FileEdit className="h-4 w-4" />
               Start Note
-            </DropdownMenuItem>
-            <DropdownMenuItem className="gap-2">
-              <FolderPlus className="h-4 w-4" />
-              New Case
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
