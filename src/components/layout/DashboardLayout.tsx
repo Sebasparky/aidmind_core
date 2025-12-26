@@ -1,7 +1,6 @@
 import { ReactNode } from "react";
 import { Header } from "./Header";
 import { Sidebar } from "./Sidebar";
-import { DashboardProvider } from "@/contexts/DashboardContext";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -9,14 +8,12 @@ interface DashboardLayoutProps {
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   return (
-    <DashboardProvider>
-      <div className="h-screen flex flex-col bg-background overflow-hidden">
-        <Header />
-        <div className="flex flex-1 min-h-0 overflow-hidden">
-          <Sidebar />
-          <main className="flex-1 overflow-y-auto p-6 bg-[hsl(var(--canvas))]">{children}</main>
-        </div>
+    <div className="h-screen flex flex-col bg-background overflow-hidden">
+      <Header />
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        <Sidebar />
+        <main className="flex-1 overflow-y-auto p-6 bg-[hsl(var(--canvas))]">{children}</main>
       </div>
-    </DashboardProvider>
+    </div>
   );
 }
