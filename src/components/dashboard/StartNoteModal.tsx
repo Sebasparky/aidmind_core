@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -21,7 +22,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { availableCases } from "@/contexts/DashboardContext";
 import { ResumeBundle } from "@/hooks/useSessionMachine";
 import { toast } from "@/hooks/use-toast";
 import { ChevronDown, Plus, FileUp } from "lucide-react";
@@ -40,29 +40,25 @@ const interactionTypes = [
 
 export function StartNoteModal({ open, onOpenChange }: StartNoteModalProps) {
   const navigate = useNavigate();
-  const [selectedCase, setSelectedCase] = useState("");
+  const [noteTitle, setNoteTitle] = useState("");
   const [interactionType, setInteractionType] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!selectedCase || !interactionType) {
+    if (!noteTitle.trim() || !interactionType) {
       return;
     }
 
-    const caseInfo = availableCases.find((c) => c.id === selectedCase);
-
     // Navigate to session page with prefilled data
     const params = new URLSearchParams({
-      caseId: selectedCase,
-      caseLabel: caseInfo?.label || "",
-      clientLabel: caseInfo?.client || "",
+      noteTitle: noteTitle.trim(),
       interactionType: interactionType,
     });
 
     // Reset and close
-    setSelectedCase("");
+    setNoteTitle("");
     setInteractionType("");
     onOpenChange(false);
 
@@ -71,7 +67,7 @@ export function StartNoteModal({ open, onOpenChange }: StartNoteModalProps) {
   };
 
   const handleClose = () => {
-    setSelectedCase("");
+    setNoteTitle("");
     setInteractionType("");
     onOpenChange(false);
   };
@@ -111,7 +107,7 @@ export function StartNoteModal({ open, onOpenChange }: StartNoteModalProps) {
         });
 
         // Reset and close
-        setSelectedCase("");
+        setNoteTitle("");
         setInteractionType("");
         onOpenChange(false);
 
@@ -141,7 +137,7 @@ export function StartNoteModal({ open, onOpenChange }: StartNoteModalProps) {
     e.target.value = "";
   };
 
-  const isValid = selectedCase && interactionType;
+  const isValid = noteTitle.trim() && interactionType;
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -151,19 +147,15 @@ export function StartNoteModal({ open, onOpenChange }: StartNoteModalProps) {
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4 pt-2">
           <div className="space-y-2">
-            <Label htmlFor="case">Case</Label>
-            <Select value={selectedCase} onValueChange={setSelectedCase}>
-              <SelectTrigger id="case">
-                <SelectValue placeholder="Select a case" />
-              </SelectTrigger>
-              <SelectContent>
-                {availableCases.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.client} — {c.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label htmlFor="note-title">Note Title</Label>
+            <Input
+              id="note-title"
+              type="text"
+              placeholder="e.g. Phone call re housing assistance"
+              value={noteTitle}
+              onChange={(e) => setNoteTitle(e.target.value)}
+              required
+            />
           </div>
 
           <div className="space-y-2">
