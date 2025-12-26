@@ -931,7 +931,7 @@ export default function Session() {
                   <Button 
                     variant="secondary" 
                     onClick={handleSaveForLater}
-                    className="hover:bg-secondary/80 focus:ring-2 focus:ring-ring focus:ring-offset-2 active:bg-secondary/70 transition-colors"
+                    className="border border-border hover:bg-blue-100 hover:border-blue-300 hover:text-blue-700 dark:hover:bg-blue-950 dark:hover:border-blue-700 dark:hover:text-blue-300 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:bg-blue-200 dark:active:bg-blue-900 transition-all duration-150 cursor-pointer"
                   >
                     <Save className="h-4 w-4 mr-2" />
                     Save for Later
