@@ -556,9 +556,20 @@ export default function Session() {
                 {data.clientLabel} • {data.caseLabel} • {getInteractionTypeLabel(data.interactionType)}
               </p>
             </div>
-            <Badge variant="outline" className="text-xs">
-              Session: {data.sessionId.slice(0, 8)}...
-            </Badge>
+            <div className="flex items-center gap-3">
+              {state === "READY_FOR_INPUT" && (
+                <Button 
+                  variant="outline" 
+                  onClick={handleCancelClick}
+                  className="text-destructive border-destructive/50 hover:bg-destructive/10 hover:border-destructive"
+                >
+                  Cancel Session
+                </Button>
+              )}
+              <Badge variant="outline" className="text-xs">
+                Session: {data.sessionId.slice(0, 8)}...
+              </Badge>
+            </div>
           </div>
           
           {/* Progress bar */}
@@ -920,6 +931,7 @@ export default function Session() {
                   <Button 
                     variant="secondary" 
                     onClick={handleSaveForLater}
+                    className="hover:bg-secondary/80 focus:ring-2 focus:ring-ring focus:ring-offset-2 active:bg-secondary/70 transition-colors"
                   >
                     <Save className="h-4 w-4 mr-2" />
                     Save for Later
