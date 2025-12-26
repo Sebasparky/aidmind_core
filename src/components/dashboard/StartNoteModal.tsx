@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Dialog,
   DialogContent,
@@ -15,7 +16,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { availableCases } from "@/contexts/DashboardContext";
-import { toast } from "@/hooks/use-toast";
 
 interface StartNoteModalProps {
   open: boolean;
@@ -30,6 +30,7 @@ const interactionTypes = [
 ];
 
 export function StartNoteModal({ open, onOpenChange }: StartNoteModalProps) {
+  const navigate = useNavigate();
   const [selectedCase, setSelectedCase] = useState("");
   const [interactionType, setInteractionType] = useState("");
 
@@ -41,19 +42,22 @@ export function StartNoteModal({ open, onOpenChange }: StartNoteModalProps) {
     }
 
     const caseInfo = availableCases.find((c) => c.id === selectedCase);
-    const interactionInfo = interactionTypes.find((t) => t.value === interactionType);
 
-    // For now, show toast indicating the session would start
-    // In a real app, this would navigate to The Mind session
-    toast({
-      title: "Starting note session",
-      description: `${interactionInfo?.label} for ${caseInfo?.label}`,
+    // Navigate to session page with prefilled data
+    const params = new URLSearchParams({
+      caseId: selectedCase,
+      caseLabel: caseInfo?.label || "",
+      clientLabel: caseInfo?.client || "",
+      interactionType: interactionType,
     });
 
     // Reset and close
     setSelectedCase("");
     setInteractionType("");
     onOpenChange(false);
+
+    // Navigate to session page
+    navigate(`/session?${params.toString()}`);
   };
 
   const handleClose = () => {
