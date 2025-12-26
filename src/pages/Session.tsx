@@ -1,12 +1,29 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useSessionMachine, SessionState } from "@/hooks/useSessionMachine";
+import { useSessionMachine, SessionState, TimelineItem } from "@/hooks/useSessionMachine";
+import { useDashboard } from "@/contexts/DashboardContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { 
   Upload, 
   FileAudio, 
@@ -20,13 +37,23 @@ import {
   Download,
   Trash2,
   AlertTriangle,
-  ChevronLeft
+  ChevronLeft,
+  Check,
+  X
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
+
+const DENY_REASONS = [
+  { value: "not_applicable", label: "Not applicable" },
+  { value: "outdated_policy", label: "Outdated policy" },
+  { value: "already_completed", label: "Already completed" },
+  { value: "other", label: "Other" },
+];
 
 export default function Session() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { addTask, deleteTask } = useDashboard();
   
   const caseId = searchParams.get("caseId") || "1";
   const caseLabel = searchParams.get("caseLabel") || "Housing assistance — intake";
@@ -43,6 +70,18 @@ export default function Session() {
   const [editedDraft, setEditedDraft] = useState("");
   const [showTextInput, setShowTextInput] = useState(false);
   const [textInput, setTextInput] = useState("");
+  
+  // Exit dialogs
+  const [showLeaveDialog, setShowLeaveDialog] = useState(false);
+  const [showCancelDialog, setShowCancelDialog] = useState(false);
+  
+  // Deny dialog state
+  const [denyDialogOpen, setDenyDialogOpen] = useState(false);
+  const [denyingTimelineId, setDenyingTimelineId] = useState<string | null>(null);
+  const [denyReason, setDenyReason] = useState("");
+
+  // Track created task IDs for undo
+  const createdTasksRef = useRef<Map<string, string>>(new Map());
 
   // Auto-start session on mount
   useEffect(() => {
@@ -62,16 +101,23 @@ export default function Session() {
     }
   }, [state, actions]);
 
-  // Navigate to dashboard when purged
+  // Navigate to dashboard when purged with appropriate message
   useEffect(() => {
     if (state === "PURGED") {
-      toast({
-        title: "Session completed",
-        description: "All session data has been securely purged.",
-      });
+      if (data.exportCompleted) {
+        toast({
+          title: "Export complete",
+          description: "Session purged.",
+        });
+      } else {
+        toast({
+          title: "Session ended",
+          description: "All session data has been securely purged.",
+        });
+      }
       navigate("/dashboard");
     }
-  }, [state, navigate]);
+  }, [state, navigate, data.exportCompleted]);
 
   // Auto-complete purge when closing
   useEffect(() => {
@@ -87,11 +133,37 @@ export default function Session() {
     }
   }, [data.generatedDraft]);
 
+  // Handle browser back button
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (state !== "PURGED" && state !== "NEW") {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+
+    const handlePopState = (e: PopStateEvent) => {
+      if (state !== "PURGED" && state !== "NEW") {
+        e.preventDefault();
+        window.history.pushState(null, "", window.location.href);
+        setShowLeaveDialog(true);
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("popstate", handlePopState);
+    window.history.pushState(null, "", window.location.href);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, [state]);
+
   const handleFileUpload = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file) {
-        // Basic audio file validation
         if (!file.type.startsWith("audio/")) {
           toast({
             title: "Invalid file type",
@@ -122,11 +194,84 @@ export default function Session() {
 
   const handleExport = useCallback(() => {
     actions.exportDraft();
-    toast({
-      title: "Exporting...",
-      description: "Your note is being exported to the system of record.",
-    });
   }, [actions]);
+
+  const handleBackClick = useCallback(() => {
+    if (state !== "PURGED" && state !== "NEW") {
+      setShowLeaveDialog(true);
+    } else {
+      navigate("/dashboard");
+    }
+  }, [state, navigate]);
+
+  const handleCancelClick = useCallback(() => {
+    setShowCancelDialog(true);
+  }, []);
+
+  const handleConfirmLeave = useCallback(() => {
+    setShowLeaveDialog(false);
+    actions.cancelSession();
+  }, [actions]);
+
+  const handleConfirmCancel = useCallback(() => {
+    setShowCancelDialog(false);
+    actions.cancelSession();
+  }, [actions]);
+
+  // Timeline Confirm/Deny handlers
+  const handleConfirmTimeline = useCallback((timeline: TimelineItem) => {
+    actions.confirmTimeline(timeline.id);
+    
+    // Create task in dashboard and store its ID
+    const taskId = addTask({
+      title: timeline.title,
+      clientLabel,
+      caseId,
+      caseLabel,
+      dueDate: timeline.date,
+      priority: timeline.priority === "HIGH" ? "HIGH" : "NORMAL",
+    });
+    
+    createdTasksRef.current.set(timeline.id, taskId);
+
+    const { dismiss } = toast({
+      title: "Task added to My Tasks",
+      action: (
+        <button
+          onClick={() => {
+            // Undo: reset timeline and delete task
+            actions.resetTimeline(timeline.id);
+            const createdTaskId = createdTasksRef.current.get(timeline.id);
+            if (createdTaskId) {
+              deleteTask(createdTaskId);
+              createdTasksRef.current.delete(timeline.id);
+            }
+            dismiss();
+          }}
+          className="text-sm font-medium text-primary hover:text-primary/80 transition-colors px-3 py-1 rounded-md bg-primary/10 hover:bg-primary/20"
+        >
+          Undo
+        </button>
+      ),
+      duration: 5000,
+    });
+  }, [actions, addTask, deleteTask, clientLabel, caseId, caseLabel]);
+
+  const handleDenyClick = useCallback((timelineId: string) => {
+    setDenyingTimelineId(timelineId);
+    setDenyReason("");
+    setDenyDialogOpen(true);
+  }, []);
+
+  const handleConfirmDeny = useCallback(() => {
+    if (denyingTimelineId) {
+      const reason = DENY_REASONS.find(r => r.value === denyReason)?.label || denyReason;
+      actions.denyTimeline(denyingTimelineId, reason);
+    }
+    setDenyDialogOpen(false);
+    setDenyingTimelineId(null);
+    setDenyReason("");
+  }, [denyingTimelineId, denyReason, actions]);
 
   const getInteractionTypeLabel = (type: string) => {
     const labels: Record<string, string> = {
@@ -186,8 +331,104 @@ export default function Session() {
     return labels[currentState] || currentState;
   };
 
+  const getPriorityBadgeVariant = (priority: string) => {
+    switch (priority) {
+      case "HIGH":
+        return "destructive";
+      case "MEDIUM":
+        return "default";
+      default:
+        return "secondary";
+    }
+  };
+
+  const getStatusIndicator = (status: string) => {
+    switch (status) {
+      case "CONFIRMED":
+        return <Badge variant="outline" className="text-green-600 border-green-600 bg-green-50">Confirmed</Badge>;
+      case "DENIED":
+        return <Badge variant="outline" className="text-muted-foreground border-muted bg-muted/30">Denied</Badge>;
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
+      {/* Leave Session Dialog */}
+      <AlertDialog open={showLeaveDialog} onOpenChange={setShowLeaveDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Leave session?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your draft and session progress may be lost if you leave now.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Stay</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmLeave}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Leave
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Cancel Session Dialog */}
+      <AlertDialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel this session?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will discard this session and purge temporary data.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep working</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmCancel}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Cancel session
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Deny Reason Dialog */}
+      <AlertDialog open={denyDialogOpen} onOpenChange={setDenyDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Deny timeline event</AlertDialogTitle>
+            <AlertDialogDescription>
+              Optionally select a reason for denying this event.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="py-4">
+            <Select value={denyReason} onValueChange={setDenyReason}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select a reason (optional)" />
+              </SelectTrigger>
+              <SelectContent>
+                {DENY_REASONS.map((reason) => (
+                  <SelectItem key={reason.value} value={reason.value}>
+                    {reason.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirmDeny}>
+              Deny event
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Header */}
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-6 py-4">
@@ -196,13 +437,7 @@ export default function Session() {
               <Button 
                 variant="ghost" 
                 size="sm"
-                onClick={() => {
-                  if (state !== "PURGED" && state !== "NEW") {
-                    actions.cancelSession();
-                  } else {
-                    navigate("/dashboard");
-                  }
-                }}
+                onClick={handleBackClick}
               >
                 <ChevronLeft className="h-4 w-4 mr-1" />
                 Back
@@ -218,11 +453,11 @@ export default function Session() {
               <Badge variant="outline" className="text-xs">
                 Session: {data.sessionId.slice(0, 8)}...
               </Badge>
-              {state !== "ERROR" && state !== "PURGED" && (
+              {state !== "ERROR" && state !== "PURGED" && state !== "CLOSING" && (
                 <Button 
                   variant="destructive" 
                   size="sm"
-                  onClick={actions.cancelSession}
+                  onClick={handleCancelClick}
                 >
                   <XCircle className="h-4 w-4 mr-1" />
                   Cancel
@@ -371,7 +606,7 @@ export default function Session() {
               </div>
               
               <div className="flex gap-3">
-                <Button variant="outline" onClick={actions.cancelSession}>
+                <Button variant="outline" onClick={handleCancelClick}>
                   Cancel Session
                 </Button>
                 <Button onClick={actions.generateDraft} className="flex-1">
@@ -473,13 +708,13 @@ export default function Session() {
               </CardContent>
             </Card>
 
-            {/* Timelines */}
+            {/* Timeline Events (merged with follow-ups, policy-derived) */}
             {data.timelines && data.timelines.length > 0 && (
               <Card>
                 <CardHeader>
                   <CardTitle className="text-lg">Timeline Events</CardTitle>
                   <CardDescription>
-                    Confirm the applicability of detected timeline events
+                    Confirm or deny policy-derived timeline events. Confirmed events will be added to My Tasks.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -487,60 +722,58 @@ export default function Session() {
                     {data.timelines.map((timeline) => (
                       <div 
                         key={timeline.id}
-                        className="flex items-center gap-3 p-3 bg-accent/50 rounded-lg"
+                        className={`flex items-center gap-4 p-4 rounded-lg border ${
+                          timeline.status === "CONFIRMED" 
+                            ? "bg-green-50/50 border-green-200" 
+                            : timeline.status === "DENIED"
+                            ? "bg-muted/30 border-muted"
+                            : "bg-accent/50 border-transparent"
+                        }`}
                       >
-                        <Checkbox
-                          checked={timeline.confirmed}
-                          onCheckedChange={() => actions.confirmTimeline(timeline.id)}
-                        />
-                        <div className="flex-1">
-                          <p className="text-sm font-medium text-foreground">
-                            {timeline.description}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {timeline.date}
-                          </p>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <p className="text-sm font-medium text-foreground truncate">
+                              {timeline.title}
+                            </p>
+                            <Badge variant={getPriorityBadgeVariant(timeline.priority)} className="text-xs shrink-0">
+                              {timeline.priority}
+                            </Badge>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <p className="text-xs text-muted-foreground">
+                              {timeline.date}
+                            </p>
+                            {getStatusIndicator(timeline.status)}
+                            {timeline.status === "DENIED" && timeline.denyReason && (
+                              <span className="text-xs text-muted-foreground">
+                                — {timeline.denyReason}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Follow-ups */}
-            {data.followUps && data.followUps.length > 0 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Follow-Up Tasks</CardTitle>
-                  <CardDescription>
-                    Suggested follow-up actions from this session
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    {data.followUps.map((followUp) => (
-                      <div 
-                        key={followUp.id}
-                        className="flex items-center justify-between p-3 bg-accent/50 rounded-lg"
-                      >
-                        <div>
-                          <p className="text-sm font-medium text-foreground">
-                            {followUp.title}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            Due: {followUp.dueDate}
-                          </p>
-                        </div>
-                        <Badge 
-                          variant={
-                            followUp.priority === "HIGH" ? "destructive" : 
-                            followUp.priority === "MEDIUM" ? "default" : 
-                            "secondary"
-                          }
-                        >
-                          {followUp.priority}
-                        </Badge>
+                        
+                        {timeline.status === "PENDING" && (
+                          <div className="flex gap-2 shrink-0">
+                            <Button
+                              size="sm"
+                              variant="default"
+                              onClick={() => handleConfirmTimeline(timeline)}
+                              className="gap-1"
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                              Confirm
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleDenyClick(timeline.id)}
+                              className="gap-1"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                              Deny
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -551,7 +784,7 @@ export default function Session() {
             {/* Action buttons */}
             {state === "DRAFT_READY" && (
               <div className="flex gap-3 justify-end">
-                <Button variant="outline" onClick={actions.cancelSession}>
+                <Button variant="outline" onClick={handleCancelClick}>
                   Cancel Session
                 </Button>
                 <Button onClick={actions.approveDraft}>
@@ -629,7 +862,7 @@ export default function Session() {
                 {data.errorMessage || "Something went wrong. Please try again."}
               </p>
               <div className="flex gap-3 justify-center">
-                <Button variant="outline" onClick={actions.cancelSession}>
+                <Button variant="outline" onClick={handleCancelClick}>
                   Cancel Session
                 </Button>
                 <Button onClick={actions.retryFromError}>
