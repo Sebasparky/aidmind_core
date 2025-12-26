@@ -21,6 +21,8 @@ export type SessionState =
   | "PURGED"
   | "ERROR";
 
+export type TimelineEventStatus = "PENDING" | "CONFIRMED" | "DENIED";
+
 export interface SessionData {
   sessionId: string;
   caseId: string;
@@ -34,27 +36,22 @@ export interface SessionData {
   minimizedTranscript?: string;
   generatedDraft?: string;
   timelines?: TimelineItem[];
-  followUps?: FollowUpItem[];
   llmRequestCount: number;
   errorMessage?: string;
   previousStateBeforeError?: SessionState;
+  exportCompleted?: boolean;
 }
 
 export interface TimelineItem {
   id: string;
-  date: string;
-  description: string;
-  confirmed: boolean;
-}
-
-export interface FollowUpItem {
-  id: string;
   title: string;
-  dueDate: string;
+  date: string;
   priority: "LOW" | "MEDIUM" | "HIGH";
+  status: TimelineEventStatus;
+  denyReason?: string;
 }
 
-// Mock data
+// Mock data - policy-derived timeline events
 const MOCK_TRANSCRIPT = `Client A. J. discussed housing instability and upcoming follow-up needs. They mentioned receiving an eviction notice last week and are concerned about finding affordable housing options. Client expressed interest in emergency shelter placement if needed. They also mentioned needing help with utility assistance programs. A follow-up appointment was scheduled to review available resources.`;
 
 const MOCK_MINIMIZED_TRANSCRIPT = `Client discussed housing concerns including recent eviction notice. Interested in emergency shelter options and utility assistance. Follow-up scheduled for resource review.`;
@@ -88,33 +85,35 @@ Client reported receiving an eviction notice within the past week. They expresse
 - PHI minimized per agency policy
 - Session notes reviewed for accuracy`;
 
+// Mock policy-derived timeline events (merged from previous timelines and follow-ups)
 const MOCK_TIMELINES: TimelineItem[] = [
   {
     id: "1",
-    date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toLocaleDateString(),
-    description: "Eviction notice received",
-    confirmed: false,
-  },
-  {
-    id: "2",
-    date: new Date().toLocaleDateString(),
-    description: "Initial consultation completed",
-    confirmed: false,
-  },
-];
-
-const MOCK_FOLLOWUPS: FollowUpItem[] = [
-  {
-    id: "1",
     title: "Schedule housing resource review appointment",
-    dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString(),
+    date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString(),
     priority: "HIGH",
+    status: "PENDING",
   },
   {
     id: "2",
     title: "Send utility assistance program information",
-    dueDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toLocaleDateString(),
+    date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toLocaleDateString(),
     priority: "MEDIUM",
+    status: "PENDING",
+  },
+  {
+    id: "3",
+    title: "Document eviction notice receipt",
+    date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toLocaleDateString(),
+    priority: "HIGH",
+    status: "PENDING",
+  },
+  {
+    id: "4",
+    title: "Update case file with consultation notes",
+    date: new Date().toLocaleDateString(),
+    priority: "LOW",
+    status: "PENDING",
   },
 ];
 
@@ -140,6 +139,7 @@ export function useSessionMachine({
     interactionType,
     timestamp: new Date(),
     llmRequestCount: 0,
+    exportCompleted: false,
   });
 
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -227,7 +227,6 @@ export function useSessionMachine({
       ...prev,
       generatedDraft: MOCK_GENERATED_DRAFT,
       timelines: MOCK_TIMELINES,
-      followUps: MOCK_FOLLOWUPS,
     }));
     setState("DRAFT_READY");
   }, [state, simulateAsync]);
@@ -272,14 +271,46 @@ export function useSessionMachine({
     setState("DRAFT_READY");
   }, [state, data.llmRequestCount, simulateAsync]);
 
-  // CONFIRM_TIMELINES_APPLICABILITY
+  // CONFIRM_TIMELINE: Set timeline status to CONFIRMED
   const confirmTimeline = useCallback(
     (timelineId: string) => {
       if (state !== "DRAFT_READY") return;
       setData((prev) => ({
         ...prev,
         timelines: prev.timelines?.map((t) =>
-          t.id === timelineId ? { ...t, confirmed: !t.confirmed } : t
+          t.id === timelineId ? { ...t, status: "CONFIRMED" as TimelineEventStatus } : t
+        ),
+      }));
+    },
+    [state]
+  );
+
+  // DENY_TIMELINE: Set timeline status to DENIED with optional reason
+  const denyTimeline = useCallback(
+    (timelineId: string, reason?: string) => {
+      if (state !== "DRAFT_READY") return;
+      setData((prev) => ({
+        ...prev,
+        timelines: prev.timelines?.map((t) =>
+          t.id === timelineId
+            ? { ...t, status: "DENIED" as TimelineEventStatus, denyReason: reason }
+            : t
+        ),
+      }));
+    },
+    [state]
+  );
+
+  // RESET_TIMELINE: Reset timeline status to PENDING (for undo)
+  const resetTimeline = useCallback(
+    (timelineId: string) => {
+      if (state !== "DRAFT_READY") return;
+      setData((prev) => ({
+        ...prev,
+        timelines: prev.timelines?.map((t) =>
+          t.id === timelineId
+            ? { ...t, status: "PENDING" as TimelineEventStatus, denyReason: undefined }
+            : t
         ),
       }));
     },
@@ -297,6 +328,7 @@ export function useSessionMachine({
     if (state !== "APPROVED") return;
     setState("EXPORTING");
     await simulateAsync(1500); // Simulate export
+    setData((prev) => ({ ...prev, exportCompleted: true }));
     setState("CLOSING");
   }, [state, simulateAsync]);
 
@@ -324,7 +356,6 @@ export function useSessionMachine({
       minimizedTranscript: undefined,
       generatedDraft: undefined,
       timelines: undefined,
-      followUps: undefined,
     }));
     setState("PURGED");
   }, [state, simulateAsync, cleanup]);
@@ -372,6 +403,8 @@ export function useSessionMachine({
       saveEdit,
       regenerateDraft,
       confirmTimeline,
+      denyTimeline,
+      resetTimeline,
       approveDraft,
       exportDraft,
       skipExport,

@@ -22,7 +22,7 @@ interface DashboardContextType {
   tasks: Task[];
   completeTask: (taskId: string) => void;
   undoCompleteTask: (taskId: string) => void;
-  addTask: (task: Omit<Task, "id" | "createdAt" | "status">) => void;
+  addTask: (task: Omit<Task, "id" | "createdAt" | "status"> & { id?: string }) => string;
   updateTask: (taskId: string, updates: Partial<Omit<Task, "id" | "createdAt">>) => void;
   deleteTask: (taskId: string) => void;
   restoreTask: (taskId: string) => void;
@@ -142,14 +142,15 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
-  const addTask = useCallback((taskData: Omit<Task, "id" | "createdAt" | "status">) => {
+  const addTask = useCallback((taskData: Omit<Task, "id" | "createdAt" | "status"> & { id?: string }) => {
     const newTask: Task = {
       ...taskData,
-      id: crypto.randomUUID(),
+      id: taskData.id || crypto.randomUUID(),
       status: "ACTIVE",
       createdAt: new Date(),
     };
     setTasks((prev) => [newTask, ...prev]);
+    return newTask.id;
   }, []);
 
   const updateTask = useCallback((taskId: string, updates: Partial<Omit<Task, "id" | "createdAt">>) => {
