@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useSessionMachine, SessionState, TimelineItem } from "@/hooks/useSessionMachine";
+import { useSessionMachine, SessionState, TimelineItem, ResumeBundle } from "@/hooks/useSessionMachine";
 import { useDashboard } from "@/contexts/DashboardContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -39,7 +39,10 @@ import {
   AlertTriangle,
   ChevronLeft,
   Check,
-  X
+  X,
+  Save,
+  FileDown,
+  AlertCircle
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 
@@ -59,12 +62,26 @@ export default function Session() {
   const caseLabel = searchParams.get("caseLabel") || "Housing assistance — intake";
   const clientLabel = searchParams.get("clientLabel") || "A. J.";
   const interactionType = searchParams.get("interactionType") || "phone_call";
+  const resumeBundleParam = searchParams.get("resumeBundle");
+
+  // Parse resume bundle if provided
+  const [resumeBundle, setResumeBundle] = useState<ResumeBundle | undefined>(() => {
+    if (resumeBundleParam) {
+      try {
+        return JSON.parse(decodeURIComponent(resumeBundleParam));
+      } catch {
+        return undefined;
+      }
+    }
+    return undefined;
+  });
   
   const { state, data, actions } = useSessionMachine({
-    caseId,
-    caseLabel,
-    clientLabel,
-    interactionType,
+    caseId: resumeBundle?.case_reference.caseId || caseId,
+    caseLabel: resumeBundle?.case_reference.caseLabel || caseLabel,
+    clientLabel: resumeBundle?.case_reference.clientLabel || clientLabel,
+    interactionType: resumeBundle?.case_reference.interactionType || interactionType,
+    resumeBundle,
   });
 
   const [editedDraft, setEditedDraft] = useState("");
@@ -79,6 +96,10 @@ export default function Session() {
   const [denyDialogOpen, setDenyDialogOpen] = useState(false);
   const [denyingTimelineId, setDenyingTimelineId] = useState<string | null>(null);
   const [denyReason, setDenyReason] = useState("");
+
+  // New input dialog for resumed sessions (for regeneration)
+  const [showNewInputDialog, setShowNewInputDialog] = useState(false);
+  const [newInputText, setNewInputText] = useState("");
 
   // Track created task IDs for undo
   const createdTasksRef = useRef<Map<string, string>>(new Map());
@@ -109,6 +130,8 @@ export default function Session() {
           title: "Export complete",
           description: "Session purged.",
         });
+      } else if (data.savedForLater) {
+        // Message already shown by handleSaveForLater
       } else {
         toast({
           title: "Session ended",
@@ -117,7 +140,7 @@ export default function Session() {
       }
       navigate("/dashboard");
     }
-  }, [state, navigate, data.exportCompleted]);
+  }, [state, navigate, data.exportCompleted, data.savedForLater]);
 
   // Auto-complete purge when closing
   useEffect(() => {
@@ -218,20 +241,53 @@ export default function Session() {
     actions.cancelSession();
   }, [actions]);
 
+  // Save for Later handler
+  const handleSaveForLater = useCallback(() => {
+    const bundle = actions.saveForLater();
+    if (bundle) {
+      // Create downloadable JSON file
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `aidmind_draft_bundle_v1_${bundle.resume_bundle_id.slice(0, 8)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: "Draft saved for later",
+        description: "Download complete. Session closed and temporary data purged.",
+      });
+
+      // Trigger closing after download
+      actions.triggerClosingAfterSave();
+    }
+  }, [actions]);
+
   // Timeline Confirm/Deny handlers
   const handleConfirmTimeline = useCallback((timeline: TimelineItem) => {
-    actions.confirmTimeline(timeline.id);
-    
+    // Check if this timeline already created a task (from resume bundle)
+    if (timeline.createdTaskId) {
+      toast({
+        title: "Task already exists",
+        description: "This event was already confirmed in a previous session.",
+      });
+      return;
+    }
+
     // Create task in dashboard and store its ID
     const taskId = addTask({
       title: timeline.title,
-      clientLabel,
-      caseId,
-      caseLabel,
+      clientLabel: data.clientLabel,
+      caseId: data.caseId,
+      caseLabel: data.caseLabel,
       dueDate: timeline.date,
       priority: timeline.priority === "HIGH" ? "HIGH" : "NORMAL",
     });
     
+    actions.confirmTimeline(timeline.id, taskId);
     createdTasksRef.current.set(timeline.id, taskId);
 
     const { dismiss } = toast({
@@ -255,7 +311,7 @@ export default function Session() {
       ),
       duration: 5000,
     });
-  }, [actions, addTask, deleteTask, clientLabel, caseId, caseLabel]);
+  }, [actions, addTask, deleteTask, data.clientLabel, data.caseId, data.caseLabel]);
 
   const handleDenyClick = useCallback((timelineId: string) => {
     setDenyingTimelineId(timelineId);
@@ -272,6 +328,25 @@ export default function Session() {
     setDenyingTimelineId(null);
     setDenyReason("");
   }, [denyingTimelineId, denyReason, actions]);
+
+  // Handle new input for regeneration (resumed sessions)
+  const handleRequestRegeneration = useCallback(() => {
+    if (data.isResumedSession && !data.hasNewInputForRegeneration) {
+      setShowNewInputDialog(true);
+    } else {
+      actions.regenerateDraft();
+    }
+  }, [data.isResumedSession, data.hasNewInputForRegeneration, actions]);
+
+  const handleSubmitNewInput = useCallback(() => {
+    if (newInputText.trim()) {
+      actions.addNewInputForRegeneration(newInputText);
+      setShowNewInputDialog(false);
+      setNewInputText("");
+      // Now trigger regeneration
+      actions.regenerateDraft();
+    }
+  }, [newInputText, actions]);
 
   const getInteractionTypeLabel = (type: string) => {
     const labels: Record<string, string> = {
@@ -320,7 +395,7 @@ export default function Session() {
       RETRIEVING_CONTEXT: "Retrieving templates and policies...",
       GENERATING: "Generating draft note...",
       VALIDATING_OUTPUT: "Validating output...",
-      DRAFT_READY: "Draft ready for review",
+      DRAFT_READY: data.isResumedSession ? "Resumed draft ready for review" : "Draft ready for review",
       EDITING: "Editing draft",
       APPROVED: "Draft approved",
       EXPORTING: "Exporting to system of record...",
@@ -352,6 +427,9 @@ export default function Session() {
         return null;
     }
   };
+
+  const canRegenerate = data.llmRequestCount < 3 && 
+    (!data.isResumedSession || data.hasNewInputForRegeneration);
 
   return (
     <div className="min-h-screen bg-background">
@@ -429,6 +507,39 @@ export default function Session() {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* New Input Dialog for Regeneration (Resumed Sessions) */}
+      <AlertDialog open={showNewInputDialog} onOpenChange={setShowNewInputDialog}>
+        <AlertDialogContent className="max-w-lg">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-amber-500" />
+              Regeneration requires new input
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Since this is a resumed session, the original audio and transcript have been purged. 
+              To regenerate the draft, please provide new notes or context.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="py-4">
+            <Textarea
+              placeholder="Enter additional notes or context..."
+              value={newInputText}
+              onChange={(e) => setNewInputText(e.target.value)}
+              className="min-h-[120px]"
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={handleSubmitNewInput}
+              disabled={!newInputText.trim()}
+            >
+              Regenerate with new input
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Header */}
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-6 py-4">
@@ -443,9 +554,18 @@ export default function Session() {
                 Back
               </Button>
               <div>
-                <h1 className="text-xl font-semibold text-foreground">New Note Session</h1>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-xl font-semibold text-foreground">
+                    {data.isResumedSession ? "Resumed Note Session" : "New Note Session"}
+                  </h1>
+                  {data.isResumedSession && (
+                    <Badge variant="outline" className="text-amber-600 border-amber-400 bg-amber-50">
+                      Resumed
+                    </Badge>
+                  )}
+                </div>
                 <p className="text-sm text-muted-foreground">
-                  {clientLabel} • {caseLabel} • {getInteractionTypeLabel(interactionType)}
+                  {data.clientLabel} • {data.caseLabel} • {getInteractionTypeLabel(data.interactionType)}
                 </p>
               </div>
             </div>
@@ -643,6 +763,30 @@ export default function Session() {
         {/* DRAFT_READY: Review and edit */}
         {(state === "DRAFT_READY" || state === "EDITING") && (
           <div className="space-y-6">
+            {/* Resumed session notice */}
+            {data.isResumedSession && state === "DRAFT_READY" && (
+              <Card className="border-amber-200 bg-amber-50/50">
+                <CardContent className="py-4">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="h-5 w-5 text-amber-600 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-sm font-medium text-amber-800">
+                        This is a resumed session
+                      </p>
+                      <p className="text-sm text-amber-700 mt-1">
+                        Original audio and transcript were securely purged. Regeneration requires new input.
+                        {data.previousResumeBundleId && (
+                          <span className="block mt-1 text-xs text-amber-600">
+                            Previous bundle ID: {data.previousResumeBundleId.slice(0, 8)}...
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
@@ -666,11 +810,21 @@ export default function Session() {
                     <Button 
                       variant="outline" 
                       size="sm"
-                      onClick={actions.regenerateDraft}
+                      onClick={handleRequestRegeneration}
                       disabled={data.llmRequestCount >= 3}
+                      title={
+                        data.isResumedSession && !data.hasNewInputForRegeneration
+                          ? "Regeneration requires new input"
+                          : undefined
+                      }
                     >
                       <RefreshCw className="h-4 w-4 mr-1" />
-                      Regenerate ({3 - data.llmRequestCount} left)
+                      {canRegenerate 
+                        ? `Regenerate (${3 - data.llmRequestCount} left)`
+                        : data.isResumedSession && !data.hasNewInputForRegeneration
+                        ? "New input required"
+                        : "Regenerate (0 left)"
+                      }
                     </Button>
                   </div>
                 </div>
@@ -783,14 +937,23 @@ export default function Session() {
 
             {/* Action buttons */}
             {state === "DRAFT_READY" && (
-              <div className="flex gap-3 justify-end">
+              <div className="flex gap-3 justify-between">
                 <Button variant="outline" onClick={handleCancelClick}>
                   Cancel Session
                 </Button>
-                <Button onClick={actions.approveDraft}>
-                  <CheckCircle2 className="h-4 w-4 mr-2" />
-                  Approve Draft
-                </Button>
+                <div className="flex gap-3">
+                  <Button 
+                    variant="secondary" 
+                    onClick={handleSaveForLater}
+                  >
+                    <Save className="h-4 w-4 mr-2" />
+                    Save for Later
+                  </Button>
+                  <Button onClick={actions.approveDraft}>
+                    <CheckCircle2 className="h-4 w-4 mr-2" />
+                    Approve Draft
+                  </Button>
+                </div>
               </div>
             )}
           </div>

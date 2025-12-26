@@ -40,6 +40,11 @@ export interface SessionData {
   errorMessage?: string;
   previousStateBeforeError?: SessionState;
   exportCompleted?: boolean;
+  savedForLater?: boolean;
+  // Resume-related fields
+  isResumedSession?: boolean;
+  previousResumeBundleId?: string;
+  hasNewInputForRegeneration?: boolean;
 }
 
 export interface TimelineItem {
@@ -49,6 +54,25 @@ export interface TimelineItem {
   priority: "LOW" | "MEDIUM" | "HIGH";
   status: TimelineEventStatus;
   denyReason?: string;
+  createdTaskId?: string; // Track if this already created a task (for resume deduplication)
+}
+
+// Resume bundle structure (for Save for Later)
+export interface ResumeBundle {
+  version: "1.0";
+  resume_bundle_id: string;
+  created_at: string;
+  case_reference: {
+    caseId: string;
+    caseLabel: string;
+    clientLabel: string;
+    interactionType: string;
+  };
+  draft_content: string;
+  timeline_events: TimelineItem[];
+  template_ids: string[]; // Dummy placeholder
+  policy_pack_ids: string[]; // Dummy placeholder
+  unknown_fields: string[]; // Placeholder for unfilled fields
 }
 
 // Mock data - policy-derived timeline events
@@ -122,6 +146,7 @@ interface UseSessionMachineProps {
   caseLabel: string;
   clientLabel: string;
   interactionType: string;
+  resumeBundle?: ResumeBundle;
 }
 
 export function useSessionMachine({
@@ -129,6 +154,7 @@ export function useSessionMachine({
   caseLabel,
   clientLabel,
   interactionType,
+  resumeBundle,
 }: UseSessionMachineProps) {
   const [state, setState] = useState<SessionState>("NEW");
   const [data, setData] = useState<SessionData>({
@@ -140,6 +166,10 @@ export function useSessionMachine({
     timestamp: new Date(),
     llmRequestCount: 0,
     exportCompleted: false,
+    savedForLater: false,
+    isResumedSession: !!resumeBundle,
+    previousResumeBundleId: resumeBundle?.resume_bundle_id,
+    hasNewInputForRegeneration: false,
   });
 
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -159,18 +189,38 @@ export function useSessionMachine({
     }
   }, []);
 
-  // START_SESSION: NEW → READY_FOR_INPUT
+  // START_SESSION: NEW → READY_FOR_INPUT (or DRAFT_READY if resuming)
   const startSession = useCallback(async () => {
     if (state !== "NEW") return;
     await simulateAsync(300);
-    setState("READY_FOR_INPUT");
-  }, [state, simulateAsync]);
+    
+    if (resumeBundle) {
+      // Resume from bundle: restore state and go directly to DRAFT_READY
+      setData((prev) => ({
+        ...prev,
+        generatedDraft: resumeBundle.draft_content,
+        timelines: resumeBundle.timeline_events,
+        isResumedSession: true,
+        previousResumeBundleId: resumeBundle.resume_bundle_id,
+      }));
+      setState("DRAFT_READY");
+      // Log events (internal only)
+      console.log("[AidMind Event] WIP_BUNDLE_IMPORTED");
+      console.log(`[AidMind Event] SESSION_LINKED(${resumeBundle.resume_bundle_id})`);
+    } else {
+      setState("READY_FOR_INPUT");
+    }
+  }, [state, simulateAsync, resumeBundle]);
 
   // UPLOAD_AUDIO: READY_FOR_INPUT → AUDIO_UPLOADED
   const uploadAudio = useCallback(
     async (file: File) => {
       if (state !== "READY_FOR_INPUT") return;
-      setData((prev) => ({ ...prev, audioFile: file }));
+      setData((prev) => ({ 
+        ...prev, 
+        audioFile: file,
+        hasNewInputForRegeneration: true, // New input provided
+      }));
       await simulateAsync(500);
       setState("AUDIO_UPLOADED");
     },
@@ -181,7 +231,11 @@ export function useSessionMachine({
   const pasteTextNotes = useCallback(
     async (text: string) => {
       if (state !== "READY_FOR_INPUT") return;
-      setData((prev) => ({ ...prev, textNotes: text }));
+      setData((prev) => ({ 
+        ...prev, 
+        textNotes: text,
+        hasNewInputForRegeneration: true, // New input provided
+      }));
       await simulateAsync(300);
       setState("TEXT_PROVIDED");
     },
@@ -248,6 +302,7 @@ export function useSessionMachine({
   );
 
   // REGENERATE_REQUEST: DRAFT_READY → RETRIEVING_CONTEXT (loop back)
+  // For resumed sessions, only allowed if new input was provided
   const regenerateDraft = useCallback(async () => {
     if (state !== "DRAFT_READY") return;
     if (data.llmRequestCount >= 3) {
@@ -256,6 +311,11 @@ export function useSessionMachine({
         errorMessage: "Maximum regeneration attempts reached (3)",
       }));
       return;
+    }
+    
+    // For resumed sessions without new input, regeneration is not allowed
+    if (data.isResumedSession && !data.hasNewInputForRegeneration) {
+      return; // Should not reach here if UI is correct
     }
     
     setState("RETRIEVING_CONTEXT");
@@ -269,16 +329,18 @@ export function useSessionMachine({
     await simulateAsync(800);
     
     setState("DRAFT_READY");
-  }, [state, data.llmRequestCount, simulateAsync]);
+  }, [state, data.llmRequestCount, data.isResumedSession, data.hasNewInputForRegeneration, simulateAsync]);
 
   // CONFIRM_TIMELINE: Set timeline status to CONFIRMED
   const confirmTimeline = useCallback(
-    (timelineId: string) => {
+    (timelineId: string, createdTaskId?: string) => {
       if (state !== "DRAFT_READY") return;
       setData((prev) => ({
         ...prev,
         timelines: prev.timelines?.map((t) =>
-          t.id === timelineId ? { ...t, status: "CONFIRMED" as TimelineEventStatus } : t
+          t.id === timelineId 
+            ? { ...t, status: "CONFIRMED" as TimelineEventStatus, createdTaskId } 
+            : t
         ),
       }));
     },
@@ -309,7 +371,7 @@ export function useSessionMachine({
         ...prev,
         timelines: prev.timelines?.map((t) =>
           t.id === timelineId
-            ? { ...t, status: "PENDING" as TimelineEventStatus, denyReason: undefined }
+            ? { ...t, status: "PENDING" as TimelineEventStatus, denyReason: undefined, createdTaskId: undefined }
             : t
         ),
       }));
@@ -337,6 +399,42 @@ export function useSessionMachine({
     if (state !== "APPROVED") return;
     setState("CLOSING");
   }, [state]);
+
+  // SAVE_FOR_LATER: DRAFT_READY → generate bundle → CLOSING
+  const saveForLater = useCallback((): ResumeBundle | null => {
+    if (state !== "DRAFT_READY") return null;
+    
+    const bundle: ResumeBundle = {
+      version: "1.0",
+      resume_bundle_id: crypto.randomUUID(),
+      created_at: new Date().toISOString(),
+      case_reference: {
+        caseId: data.caseId,
+        caseLabel: data.caseLabel,
+        clientLabel: data.clientLabel,
+        interactionType: data.interactionType,
+      },
+      draft_content: data.generatedDraft || "",
+      timeline_events: data.timelines || [],
+      template_ids: ["template_housing_v1", "template_general_v1"], // Dummy
+      policy_pack_ids: ["policy_state_abc_2024", "policy_agency_default"], // Dummy
+      unknown_fields: ["supervisor_signature", "follow_up_outcome"], // Dummy placeholder
+    };
+
+    // Log events (internal only)
+    console.log("[AidMind Event] WIP_BUNDLE_EXPORTED");
+    console.log("[AidMind Event] EPHEMERAL_INPUTS_PURGED");
+    console.log("[AidMind Event] SESSION_CLOSED");
+
+    setData((prev) => ({ ...prev, savedForLater: true }));
+    
+    return bundle;
+  }, [state, data]);
+
+  // Trigger closing after save for later
+  const triggerClosingAfterSave = useCallback(() => {
+    setState("CLOSING");
+  }, []);
 
   // CANCEL_SESSION: Any state → CLOSING
   const cancelSession = useCallback(() => {
@@ -389,6 +487,19 @@ export function useSessionMachine({
     }
   }, [state, data.previousStateBeforeError]);
 
+  // Add new input for regeneration (for resumed sessions)
+  const addNewInputForRegeneration = useCallback(
+    async (text: string) => {
+      if (state !== "DRAFT_READY") return;
+      setData((prev) => ({ 
+        ...prev, 
+        textNotes: text,
+        hasNewInputForRegeneration: true,
+      }));
+    },
+    [state]
+  );
+
   return {
     state,
     data,
@@ -408,11 +519,14 @@ export function useSessionMachine({
       approveDraft,
       exportDraft,
       skipExport,
+      saveForLater,
+      triggerClosingAfterSave,
       cancelSession,
       completePurge,
       handleError,
       retryFromError,
       cleanup,
+      addNewInputForRegeneration,
     },
   };
 }
