@@ -37,11 +37,9 @@ import {
   Download,
   Trash2,
   AlertTriangle,
-  ChevronLeft,
   Check,
   X,
   Save,
-  FileDown,
   AlertCircle
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
@@ -122,20 +120,24 @@ export default function Session() {
     }
   }, [state, actions]);
 
-  // Navigate to dashboard when purged with appropriate message
+  // Navigate to dashboard when purged with appropriate message (color-coded)
   useEffect(() => {
     if (state === "PURGED") {
       if (data.exportCompleted) {
+        // Green / Success styling
         toast({
-          title: "Export complete",
-          description: "Session purged.",
+          title: "✅ Export complete",
+          description: "Session finalized and closed successfully.",
+          className: "border-green-500 bg-green-50 text-green-900 dark:bg-green-950 dark:text-green-100 dark:border-green-700",
         });
       } else if (data.savedForLater) {
-        // Message already shown by handleSaveForLater
+        // Message already shown by handleSaveForLater (blue styling)
       } else {
+        // Red / Destructive styling (cancelled)
         toast({
-          title: "Session ended",
-          description: "All session data has been securely purged.",
+          title: "❌ Session cancelled",
+          description: "Draft discarded and temporary data purged.",
+          className: "border-destructive bg-destructive/10 text-destructive dark:bg-destructive/20",
         });
       }
       navigate("/dashboard");
@@ -219,13 +221,6 @@ export default function Session() {
     actions.exportDraft();
   }, [actions]);
 
-  const handleBackClick = useCallback(() => {
-    if (state !== "PURGED" && state !== "NEW") {
-      setShowLeaveDialog(true);
-    } else {
-      navigate("/dashboard");
-    }
-  }, [state, navigate]);
 
   const handleCancelClick = useCallback(() => {
     setShowCancelDialog(true);
@@ -256,9 +251,11 @@ export default function Session() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
+      // Blue / Informational styling
       toast({
-        title: "Draft saved for later",
+        title: "💾 Draft saved for later",
         description: "Download complete. Session closed and temporary data purged.",
+        className: "border-blue-500 bg-blue-50 text-blue-900 dark:bg-blue-950 dark:text-blue-100 dark:border-blue-700",
       });
 
       // Trigger closing after download
@@ -544,46 +541,24 @@ export default function Session() {
       <header className="border-b border-border bg-card">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Button 
-                variant="ghost" 
-                size="sm"
-                onClick={handleBackClick}
-              >
-                <ChevronLeft className="h-4 w-4 mr-1" />
-                Back
-              </Button>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h1 className="text-xl font-semibold text-foreground">
-                    {data.isResumedSession ? "Resumed Note Session" : "New Note Session"}
-                  </h1>
-                  {data.isResumedSession && (
-                    <Badge variant="outline" className="text-amber-600 border-amber-400 bg-amber-50">
-                      Resumed
-                    </Badge>
-                  )}
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  {data.clientLabel} • {data.caseLabel} • {getInteractionTypeLabel(data.interactionType)}
-                </p>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-semibold text-foreground">
+                  {data.isResumedSession ? "Resumed Note Session" : "New Note Session"}
+                </h1>
+                {data.isResumedSession && (
+                  <Badge variant="outline" className="text-amber-600 border-amber-400 bg-amber-50">
+                    Resumed
+                  </Badge>
+                )}
               </div>
+              <p className="text-sm text-muted-foreground">
+                {data.clientLabel} • {data.caseLabel} • {getInteractionTypeLabel(data.interactionType)}
+              </p>
             </div>
-            <div className="flex items-center gap-3">
-              <Badge variant="outline" className="text-xs">
-                Session: {data.sessionId.slice(0, 8)}...
-              </Badge>
-              {state !== "ERROR" && state !== "PURGED" && state !== "CLOSING" && (
-                <Button 
-                  variant="destructive" 
-                  size="sm"
-                  onClick={handleCancelClick}
-                >
-                  <XCircle className="h-4 w-4 mr-1" />
-                  Cancel
-                </Button>
-              )}
-            </div>
+            <Badge variant="outline" className="text-xs">
+              Session: {data.sessionId.slice(0, 8)}...
+            </Badge>
           </div>
           
           {/* Progress bar */}
