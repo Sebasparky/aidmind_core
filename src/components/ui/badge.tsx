@@ -12,6 +12,10 @@ const badgeVariants = cva(
         secondary: "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80",
         destructive: "border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80",
         outline: "text-foreground",
+        // Semantic status variants
+        success: "border-[hsl(var(--status-success)/0.2)] bg-[hsl(var(--status-success-muted))] text-[hsl(var(--status-success-muted-foreground))] font-medium",
+        warning: "border-[hsl(var(--status-warning)/0.2)] bg-[hsl(var(--status-warning-muted))] text-[hsl(var(--status-warning-muted-foreground))] font-medium",
+        neutral: "border-[hsl(var(--status-neutral)/0.15)] bg-[hsl(var(--status-neutral-muted))] text-[hsl(var(--status-neutral-muted-foreground))] font-medium",
       },
     },
     defaultVariants: {

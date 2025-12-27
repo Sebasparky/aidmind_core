@@ -20,28 +20,28 @@ const statusConfig: Record<NoteStatus, {
   icon: typeof Upload;
   iconClass: string;
   bgClass: string;
-  badgeClass: string;
+  badgeVariant: "success" | "warning" | "neutral";
   label: string;
 }> = {
   exported: {
     icon: Upload,
     iconClass: "text-status-success",
     bgClass: "bg-[hsl(var(--status-success-muted))]",
-    badgeClass: "badge-success",
+    badgeVariant: "success",
     label: "Exported",
   },
   saved: {
     icon: Save,
     iconClass: "text-status-warning",
     bgClass: "bg-[hsl(var(--status-warning-muted))]",
-    badgeClass: "badge-warning",
+    badgeVariant: "warning",
     label: "Saved for later",
   },
   cancelled: {
     icon: XCircle,
     iconClass: "text-status-neutral",
     bgClass: "bg-[hsl(var(--status-neutral-muted))]",
-    badgeClass: "badge-neutral",
+    badgeVariant: "neutral",
     label: "Cancelled",
   },
 };
@@ -87,7 +87,7 @@ export function NoteItem({ note }: NoteItemProps) {
         
         {/* Status and timestamp */}
         <div className="flex items-center gap-2 mt-1.5">
-          <Badge className={cn("text-xs px-2 py-0 border-0", config.badgeClass)}>
+          <Badge variant={config.badgeVariant} className="text-xs px-2 py-0">
             {config.label}
           </Badge>
           <span className="text-xs text-muted-foreground">
