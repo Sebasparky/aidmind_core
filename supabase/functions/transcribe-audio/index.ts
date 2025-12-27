@@ -125,34 +125,69 @@ serve(async (req) => {
     formData.append("model", model);
     formData.append("response_format", "text");
 
-    // Call OpenAI transcription API
+    // Call OpenAI transcription API with retry logic
     console.log(`[Transcribe] Calling OpenAI API with model: ${model}`);
-    const openAIResponse = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${openAIApiKey}`,
-      },
-      body: formData,
-    });
+    console.log(`[Transcribe] API key present: ${!!openAIApiKey}, length: ${openAIApiKey?.length || 0}`);
+    
+    let openAIResponse: Response | null = null;
+    let lastError: string = "";
+    const maxRetries = 2;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (attempt > 0) {
+        // Wait before retry (exponential backoff)
+        const waitTime = Math.pow(2, attempt) * 1000;
+        console.log(`[Transcribe] Retrying after ${waitTime}ms (attempt ${attempt + 1})`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+      
+      openAIResponse = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${openAIApiKey}`,
+        },
+        body: formData,
+      });
+      
+      if (openAIResponse.ok) {
+        break;
+      }
+      
+      lastError = await openAIResponse.text();
+      console.error(`OpenAI API error (attempt ${attempt + 1}):`, openAIResponse.status, lastError);
+      
+      // Don't retry on 4xx errors (except 429)
+      if (openAIResponse.status !== 429 && openAIResponse.status >= 400 && openAIResponse.status < 500) {
+        break;
+      }
+    }
 
-    if (!openAIResponse.ok) {
-      const errorText = await openAIResponse.text();
-      console.error("OpenAI API error:", openAIResponse.status, errorText);
+    if (!openAIResponse || !openAIResponse.ok) {
+      const statusCode = openAIResponse?.status || 500;
       
       await supabase
         .from("transcription_jobs")
         .update({ 
           status: "failed", 
-          error_message: `OpenAI API error: ${openAIResponse.status}` 
+          error_message: `OpenAI API error: ${statusCode}` 
         })
         .eq("id", jobData.id);
 
       await logEyeEvent(supabase, session_id, "TRANSCRIPTION_FAILED", {
         reason: "openai_api_error",
-        status_code: openAIResponse.status,
+        status_code: statusCode,
+        error_details: lastError.substring(0, 200),
       });
 
-      throw new Error(`OpenAI transcription failed: ${openAIResponse.status}`);
+      // Provide more helpful error messages
+      let userMessage = `OpenAI transcription failed: ${statusCode}`;
+      if (statusCode === 429) {
+        userMessage = "OpenAI rate limit exceeded. Please check your API key quota/billing or try again later.";
+      } else if (statusCode === 401) {
+        userMessage = "OpenAI API key is invalid or expired.";
+      }
+
+      throw new Error(userMessage);
     }
 
     const transcriptText = await openAIResponse.text();
