@@ -210,6 +210,28 @@ export function useSessionMachine({
   // START_SESSION: NEW → READY_FOR_INPUT (or DRAFT_READY if resuming)
   const startSession = useCallback(async () => {
     if (state !== "NEW") return;
+    
+    // Create session in database for real transcription
+    if (useRealTranscription) {
+      try {
+        const session = await sessionApi.createSession({
+          case_id: caseId,
+          case_label: caseLabel,
+          client_label: clientLabel,
+          interaction_type: interactionType,
+        });
+        
+        if (session) {
+          // Update local session ID to match database record
+          setData((prev) => ({ ...prev, sessionId: session.session_id }));
+          console.log("[AidMind Event] SESSION_CREATED", session.session_id);
+        }
+      } catch (error) {
+        console.error("Failed to create session in database:", error);
+        // Continue with local session even if DB creation fails
+      }
+    }
+    
     await simulateAsync(300);
     
     if (resumeBundle) {
@@ -228,7 +250,7 @@ export function useSessionMachine({
     } else {
       setState("READY_FOR_INPUT");
     }
-  }, [state, simulateAsync, resumeBundle]);
+  }, [state, simulateAsync, resumeBundle, useRealTranscription, sessionApi, caseId, caseLabel, clientLabel, interactionType]);
 
   // UPLOAD_AUDIO: READY_FOR_INPUT → AUDIO_UPLOADED
   const uploadAudio = useCallback(
