@@ -24,8 +24,16 @@ export interface RedactionCounts {
   date: number;
 }
 
+export type Layer2StatusType = 
+  | "COMPLETED" 
+  | "FAILED_UNREACHABLE" 
+  | "FAILED_TIMEOUT" 
+  | "FAILED_ERROR" 
+  | "SKIPPED_CONFIG_MISSING" 
+  | "SKIPPED";
+
 export interface LayerStatus {
-  status: "COMPLETED" | "SKIPPED" | "FAILED";
+  status: string; // Allow any status string to support new Layer 2 statuses
   counts?: Partial<RedactionCounts>;
   method?: string;
   skipped_reason?: string;
