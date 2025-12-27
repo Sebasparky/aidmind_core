@@ -49,6 +49,7 @@ const statusConfig: Record<NoteStatus, {
 const interactionTypeLabels: Record<string, string> = {
   "phone-call": "Phone Call",
   "in-person": "In-Person",
+  "video-call": "Video Call",
   "text-sms": "Text/SMS",
   "collateral-contact": "Collateral Contact",
   "case-conference": "Case Conference",
