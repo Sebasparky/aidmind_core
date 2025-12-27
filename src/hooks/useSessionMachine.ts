@@ -55,6 +55,11 @@ export interface SessionData {
   // Verification review fields
   verificationFailedCategories?: string[];
   isReverifying?: boolean;
+  redactionStatus?: {
+    layer1?: { status: string; counts?: Record<string, number> };
+    layer2?: { status: string; counts?: Record<string, number>; method?: string; skipped_reason?: string };
+    layer3?: { status: string; categories?: string[] };
+  };
 }
 
 export interface TimelineItem {
@@ -347,6 +352,11 @@ export function useSessionMachine({
             ...prev,
             minimizedTranscript: result.minimizedTranscript || "",
             verificationFailedCategories: result.failedCategories,
+            redactionStatus: result.redactionStatus ? {
+              layer1: result.redactionStatus.layer1,
+              layer2: result.redactionStatus.layer2,
+              layer3: result.redactionStatus.layer3,
+            } : undefined,
           }));
           setState("VERIFICATION_REVIEW");
           console.log("[AidMind Event] REDACTION_REVIEW_ENTERED");
@@ -357,6 +367,11 @@ export function useSessionMachine({
           ...prev,
           minimizedTranscript: result.minimizedTranscript || "",
           verificationFailedCategories: undefined,
+          redactionStatus: result.redactionStatus ? {
+            layer1: result.redactionStatus.layer1,
+            layer2: result.redactionStatus.layer2,
+            layer3: result.redactionStatus.layer3,
+          } : undefined,
         }));
         setState("INPUT_READY");
         

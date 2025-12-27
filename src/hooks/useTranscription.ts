@@ -24,6 +24,19 @@ export interface RedactionCounts {
   date: number;
 }
 
+export interface LayerStatus {
+  status: "COMPLETED" | "SKIPPED" | "FAILED";
+  counts?: Partial<RedactionCounts>;
+  method?: string;
+  skipped_reason?: string;
+}
+
+export interface RedactionStatus {
+  layer1: LayerStatus;
+  layer2: LayerStatus;
+  layer3: { status: "PASS" | "FAIL"; categories?: string[] };
+}
+
 export interface VerificationResult {
   status: "PASS" | "FAIL";
   categories?: string[];
@@ -36,6 +49,8 @@ interface TranscriptionState {
   transcript: string | null;
   minimizedTranscript: string | null;
   redactionCounts: RedactionCounts | null;
+  redactionStatus: RedactionStatus | null;
+  minimizedTextSource: "ner" | "regex" | null;
   verificationResult: VerificationResult | null;
   error: string | null;
   audioObjectKey: string | null;
@@ -56,6 +71,8 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
     transcript: null,
     minimizedTranscript: null,
     redactionCounts: null,
+    redactionStatus: null,
+    minimizedTextSource: null,
     verificationResult: null,
     error: null,
     audioObjectKey: null,
@@ -142,6 +159,8 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
     minimizedTranscript: string | null;
     verificationPassed: boolean;
     failedCategories: string[];
+    redactionStatus: RedactionStatus | null;
+    minimizedTextSource: "ner" | "regex" | null;
   }> => {
     setState((prev) => ({ ...prev, isRedacting: true, error: null, verificationResult: null }));
 
@@ -166,17 +185,22 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
       const minimizedTranscript = data.minimized_text;
       const redactionCounts = data.redaction_counts as RedactionCounts;
       const verificationResult = data.verification_result as VerificationResult;
+      const redactionStatus = data.redaction as RedactionStatus | undefined;
+      const minimizedTextSource = data.minimized_text_source as "ner" | "regex" | undefined;
 
       setState((prev) => ({ 
         ...prev, 
         isRedacting: false, 
         minimizedTranscript,
         redactionCounts,
+        redactionStatus: redactionStatus || null,
+        minimizedTextSource: minimizedTextSource || null,
         verificationResult,
       }));
 
       console.log(`[Transcription] Redaction complete. Verification: ${verificationResult.status}`);
       console.log(`[Transcription] Redaction counts:`, redactionCounts);
+      console.log(`[Transcription] Minimized text source: ${minimizedTextSource}`);
 
       if (verificationResult.status === "FAIL") {
         console.warn(`[Transcription] Verification FAILED. Categories: ${verificationResult.categories?.join(", ")}`);
@@ -186,11 +210,13 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
         minimizedTranscript,
         verificationPassed: verificationResult.status === "PASS",
         failedCategories: verificationResult.categories || [],
+        redactionStatus: redactionStatus || null,
+        minimizedTextSource: minimizedTextSource || null,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Redaction failed";
       setState((prev) => ({ ...prev, isRedacting: false, error: errorMessage }));
-      return { minimizedTranscript: null, verificationPassed: false, failedCategories: [] };
+      return { minimizedTranscript: null, verificationPassed: false, failedCategories: [], redactionStatus: null, minimizedTextSource: null };
     }
   }, []);
 
@@ -282,6 +308,8 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
       transcript: null,
       minimizedTranscript: null,
       redactionCounts: null,
+      redactionStatus: null,
+      minimizedTextSource: null,
       verificationResult: null,
       error: null,
       audioObjectKey: null,
