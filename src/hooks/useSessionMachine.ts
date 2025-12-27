@@ -15,6 +15,7 @@ export type SessionState =
   | "TRANSCRIBING"
   | "TRANSCRIBED"
   | "REDACTING"
+  | "VERIFICATION_REVIEW" // New state for verification failure UX
   | "INPUT_READY"
   | "RETRIEVING_CONTEXT"
   | "GENERATING"
@@ -51,6 +52,9 @@ export interface SessionData {
   isResumedSession?: boolean;
   previousResumeBundleId?: string;
   hasNewInputForRegeneration?: boolean;
+  // Verification review fields
+  verificationFailedCategories?: string[];
+  isReverifying?: boolean;
 }
 
 export interface TimelineItem {
@@ -322,7 +326,7 @@ export function useSessionMachine({
     }
   }, [state, data.audioFile, data.sessionId, useRealTranscription, transcription, simulateAsync]);
 
-  // START_REDACTION: TRANSCRIBED/TEXT_PROVIDED → REDACTING → INPUT_READY
+  // START_REDACTION: TRANSCRIBED/TEXT_PROVIDED → REDACTING → INPUT_READY or VERIFICATION_REVIEW
   const startRedaction = useCallback(async () => {
     if (state !== "TRANSCRIBED" && state !== "TEXT_PROVIDED") return;
     setState("REDACTING");
@@ -338,21 +342,21 @@ export function useSessionMachine({
         
         // Check verification result
         if (!result.verificationPassed) {
-          // Verification failed - show error but don't block completely
+          // Verification failed - enter VERIFICATION_REVIEW state
           setData((prev) => ({
             ...prev,
             minimizedTranscript: result.minimizedTranscript || "",
-            errorMessage: "Possible identifying info remains. Please remove names/addresses/IDs and try again.",
-            previousStateBeforeError: "REDACTING",
+            verificationFailedCategories: result.failedCategories,
           }));
-          setState("ERROR");
-          console.log("[AidMind Event] REDACTION_VERIFICATION_FAILED");
+          setState("VERIFICATION_REVIEW");
+          console.log("[AidMind Event] REDACTION_REVIEW_ENTERED");
           return;
         }
         
         setData((prev) => ({
           ...prev,
           minimizedTranscript: result.minimizedTranscript || "",
+          verificationFailedCategories: undefined,
         }));
         setState("INPUT_READY");
         
@@ -376,6 +380,52 @@ export function useSessionMachine({
       setState("INPUT_READY");
     }
   }, [state, data.sessionId, data.transcript, data.textNotes, useRealTranscription, transcription, simulateAsync]);
+
+  // REVERIFY_TEXT: VERIFICATION_REVIEW → INPUT_READY (if pass) or stay (if fail)
+  const reverifyText = useCallback(async (editedText: string) => {
+    if (state !== "VERIFICATION_REVIEW") return;
+    
+    setData((prev) => ({ ...prev, isReverifying: true }));
+    console.log("[AidMind Event] REDACTION_VERIFICATION_RETRY");
+    
+    try {
+      const result = await transcription.reverify(data.sessionId, editedText);
+      
+      if (result.verificationPassed) {
+        // Verification passed - proceed to INPUT_READY
+        setData((prev) => ({
+          ...prev,
+          minimizedTranscript: editedText,
+          verificationFailedCategories: undefined,
+          isReverifying: false,
+        }));
+        setState("INPUT_READY");
+        console.log("[AidMind Event] REDACTION_VERIFICATION_PASSED");
+        console.log("[AidMind Event] REDACTION_REVIEW_EXITED");
+      } else {
+        // Still failing - stay in review with updated categories
+        setData((prev) => ({
+          ...prev,
+          minimizedTranscript: editedText,
+          verificationFailedCategories: result.failedCategories,
+          isReverifying: false,
+        }));
+        console.log("[AidMind Event] REDACTION_VERIFICATION_FAILED", result.failedCategories);
+      }
+    } catch (error) {
+      console.error("Reverification error:", error);
+      setData((prev) => ({ ...prev, isReverifying: false }));
+    }
+  }, [state, data.sessionId, transcription]);
+
+  // DISCARD_AND_START_OVER: VERIFICATION_REVIEW → CLOSING → navigate to start
+  const discardAndStartOver = useCallback(() => {
+    if (state !== "VERIFICATION_REVIEW") return;
+    console.log("[AidMind Event] SESSION_CANCELLED");
+    console.log("[AidMind Event] PURGE_STARTED");
+    console.log("[AidMind Event] REDACTION_REVIEW_EXITED");
+    setState("CLOSING");
+  }, [state]);
 
   // GENERATE_DRAFT: INPUT_READY → RETRIEVING_CONTEXT → GENERATING → VALIDATING_OUTPUT → DRAFT_READY
   const generateDraft = useCallback(async () => {
@@ -552,8 +602,13 @@ export function useSessionMachine({
 
   // CANCEL_SESSION: Any state → CLOSING
   const cancelSession = useCallback(() => {
+    if (state === "VERIFICATION_REVIEW") {
+      console.log("[AidMind Event] REDACTION_REVIEW_EXITED");
+    }
+    console.log("[AidMind Event] SESSION_CANCELLED");
+    console.log("[AidMind Event] PURGE_STARTED");
     setState("CLOSING");
-  }, []);
+  }, [state]);
 
   // Complete purge: CLOSING → PURGED
   const completePurge = useCallback(async () => {
@@ -623,6 +678,8 @@ export function useSessionMachine({
       pasteTextNotes,
       startTranscription,
       startRedaction,
+      reverifyText,
+      discardAndStartOver,
       generateDraft,
       startEditing,
       saveEdit,

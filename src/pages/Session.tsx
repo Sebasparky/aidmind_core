@@ -43,6 +43,7 @@ import {
   AlertCircle
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
+import { VerificationReviewPanel } from "@/components/session/VerificationReviewPanel";
 
 const DENY_REASONS = [
   { value: "not_applicable", label: "Not applicable" },
@@ -392,6 +393,7 @@ export default function Session() {
       TRANSCRIBING: 30,
       TRANSCRIBED: 40,
       REDACTING: 50,
+      VERIFICATION_REVIEW: 55,
       INPUT_READY: 60,
       RETRIEVING_CONTEXT: 70,
       GENERATING: 80,
@@ -416,6 +418,7 @@ export default function Session() {
       TRANSCRIBING: "Transcribing audio...",
       TRANSCRIBED: "Transcription complete",
       REDACTING: "Minimizing and redacting sensitive details...",
+      VERIFICATION_REVIEW: "Review required",
       INPUT_READY: "Input ready for processing",
       RETRIEVING_CONTEXT: "Retrieving templates and policies...",
       GENERATING: "Generating draft note...",
@@ -722,7 +725,17 @@ export default function Session() {
           </Card>
         )}
 
-        {/* INPUT_READY: Show minimized input and generate button */}
+        {/* VERIFICATION_REVIEW: Verification failed - show review panel */}
+        {state === "VERIFICATION_REVIEW" && (
+          <VerificationReviewPanel
+            minimizedText={data.minimizedTranscript || ""}
+            failedCategories={data.verificationFailedCategories || []}
+            isReverifying={data.isReverifying || false}
+            onReverify={actions.reverifyText}
+            onCancelSession={actions.cancelSession}
+            onDiscardAndStartOver={actions.discardAndStartOver}
+          />
+        )}
         {state === "INPUT_READY" && (
           <Card>
             <CardHeader>

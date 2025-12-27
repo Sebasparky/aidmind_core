@@ -141,6 +141,7 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
   const redact = useCallback(async (sessionId: string, transcript?: string): Promise<{
     minimizedTranscript: string | null;
     verificationPassed: boolean;
+    failedCategories: string[];
   }> => {
     setState((prev) => ({ ...prev, isRedacting: true, error: null, verificationResult: null }));
 
@@ -184,11 +185,60 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
       return {
         minimizedTranscript,
         verificationPassed: verificationResult.status === "PASS",
+        failedCategories: verificationResult.categories || [],
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Redaction failed";
       setState((prev) => ({ ...prev, isRedacting: false, error: errorMessage }));
-      return { minimizedTranscript: null, verificationPassed: false };
+      return { minimizedTranscript: null, verificationPassed: false, failedCategories: [] };
+    }
+  }, []);
+
+  // Re-verify text with Layer 3 LLM verification only (no regex/NER re-run)
+  const reverify = useCallback(async (sessionId: string, editedText: string): Promise<{
+    verificationPassed: boolean;
+    failedCategories: string[];
+  }> => {
+    setState((prev) => ({ ...prev, isRedacting: true, error: null }));
+
+    try {
+      console.log(`[Transcription] Starting Layer 3 verification only for session: ${sessionId}`);
+
+      const { data, error } = await supabase.functions.invoke("redact-transcript", {
+        body: {
+          session_id: sessionId,
+          transcript: editedText,
+          verification_only: true, // Signal to skip Layers 1 & 2
+        },
+      });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      if (!data.success) {
+        throw new Error(data.error || "Verification failed");
+      }
+
+      const verificationResult = data.verification_result as VerificationResult;
+
+      setState((prev) => ({ 
+        ...prev, 
+        isRedacting: false, 
+        minimizedTranscript: editedText,
+        verificationResult,
+      }));
+
+      console.log(`[Transcription] Re-verification complete. Status: ${verificationResult.status}`);
+
+      return {
+        verificationPassed: verificationResult.status === "PASS",
+        failedCategories: verificationResult.categories || [],
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Verification failed";
+      setState((prev) => ({ ...prev, isRedacting: false, error: errorMessage }));
+      return { verificationPassed: false, failedCategories: [] };
     }
   }, []);
 
@@ -250,6 +300,7 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
     uploadAudio,
     transcribe,
     redact,
+    reverify,
     processAudio,
     reset,
     currentModel: model,

@@ -12,6 +12,7 @@ const MINIMIZED_TRANSCRIPT_TTL_SECONDS = 30 * 60; // 30 minutes
 interface RedactRequest {
   session_id: string;
   transcript?: string;
+  verification_only?: boolean; // If true, skip Layers 1 & 2, only run Layer 3
 }
 
 interface RedactionCounts {
@@ -447,6 +448,54 @@ async function runRedactionPipeline(
 }
 
 // ============================================================
+// Layer 3 Verification Only (for re-verification after user edits)
+// ============================================================
+async function runVerificationOnly(
+  sessionId: string,
+  text: string,
+  openAIApiKey: string,
+  supabase: any
+): Promise<RedactionResult> {
+  // Emit retry event
+  await logEyeEvent(supabase, sessionId, "REDACTION_VERIFICATION_RETRY", {
+    verification_stage: "layer_3",
+  });
+
+  console.log("[Redact] Running Layer 3 verification only (re-check)");
+  const verification = await verifyWithLLM(text, openAIApiKey);
+
+  if (verification.status === "PASS") {
+    await logEyeEvent(supabase, sessionId, "REDACTION_VERIFICATION_PASSED", {
+      verification_stage: "layer_3",
+    });
+  } else {
+    await logEyeEvent(supabase, sessionId, "REDACTION_VERIFICATION_FAILED", {
+      categories: verification.categories,
+      verification_stage: "layer_3",
+    });
+  }
+
+  // Return empty counts since no redaction was performed
+  return {
+    minimized_text: text,
+    redaction_counts: {
+      phone: 0,
+      email: 0,
+      ssn: 0,
+      dob: 0,
+      address: 0,
+      case_id: 0,
+      generic_id: 0,
+      person: 0,
+      location: 0,
+      organization: 0,
+      date: 0,
+    },
+    verification_result: verification,
+  };
+}
+
+// ============================================================
 // HTTP Handler
 // ============================================================
 serve(async (req) => {
@@ -464,7 +513,7 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { session_id, transcript: providedTranscript }: RedactRequest = await req.json();
+    const { session_id, transcript: providedTranscript, verification_only }: RedactRequest = await req.json();
 
     if (!session_id) {
       return new Response(
@@ -472,8 +521,6 @@ serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-
-    console.log(`[Redact] Starting 3-layer redaction pipeline for session ${session_id}`);
 
     // Get transcript from artifacts if not provided
     let transcript: string = providedTranscript || "";
@@ -494,14 +541,24 @@ serve(async (req) => {
       transcript = artifact.content;
     }
 
-    // Update session state
-    await supabase
-      .from("sessions")
-      .update({ state: "REDACTING" })
-      .eq("session_id", session_id);
+    let result: RedactionResult;
 
-    // Run the 3-layer pipeline
-    const result = await runRedactionPipeline(session_id, transcript, openAIApiKey, supabase);
+    if (verification_only) {
+      // Verification-only mode: skip Layers 1 & 2, run only Layer 3
+      console.log(`[Redact] Running verification-only for session ${session_id}`);
+      result = await runVerificationOnly(session_id, transcript, openAIApiKey, supabase);
+    } else {
+      // Full pipeline mode
+      console.log(`[Redact] Starting 3-layer redaction pipeline for session ${session_id}`);
+
+      // Update session state
+      await supabase
+        .from("sessions")
+        .update({ state: "REDACTING" })
+        .eq("session_id", session_id);
+
+      result = await runRedactionPipeline(session_id, transcript, openAIApiKey, supabase);
+    }
 
     // Store minimized transcript as ephemeral artifact (only if verification passed)
     if (result.verification_result.status === "PASS") {
