@@ -1,4 +1,10 @@
 import { useState, useCallback, useRef } from "react";
+import { useTranscription, TranscriptionModel, TRANSCRIPTION_MODELS } from "./useTranscription";
+import { useSessionApi } from "./useSessionApi";
+
+// Re-export for convenience
+export { TRANSCRIPTION_MODELS };
+export type { TranscriptionModel };
 
 // Session states following the AidMind State Machine
 export type SessionState =
@@ -147,6 +153,8 @@ interface UseSessionMachineProps {
   clientLabel: string;
   interactionType: string;
   resumeBundle?: ResumeBundle;
+  transcriptionModel?: TranscriptionModel;
+  useRealTranscription?: boolean; // Toggle for real vs mock transcription
 }
 
 export function useSessionMachine({
@@ -155,6 +163,8 @@ export function useSessionMachine({
   clientLabel,
   interactionType,
   resumeBundle,
+  transcriptionModel = "gpt-4o-mini-transcribe",
+  useRealTranscription = true,
 }: UseSessionMachineProps) {
   const [state, setState] = useState<SessionState>("NEW");
   const [data, setData] = useState<SessionData>({
@@ -173,6 +183,13 @@ export function useSessionMachine({
   });
 
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Real transcription hooks
+  const transcription = useTranscription({ 
+    model: transcriptionModel, 
+    autoRedact: true 
+  });
+  const sessionApi = useSessionApi();
 
   // Helper to simulate async operations
   const simulateAsync = useCallback((ms: number): Promise<void> => {
@@ -187,7 +204,8 @@ export function useSessionMachine({
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
-  }, []);
+    transcription.reset();
+  }, [transcription]);
 
   // START_SESSION: NEW → READY_FOR_INPUT (or DRAFT_READY if resuming)
   const startSession = useCallback(async () => {
@@ -246,22 +264,81 @@ export function useSessionMachine({
   const startTranscription = useCallback(async () => {
     if (state !== "AUDIO_UPLOADED") return;
     setState("TRANSCRIBING");
-    await simulateAsync(2000); // Simulate transcription
-    setData((prev) => ({ ...prev, transcript: MOCK_TRANSCRIPT }));
-    setState("TRANSCRIBED");
-  }, [state, simulateAsync]);
+    
+    if (useRealTranscription && data.audioFile) {
+      try {
+        // Upload audio to storage
+        const objectKey = await transcription.uploadAudio(data.sessionId, data.audioFile);
+        if (!objectKey) {
+          throw new Error("Failed to upload audio");
+        }
+        
+        // Transcribe using OpenAI API
+        const transcript = await transcription.transcribe(data.sessionId, objectKey);
+        if (!transcript) {
+          throw new Error("Transcription failed");
+        }
+        
+        setData((prev) => ({ ...prev, transcript }));
+        setState("TRANSCRIBED");
+        
+        console.log("[AidMind Event] TRANSCRIPTION_COMPLETED");
+      } catch (error) {
+        console.error("Transcription error:", error);
+        setData((prev) => ({
+          ...prev,
+          errorMessage: error instanceof Error ? error.message : "Transcription failed",
+          previousStateBeforeError: "TRANSCRIBING",
+        }));
+        setState("ERROR");
+      }
+    } else {
+      // Fallback to mock for development
+      await simulateAsync(2000);
+      setData((prev) => ({ ...prev, transcript: MOCK_TRANSCRIPT }));
+      setState("TRANSCRIBED");
+    }
+  }, [state, data.audioFile, data.sessionId, useRealTranscription, transcription, simulateAsync]);
 
   // START_REDACTION: TRANSCRIBED/TEXT_PROVIDED → REDACTING → INPUT_READY
   const startRedaction = useCallback(async () => {
     if (state !== "TRANSCRIBED" && state !== "TEXT_PROVIDED") return;
     setState("REDACTING");
-    await simulateAsync(1500); // Simulate redaction
-    setData((prev) => ({
-      ...prev,
-      minimizedTranscript: MOCK_MINIMIZED_TRANSCRIPT,
-    }));
-    setState("INPUT_READY");
-  }, [state, simulateAsync]);
+    
+    if (useRealTranscription && (data.transcript || data.textNotes)) {
+      try {
+        // Use the redact function - it will fetch from artifacts or use provided transcript
+        const minimized = await transcription.redact(data.sessionId, data.transcript || data.textNotes);
+        if (!minimized) {
+          throw new Error("Redaction failed");
+        }
+        
+        setData((prev) => ({
+          ...prev,
+          minimizedTranscript: minimized,
+        }));
+        setState("INPUT_READY");
+        
+        console.log("[AidMind Event] REDACTION_COMPLETED");
+      } catch (error) {
+        console.error("Redaction error:", error);
+        setData((prev) => ({
+          ...prev,
+          errorMessage: error instanceof Error ? error.message : "Redaction failed",
+          previousStateBeforeError: "REDACTING",
+        }));
+        setState("ERROR");
+      }
+    } else {
+      // Fallback to mock for development
+      await simulateAsync(1500);
+      setData((prev) => ({
+        ...prev,
+        minimizedTranscript: MOCK_MINIMIZED_TRANSCRIPT,
+      }));
+      setState("INPUT_READY");
+    }
+  }, [state, data.sessionId, data.transcript, data.textNotes, useRealTranscription, transcription, simulateAsync]);
 
   // GENERATE_DRAFT: INPUT_READY → RETRIEVING_CONTEXT → GENERATING → VALIDATING_OUTPUT → DRAFT_READY
   const generateDraft = useCallback(async () => {

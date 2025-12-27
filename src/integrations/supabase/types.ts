@@ -14,7 +14,157 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      ephemeral_artifacts: {
+        Row: {
+          artifact_type: string
+          content: string
+          created_at: string
+          id: string
+          session_id: string
+          ttl_expires_at: string
+        }
+        Insert: {
+          artifact_type: string
+          content: string
+          created_at?: string
+          id?: string
+          session_id: string
+          ttl_expires_at?: string
+        }
+        Update: {
+          artifact_type?: string
+          content?: string
+          created_at?: string
+          id?: string
+          session_id?: string
+          ttl_expires_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ephemeral_artifacts_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
+            referencedColumns: ["session_id"]
+          },
+        ]
+      }
+      eye_events: {
+        Row: {
+          created_at: string
+          event_data: Json | null
+          event_type: string
+          id: string
+          session_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          event_data?: Json | null
+          event_type: string
+          id?: string
+          session_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          event_data?: Json | null
+          event_type?: string
+          id?: string
+          session_id?: string | null
+        }
+        Relationships: []
+      }
+      sessions: {
+        Row: {
+          cancelled_at: string | null
+          case_id: string
+          case_label: string | null
+          client_label: string | null
+          closed_at: string | null
+          created_at: string
+          id: string
+          interaction_type: string | null
+          session_id: string
+          state: string
+          ttl_expires_at: string
+          updated_at: string
+        }
+        Insert: {
+          cancelled_at?: string | null
+          case_id: string
+          case_label?: string | null
+          client_label?: string | null
+          closed_at?: string | null
+          created_at?: string
+          id?: string
+          interaction_type?: string | null
+          session_id: string
+          state?: string
+          ttl_expires_at?: string
+          updated_at?: string
+        }
+        Update: {
+          cancelled_at?: string | null
+          case_id?: string
+          case_label?: string | null
+          client_label?: string | null
+          closed_at?: string | null
+          created_at?: string
+          id?: string
+          interaction_type?: string | null
+          session_id?: string
+          state?: string
+          ttl_expires_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      transcription_jobs: {
+        Row: {
+          audio_object_key: string
+          completed_at: string | null
+          created_at: string
+          error_message: string | null
+          id: string
+          model: string
+          session_id: string
+          started_at: string | null
+          status: string
+          ttl_expires_at: string
+        }
+        Insert: {
+          audio_object_key: string
+          completed_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          model?: string
+          session_id: string
+          started_at?: string | null
+          status?: string
+          ttl_expires_at?: string
+        }
+        Update: {
+          audio_object_key?: string
+          completed_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          model?: string
+          session_id?: string
+          started_at?: string | null
+          status?: string
+          ttl_expires_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transcription_jobs_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
+            referencedColumns: ["session_id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
