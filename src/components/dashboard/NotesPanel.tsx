@@ -6,7 +6,7 @@ import { NoteItem, Note } from "./NoteItem";
 import { useDashboard } from "@/contexts/DashboardContext";
 import { StartNoteModal } from "./StartNoteModal";
 
-// Sample notes data representing note sessions
+// Sample notes data representing completed session outcomes only
 const sampleNotes: Note[] = [
   {
     id: "1",
@@ -31,20 +31,13 @@ const sampleNotes: Note[] = [
   },
   {
     id: "4",
-    title: "Veteran outreach intake",
-    interactionType: "in-person",
-    status: "in-progress",
-    updatedAt: "Just now",
-  },
-  {
-    id: "5",
     title: "Shelter placement coordination",
     interactionType: "collateral-contact",
     status: "cancelled",
     updatedAt: "Mar 25",
   },
   {
-    id: "6",
+    id: "5",
     title: "Benefits enrollment call",
     interactionType: "phone-call",
     status: "saved",

@@ -1,8 +1,8 @@
-import { FileText, Upload, Save, XCircle, Loader2 } from "lucide-react";
+import { Upload, Save, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 
-export type NoteStatus = "exported" | "saved" | "cancelled" | "in-progress";
+export type NoteStatus = "exported" | "saved" | "cancelled";
 
 export interface Note {
   id: string;
@@ -17,7 +17,7 @@ interface NoteItemProps {
 }
 
 const statusConfig: Record<NoteStatus, {
-  icon: typeof FileText;
+  icon: typeof Upload;
   iconClass: string;
   bgClass: string;
   badgeClass: string;
@@ -32,9 +32,9 @@ const statusConfig: Record<NoteStatus, {
   },
   saved: {
     icon: Save,
-    iconClass: "text-status-info",
-    bgClass: "bg-[hsl(var(--status-info-muted))]",
-    badgeClass: "badge-info",
+    iconClass: "text-status-warning",
+    bgClass: "bg-[hsl(var(--status-warning-muted))]",
+    badgeClass: "badge-warning",
     label: "Saved for later",
   },
   cancelled: {
@@ -43,13 +43,6 @@ const statusConfig: Record<NoteStatus, {
     bgClass: "bg-[hsl(var(--status-neutral-muted))]",
     badgeClass: "badge-neutral",
     label: "Cancelled",
-  },
-  "in-progress": {
-    icon: Loader2,
-    iconClass: "text-status-warning",
-    bgClass: "bg-[hsl(var(--status-warning-muted))]",
-    badgeClass: "badge-warning",
-    label: "In progress",
   },
 };
 
@@ -76,7 +69,7 @@ export function NoteItem({ note }: NoteItemProps) {
           config.bgClass
         )}
       >
-        <Icon className={cn("h-4 w-4", config.iconClass, note.status === "in-progress" && "animate-spin")} />
+        <Icon className={cn("h-4 w-4", config.iconClass)} />
       </div>
 
       <div className="flex-1 min-w-0">
