@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, RefreshCw, X, Trash2 } from "lucide-react";
+import { Loader2, RefreshCw, X, Trash2, AlertTriangle } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,14 +15,22 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
+export type Layer2Status = 
+  | "COMPLETED" 
+  | "FAILED_UNREACHABLE" 
+  | "FAILED_TIMEOUT" 
+  | "FAILED_ERROR" 
+  | "SKIPPED_CONFIG_MISSING" 
+  | "SKIPPED";
+
 interface VerificationReviewPanelProps {
   minimizedText: string | undefined;
   failedCategories: string[];
   isReverifying: boolean;
   isLoading?: boolean;
   layerStatus?: {
-    layer1?: { status: string };
-    layer2?: { status: string; method?: string };
+    layer1?: { status: string; counts?: Record<string, number> };
+    layer2?: { status: string; counts?: Record<string, number>; method?: string; skipped_reason?: string };
   };
   onReverify: (editedText: string) => void;
   onCancelSession: () => void;
@@ -43,7 +51,7 @@ export function VerificationReviewPanel({
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [showDiscardDialog, setShowDiscardDialog] = useState(false);
 
-  // Sync editedText when minimizedText prop changes (e.g., after re-verification)
+  // Sync editedText when minimizedText prop changes
   useEffect(() => {
     if (minimizedText !== undefined && minimizedText !== editedText) {
       setEditedText(minimizedText);
@@ -76,15 +84,69 @@ export function VerificationReviewPanel({
       ORGANIZATION: "Organization",
       ADDRESS: "Address",
       SSN: "SSN",
+      UNKNOWN: "Unknown",
+      PARSE_ERROR: "Detection error",
     };
     return labels[category] || category;
   };
 
+  // Determine Layer 2 status for messaging
+  const layer2Status = layerStatus?.layer2?.status as Layer2Status | undefined;
+  const isLayer2Completed = layer2Status === "COMPLETED";
+  const isLayer2Failed = layer2Status?.startsWith("FAILED_") || layer2Status === "SKIPPED_CONFIG_MISSING";
+
   // Show loading state if minimizedText is not ready
   const isTextReady = minimizedText !== undefined && minimizedText !== null && minimizedText.length > 0;
 
-  // Dev mode indicator for layer status
+  // Dev mode indicator
   const isDev = import.meta.env.DEV;
+
+  // Get the appropriate message based on Layer 2 status
+  const getDescriptionMessage = () => {
+    if (isLayer2Completed) {
+      return "Names and locations were automatically generalized. Please review the text below and remove or generalize any remaining identifiers.";
+    } else if (isLayer2Failed) {
+      return "Automatic name/location redaction is temporarily unavailable. Please manually generalize names and locations below (e.g., replace 'Grace' → 'the client', 'Chelsea' → 'the caseworker').";
+    } else {
+      return "AidMind detected identifying information that must be removed before a note can be generated. Please review the text below and remove or generalize any remaining names, locations, or identifiers.";
+    }
+  };
+
+  // Get layer 2 status badge color and label
+  const getLayer2Badge = () => {
+    if (!layer2Status) return null;
+    
+    const statusConfig: Record<string, { label: string; className: string }> = {
+      "COMPLETED": { 
+        label: "Layer 2: COMPLETED", 
+        className: "text-green-600 border-green-600 bg-green-50 dark:bg-green-950/30 dark:text-green-400" 
+      },
+      "FAILED_UNREACHABLE": { 
+        label: "Layer 2: FAILED (unreachable)", 
+        className: "text-red-600 border-red-600 bg-red-50 dark:bg-red-950/30 dark:text-red-400" 
+      },
+      "FAILED_TIMEOUT": { 
+        label: "Layer 2: FAILED (timeout)", 
+        className: "text-red-600 border-red-600 bg-red-50 dark:bg-red-950/30 dark:text-red-400" 
+      },
+      "FAILED_ERROR": { 
+        label: "Layer 2: FAILED (error)", 
+        className: "text-red-600 border-red-600 bg-red-50 dark:bg-red-950/30 dark:text-red-400" 
+      },
+      "SKIPPED_CONFIG_MISSING": { 
+        label: "Layer 2: SKIPPED (not configured)", 
+        className: "text-amber-600 border-amber-600 bg-amber-50 dark:bg-amber-950/30 dark:text-amber-400" 
+      },
+      "SKIPPED": { 
+        label: "Layer 2: SKIPPED", 
+        className: "text-muted-foreground border-muted bg-muted/30" 
+      },
+    };
+    
+    return statusConfig[layer2Status] || { label: `Layer 2: ${layer2Status}`, className: "text-muted-foreground border-muted bg-muted/30" };
+  };
+
+  const layer2Badge = getLayer2Badge();
 
   return (
     <>
@@ -136,32 +198,46 @@ export function VerificationReviewPanel({
             Review required before continuing
           </CardTitle>
           <CardDescription className="text-base text-muted-foreground leading-relaxed">
-            AidMind detected identifying information that must be removed before a note can be generated.
-            Please review the text below and remove or generalize any remaining names, locations, or identifiers.
+            {getDescriptionMessage()}
           </CardDescription>
         </CardHeader>
 
         <CardContent className="space-y-6">
-          {/* Dev mode layer status indicator */}
-          {isDev && layerStatus && (
-            <div className="text-xs font-mono bg-muted/50 p-2 rounded border border-dashed">
-              <span className="text-muted-foreground">Layer 1: </span>
-              <span className={layerStatus.layer1?.status === "COMPLETED" ? "text-green-600" : "text-amber-600"}>
-                {layerStatus.layer1?.status || "N/A"}
-              </span>
-              <span className="mx-2">|</span>
-              <span className="text-muted-foreground">Layer 2: </span>
-              <span className={layerStatus.layer2?.status === "COMPLETED" ? "text-green-600" : "text-amber-600"}>
-                {layerStatus.layer2?.status || "N/A"}
-                {layerStatus.layer2?.method && ` (${layerStatus.layer2.method})`}
-              </span>
+          {/* Layer status indicators */}
+          <div className="flex flex-wrap gap-2">
+            {layerStatus?.layer1 && (
+              <Badge variant="outline" className="text-green-600 border-green-600 bg-green-50 dark:bg-green-950/30 dark:text-green-400">
+                Layer 1: {layerStatus.layer1.status}
+              </Badge>
+            )}
+            {layer2Badge && (
+              <Badge variant="outline" className={layer2Badge.className}>
+                {layer2Badge.label}
+              </Badge>
+            )}
+            <Badge variant="outline" className="text-red-600 border-red-600 bg-red-50 dark:bg-red-950/30 dark:text-red-400">
+              Layer 3: FAILED
+            </Badge>
+          </div>
+
+          {/* Warning for manual redaction required */}
+          {isLayer2Failed && (
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+              <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+              <div className="text-sm text-amber-800 dark:text-amber-200">
+                <p className="font-medium mb-1">Manual redaction required</p>
+                <p className="text-amber-700 dark:text-amber-300">
+                  Replace all names with roles (e.g., "the client", "the caseworker", "the supervisor") 
+                  and generalize locations (e.g., "the office", "the shelter").
+                </p>
+              </div>
             </div>
           )}
 
           {/* Detected Categories */}
           {failedCategories.length > 0 && (
             <div className="space-y-2">
-              <p className="text-sm text-muted-foreground">Detected categories:</p>
+              <p className="text-sm text-muted-foreground">Detected categories requiring attention:</p>
               <div className="flex flex-wrap gap-2">
                 {failedCategories.map((category) => (
                   <Badge
@@ -182,7 +258,9 @@ export function VerificationReviewPanel({
               Minimized session notes (editable)
             </label>
             <p className="text-xs text-muted-foreground">
-              Replace names with roles (e.g., "the client", "the provider") and generalize locations or identifiers.
+              {isLayer2Completed 
+                ? "Review and edit any remaining identifying information."
+                : "Replace names with roles (e.g., \"the client\", \"the provider\") and generalize locations or identifiers."}
             </p>
             
             {isLoading || !isTextReady ? (

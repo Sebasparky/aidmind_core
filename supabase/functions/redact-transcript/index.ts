@@ -8,11 +8,13 @@ const corsHeaders = {
 };
 
 const MINIMIZED_TRANSCRIPT_TTL_SECONDS = 30 * 60; // 30 minutes
+const PRESIDIO_TIMEOUT_MS = 5000; // 5 second timeout
+const PRESIDIO_HEALTH_CACHE_MS = 60000; // 60 seconds health cache
 
 interface RedactRequest {
   session_id: string;
   transcript?: string;
-  verification_only?: boolean; // If true, skip Layers 1 & 2, only run Layer 3
+  verification_only?: boolean;
 }
 
 interface RedactionCounts {
@@ -29,8 +31,11 @@ interface RedactionCounts {
   date: number;
 }
 
+// Layer 2 status values
+type Layer2Status = "COMPLETED" | "FAILED_UNREACHABLE" | "FAILED_TIMEOUT" | "FAILED_ERROR" | "SKIPPED_CONFIG_MISSING" | "SKIPPED";
+
 interface LayerStatus {
-  status: "COMPLETED" | "SKIPPED" | "FAILED";
+  status: string;
   counts?: Partial<RedactionCounts>;
   method?: string;
   skipped_reason?: string;
@@ -50,6 +55,10 @@ interface RedactionResult {
   };
   minimized_text_source: "ner" | "regex";
 }
+
+// Health check cache
+let presidioHealthy: boolean | null = null;
+let presidioHealthCheckedAt: number = 0;
 
 // Log Eye event for audit trail (no PHI stored)
 async function logEyeEvent(
@@ -139,11 +148,8 @@ function regexRedact(text: string): { text: string; counts: Partial<RedactionCou
 }
 
 // ============================================================
-// LAYER 2: NER Redaction with Presidio (fallback to regex if unavailable)
+// LAYER 2: NER Redaction with Presidio (NO FALLBACK)
 // ============================================================
-
-const PRESIDIO_SERVICE_URL = Deno.env.get("PRESIDIO_SERVICE_URL") || "http://localhost:8001";
-const PRESIDIO_TIMEOUT_MS = 5000; // 5 second timeout
 
 interface PresidioResponse {
   redacted_text: string;
@@ -151,167 +157,184 @@ interface PresidioResponse {
   spans: Array<{ entity_type: string; start: number; end: number }>;
 }
 
+// Check if Presidio service is configured and healthy
+async function checkPresidioHealth(presidioUrl: string): Promise<boolean> {
+  const now = Date.now();
+  
+  // Return cached result if still valid
+  if (presidioHealthy !== null && (now - presidioHealthCheckedAt) < PRESIDIO_HEALTH_CACHE_MS) {
+    console.log(`[Presidio] Using cached health status: ${presidioHealthy ? "healthy" : "unhealthy"}`);
+    return presidioHealthy;
+  }
+  
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second health check timeout
+    
+    const response = await fetch(`${presidioUrl}/health`, {
+      method: "GET",
+      signal: controller.signal,
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (response.ok) {
+      const data = await response.json();
+      presidioHealthy = data.status === "ok";
+      presidioHealthCheckedAt = now;
+      console.log(`[Presidio] Health check passed`);
+      return true;
+    } else {
+      console.warn(`[Presidio] Health check failed: HTTP ${response.status}`);
+      presidioHealthy = false;
+      presidioHealthCheckedAt = now;
+      return false;
+    }
+  } catch (error) {
+    console.warn(`[Presidio] Health check error:`, error instanceof Error ? error.message : error);
+    presidioHealthy = false;
+    presidioHealthCheckedAt = now;
+    return false;
+  }
+}
+
 async function nerRedactWithPresidio(
   sessionId: string,
   text: string,
   supabase: any
-): Promise<{ text: string; counts: Partial<RedactionCounts>; method: "presidio" | "regex_fallback" | "skipped"; skipped_reason?: string }> {
+): Promise<{ 
+  text: string; 
+  counts: Partial<RedactionCounts>; 
+  layer2Status: Layer2Status;
+  method: "presidio" | "none";
+}> {
   
+  // Check if PRESIDIO_SERVICE_URL is configured
+  const presidioUrl = Deno.env.get("PRESIDIO_SERVICE_URL");
+  
+  if (!presidioUrl) {
+    console.warn("[Redact] PRESIDIO_SERVICE_URL not configured - Layer 2 skipped");
+    await logEyeEvent(supabase, sessionId, "NER_REDACTION_SKIPPED", {
+      reason_code: "config_missing",
+    });
+    
+    return {
+      text: text, // Return Layer 1 output unchanged
+      counts: { person: 0, location: 0, organization: 0, date: 0 },
+      layer2Status: "SKIPPED_CONFIG_MISSING",
+      method: "none",
+    };
+  }
+
   // Emit NER_REDACTION_STARTED
   await logEyeEvent(supabase, sessionId, "NER_REDACTION_STARTED", {});
 
-  try {
-    // Create abort controller for timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), PRESIDIO_TIMEOUT_MS);
-
-    const response = await fetch(`${PRESIDIO_SERVICE_URL}/redact-ner`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        session_id: sessionId,
-        text: text,
-        language: "en",
-        entities: ["PERSON", "LOCATION", "ORGANIZATION", "DATE"],
-      }),
-      signal: controller.signal,
+  // Check health first (cached)
+  const isHealthy = await checkPresidioHealth(presidioUrl);
+  if (!isHealthy) {
+    console.warn("[Redact] Presidio service unhealthy - Layer 2 failed");
+    await logEyeEvent(supabase, sessionId, "NER_REDACTION_FAILED", {
+      reason_code: "service_unhealthy",
     });
-
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      throw new Error(`Presidio service returned ${response.status}`);
-    }
-
-    const data: PresidioResponse = await response.json();
-
-    const counts: Partial<RedactionCounts> = {
-      person: data.counts.PERSON || 0,
-      location: data.counts.LOCATION || 0,
-      organization: data.counts.ORGANIZATION || 0,
-      date: data.counts.DATE || 0,
-    };
-
-    console.log(`[Redact] Presidio NER completed: ${JSON.stringify(counts)}`);
-
-    return {
-      text: data.redacted_text,
-      counts,
-      method: "presidio",
-    };
-
-  } catch (error) {
-    // Determine skip reason
-    let skippedReason: "service_unavailable" | "timeout" | "error" = "error";
     
-    if (error instanceof Error) {
-      if (error.name === "AbortError") {
-        skippedReason = "timeout";
-        console.warn("[Redact] Presidio service timeout - falling back to regex");
-      } else if (error.message.includes("fetch") || error.message.includes("connect")) {
-        skippedReason = "service_unavailable";
-        console.warn("[Redact] Presidio service unavailable - falling back to regex");
+    return {
+      text: text, // Return Layer 1 output unchanged
+      counts: { person: 0, location: 0, organization: 0, date: 0 },
+      layer2Status: "FAILED_UNREACHABLE",
+      method: "none",
+    };
+  }
+
+  // Attempt Presidio call with retry
+  let lastError: Error | null = null;
+  
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), PRESIDIO_TIMEOUT_MS);
+
+      const response = await fetch(`${presidioUrl}/redact-ner`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          text: text,
+          language: "en",
+          entities: ["PERSON", "LOCATION", "ORGANIZATION", "DATE"],
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`Presidio service returned HTTP ${response.status}`);
+      }
+
+      const data: PresidioResponse = await response.json();
+
+      const counts: Partial<RedactionCounts> = {
+        person: data.counts.PERSON || 0,
+        location: data.counts.LOCATION || 0,
+        organization: data.counts.ORGANIZATION || 0,
+        date: data.counts.DATE || 0,
+      };
+
+      console.log(`[Redact] Presidio NER completed: ${JSON.stringify(counts)}`);
+      
+      await logEyeEvent(supabase, sessionId, "NER_REDACTION_COMPLETED", {
+        counts,
+        method: "presidio",
+      });
+
+      return {
+        text: data.redacted_text,
+        counts,
+        layer2Status: "COMPLETED",
+        method: "presidio",
+      };
+
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      
+      if (error instanceof Error && error.name === "AbortError") {
+        console.warn(`[Redact] Presidio timeout on attempt ${attempt}`);
+        if (attempt < 2) continue; // Retry on timeout
       } else {
-        console.warn(`[Redact] Presidio error: ${error.message} - falling back to regex`);
+        console.warn(`[Redact] Presidio error on attempt ${attempt}: ${lastError.message}`);
+        if (attempt < 2) continue; // Retry on transient errors
       }
     }
-
-    // Log skip event
-    await logEyeEvent(supabase, sessionId, "NER_REDACTION_SKIPPED", {
-      reason_code: skippedReason,
-    });
-
-    // Fall back to regex-based NER
-    const fallbackResult = nerRedactFallback(text);
-    
-    return {
-      text: fallbackResult.text,
-      counts: fallbackResult.counts,
-      method: "regex_fallback",
-      skipped_reason: skippedReason,
-    };
-  }
-}
-
-// Regex-based fallback for when Presidio is unavailable
-function nerRedactFallback(text: string): { text: string; counts: Partial<RedactionCounts> } {
-  const counts: Partial<RedactionCounts> = {
-    person: 0,
-    location: 0,
-    organization: 0,
-    date: 0,
-  };
-
-  let result = text;
-  
-  // Track entity numbers for consistent replacement
-  const entityCounters = {
-    person: 0,
-    location: 0,
-    organization: 0,
-    date: 0,
-  };
-
-  // Common name patterns (titles + capitalized words)
-  const nameWithTitlePattern = /\b(Mr\.?|Mrs\.?|Ms\.?|Miss|Dr\.?|Prof\.?|Client|Patient)\s+([A-Z][a-z]+(?:\s+[A-Z]\.?)?(?:\s+[A-Z][a-z]+)?)\b/g;
-  result = result.replace(nameWithTitlePattern, () => {
-    entityCounters.person++;
-    counts.person!++;
-    return `[PERSON_${entityCounters.person}]`;
-  });
-
-  // Standalone capitalized name sequences
-  const simpleNamePattern = /\b([A-Z][a-z]{1,15})\s+([A-Z]\.?\s+)?([A-Z][a-z]{1,15})\b/g;
-  result = result.replace(simpleNamePattern, (match) => {
-    const commonPhrases = ['Social Security', 'New York', 'Los Angeles', 'San Francisco', 'United States', 'Health Insurance'];
-    if (commonPhrases.some(p => match.includes(p))) return match;
-    
-    entityCounters.person++;
-    counts.person!++;
-    return `[PERSON_${entityCounters.person}]`;
-  });
-
-  // Location patterns
-  const locationPattern = /\b(city of|town of|state of|county of)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/gi;
-  result = result.replace(locationPattern, () => {
-    entityCounters.location++;
-    counts.location!++;
-    return `[LOCATION_${entityCounters.location}]`;
-  });
-
-  // US State abbreviations with context
-  const statePattern = /\b([A-Z][a-z]+),?\s+(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\b/g;
-  result = result.replace(statePattern, () => {
-    entityCounters.location++;
-    counts.location!++;
-    return `[LOCATION_${entityCounters.location}]`;
-  });
-
-  // Organization patterns
-  const orgPattern = /\b([A-Z][a-z]*(?:\s+[A-Z][a-z]*)*)\s+(Agency|Department|Office|Center|Services|Clinic|Hospital|Foundation|Association|Organization|Inc\.?|LLC|Corp\.?|Company|Co\.?)\b/g;
-  result = result.replace(orgPattern, () => {
-    entityCounters.organization++;
-    counts.organization!++;
-    return `[ORG_${entityCounters.organization}]`;
-  });
-
-  // Date patterns
-  const datePatterns = [
-    /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b/gi,
-    /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g,
-    /\b\d{1,2}-\d{1,2}-\d{2,4}\b/g,
-    /\b(last|this|next)\s+(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|week|month)\b/gi,
-  ];
-  
-  for (const pattern of datePatterns) {
-    result = result.replace(pattern, () => {
-      entityCounters.date++;
-      counts.date!++;
-      return `[DATE_${entityCounters.date}]`;
-    });
   }
 
-  return { text: result, counts };
+  // Both attempts failed - determine failure type
+  let layer2Status: Layer2Status = "FAILED_ERROR";
+  let reasonCode = "error";
+  
+  if (lastError) {
+    if (lastError.name === "AbortError") {
+      layer2Status = "FAILED_TIMEOUT";
+      reasonCode = "timeout";
+    } else if (lastError.message.includes("fetch") || lastError.message.includes("connect") || lastError.message.includes("network")) {
+      layer2Status = "FAILED_UNREACHABLE";
+      reasonCode = "unreachable";
+    }
+  }
+  
+  console.warn(`[Redact] Presidio failed after retries - Layer 2 status: ${layer2Status}`);
+  
+  await logEyeEvent(supabase, sessionId, "NER_REDACTION_FAILED", {
+    reason_code: reasonCode,
+    error: lastError?.message,
+  });
+  
+  // Return Layer 1 output unchanged - NO REGEX FALLBACK
+  return {
+    text: text,
+    counts: { person: 0, location: 0, organization: 0, date: 0 },
+    layer2Status,
+    method: "none",
+  };
 }
 
 // ============================================================
@@ -329,7 +352,7 @@ You must respond with ONLY a JSON object in this exact format:
 Valid categories: PERSON, LOCATION, CONTACT, ID, DATE, ORGANIZATION, ADDRESS, MEDICAL_ID, SSN
 
 Rules:
-- If text contains [REDACTED] style placeholders, those are SAFE and should NOT be flagged
+- If text contains [REDACTED] style placeholders (like [EMAIL], [PHONE], [SSN], [PERSON_1], etc.), those are SAFE and should NOT be flagged
 - Only flag ACTUAL identifying information that was NOT redacted
 - Be conservative: if unsure, flag it
 - Do NOT rewrite or modify the text
@@ -355,16 +378,14 @@ Rules:
 
   if (!response.ok) {
     console.error("LLM verification failed:", response.status);
-    // On LLM failure, default to PASS to not block workflow
-    // but log the issue
-    return { status: "PASS", categories: [] };
+    // On LLM failure, default to FAIL to force review
+    return { status: "FAIL", categories: ["UNKNOWN"] };
   }
 
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content || "";
 
   try {
-    // Parse JSON response
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
@@ -378,8 +399,8 @@ Rules:
     return { status: "PASS" };
   } catch (e) {
     console.error("Failed to parse LLM verification response:", e);
-    // Default to PASS on parse error
-    return { status: "PASS" };
+    // Default to FAIL on parse error to be safe
+    return { status: "FAIL", categories: ["PARSE_ERROR"] };
   }
 }
 
@@ -392,7 +413,6 @@ async function runRedactionPipeline(
   openAIApiKey: string,
   supabase: any
 ): Promise<RedactionResult> {
-  // Initialize combined counts
   const combinedCounts: RedactionCounts = {
     phone: 0,
     email: 0,
@@ -407,7 +427,6 @@ async function runRedactionPipeline(
     date: 0,
   };
 
-  // Track layer statuses
   const layerStatuses: {
     layer1: LayerStatus;
     layer2: LayerStatus;
@@ -418,7 +437,6 @@ async function runRedactionPipeline(
     layer3: { status: "PASS" },
   };
 
-  // Emit start event
   await logEyeEvent(supabase, sessionId, "REDACTION_STARTED", {
     input_length: transcript.length,
   });
@@ -427,7 +445,6 @@ async function runRedactionPipeline(
   console.log("[Redact] Running Layer 1: Regex Redaction");
   const layer1Result = regexRedact(transcript);
   
-  // Merge counts and track layer status
   Object.entries(layer1Result.counts).forEach(([key, value]) => {
     combinedCounts[key as keyof RedactionCounts] += value || 0;
   });
@@ -437,37 +454,29 @@ async function runRedactionPipeline(
     counts: layer1Result.counts,
   });
 
-  // ========== LAYER 2: NER Redaction (Presidio with fallback) ==========
-  console.log("[Redact] Running Layer 2: NER Redaction");
+  // ========== LAYER 2: NER Redaction (Presidio - NO FALLBACK) ==========
+  console.log("[Redact] Running Layer 2: NER Redaction (Presidio)");
   const layer2Result = await nerRedactWithPresidio(sessionId, layer1Result.text, supabase);
   
-  // Merge counts
-  Object.entries(layer2Result.counts).forEach(([key, value]) => {
-    combinedCounts[key as keyof RedactionCounts] += value || 0;
-  });
-
-  // Track layer 2 status
-  if (layer2Result.method === "presidio") {
-    layerStatuses.layer2 = { status: "COMPLETED", counts: layer2Result.counts, method: "presidio" };
-  } else if (layer2Result.method === "regex_fallback") {
-    layerStatuses.layer2 = { status: "SKIPPED", counts: layer2Result.counts, method: "regex_fallback", skipped_reason: layer2Result.skipped_reason };
-  } else {
-    layerStatuses.layer2 = { status: "SKIPPED", counts: layer2Result.counts, skipped_reason: layer2Result.skipped_reason };
+  // Only merge counts if Presidio succeeded
+  if (layer2Result.layer2Status === "COMPLETED") {
+    Object.entries(layer2Result.counts).forEach(([key, value]) => {
+      combinedCounts[key as keyof RedactionCounts] += value || 0;
+    });
   }
 
-  // Log completion with method used
-  await logEyeEvent(supabase, sessionId, "NER_REDACTION_COMPLETED", {
+  layerStatuses.layer2 = { 
+    status: layer2Result.layer2Status, 
     counts: layer2Result.counts,
     method: layer2Result.method,
-    ...(layer2Result.skipped_reason && { skipped_reason: layer2Result.skipped_reason }),
-  });
+  };
 
   // Determine minimized_text source
-  const minimizedTextSource: "ner" | "regex" = layer2Result.method === "presidio" ? "ner" : "regex";
+  const minimizedTextSource: "ner" | "regex" = layer2Result.layer2Status === "COMPLETED" ? "ner" : "regex";
 
-  // Log MINIMIZED_TEXT_SET event
   await logEyeEvent(supabase, sessionId, "MINIMIZED_TEXT_SET", {
     source_layer: minimizedTextSource,
+    layer2_status: layer2Result.layer2Status,
   });
 
   // ========== LAYER 3: LLM Verification ==========
@@ -481,6 +490,7 @@ async function runRedactionPipeline(
   } else {
     await logEyeEvent(supabase, sessionId, "REDACTION_VERIFICATION_FAILED", {
       categories: verification.categories,
+      layer2_status: layer2Result.layer2Status,
     });
   }
 
@@ -502,7 +512,6 @@ async function runVerificationOnly(
   openAIApiKey: string,
   supabase: any
 ): Promise<RedactionResult> {
-  // Emit retry event
   await logEyeEvent(supabase, sessionId, "REDACTION_VERIFICATION_RETRY", {
     verification_stage: "layer_3",
   });
@@ -535,7 +544,6 @@ async function runVerificationOnly(
     date: 0,
   };
 
-  // Return result with verification-only mode indicated
   return {
     minimized_text: text,
     redaction_counts: emptyCounts,
@@ -545,7 +553,7 @@ async function runVerificationOnly(
       layer2: { status: "SKIPPED" },
       layer3: verification,
     },
-    minimized_text_source: "ner", // Preserve existing source
+    minimized_text_source: "regex",
   };
 }
 
@@ -576,7 +584,6 @@ serve(async (req) => {
       );
     }
 
-    // Get transcript from artifacts if not provided
     let transcript: string = providedTranscript || "";
     if (!transcript) {
       const { data: artifact } = await supabase
@@ -598,14 +605,11 @@ serve(async (req) => {
     let result: RedactionResult;
 
     if (verification_only) {
-      // Verification-only mode: skip Layers 1 & 2, run only Layer 3
       console.log(`[Redact] Running verification-only for session ${session_id}`);
       result = await runVerificationOnly(session_id, transcript, openAIApiKey, supabase);
     } else {
-      // Full pipeline mode
       console.log(`[Redact] Starting 3-layer redaction pipeline for session ${session_id}`);
 
-      // Update session state
       await supabase
         .from("sessions")
         .update({ state: "REDACTING" })
@@ -616,7 +620,6 @@ serve(async (req) => {
 
     const ttlExpiresAt = new Date(Date.now() + MINIMIZED_TRANSCRIPT_TTL_SECONDS * 1000).toISOString();
 
-    // Always delete raw transcript after redaction (never retain)
     if (!verification_only) {
       await supabase
         .from("ephemeral_artifacts")
@@ -625,10 +628,7 @@ serve(async (req) => {
         .eq("artifact_type", "raw_transcript");
     }
 
-    // Always store/update minimized transcript (regardless of verification status)
-    // This ensures the UI always has access to the redacted text
     if (!verification_only) {
-      // Upsert minimized transcript
       await supabase
         .from("ephemeral_artifacts")
         .upsert({
@@ -640,7 +640,6 @@ serve(async (req) => {
     }
 
     if (result.verification_result.status === "PASS") {
-      // Update session state to ready for generation
       await supabase
         .from("sessions")
         .update({ state: "INPUT_READY" })
@@ -648,7 +647,6 @@ serve(async (req) => {
 
       console.log(`[Redact] Pipeline complete - PASSED. Minimized length: ${result.minimized_text.length}`);
     } else {
-      // Verification failed - update state to VERIFICATION_REVIEW
       await supabase
         .from("sessions")
         .update({ state: "VERIFICATION_REVIEW" })
