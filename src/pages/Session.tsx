@@ -728,9 +728,11 @@ export default function Session() {
         {/* VERIFICATION_REVIEW: Verification failed - show review panel */}
         {state === "VERIFICATION_REVIEW" && (
           <VerificationReviewPanel
-            minimizedText={data.minimizedTranscript || ""}
+            minimizedText={data.minimizedTranscript}
             failedCategories={data.verificationFailedCategories || []}
             isReverifying={data.isReverifying || false}
+            isLoading={!data.minimizedTranscript}
+            layerStatus={data.redactionStatus}
             onReverify={actions.reverifyText}
             onCancelSession={actions.cancelSession}
             onDiscardAndStartOver={actions.discardAndStartOver}

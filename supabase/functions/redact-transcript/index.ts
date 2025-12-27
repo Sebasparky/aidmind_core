@@ -29,6 +29,13 @@ interface RedactionCounts {
   date: number;
 }
 
+interface LayerStatus {
+  status: "COMPLETED" | "SKIPPED" | "FAILED";
+  counts?: Partial<RedactionCounts>;
+  method?: string;
+  skipped_reason?: string;
+}
+
 interface RedactionResult {
   minimized_text: string;
   redaction_counts: RedactionCounts;
@@ -36,6 +43,12 @@ interface RedactionResult {
     status: "PASS" | "FAIL";
     categories?: string[];
   };
+  redaction: {
+    layer1: LayerStatus;
+    layer2: LayerStatus;
+    layer3: { status: "PASS" | "FAIL"; categories?: string[] };
+  };
+  minimized_text_source: "ner" | "regex";
 }
 
 // Log Eye event for audit trail (no PHI stored)
@@ -394,6 +407,17 @@ async function runRedactionPipeline(
     date: 0,
   };
 
+  // Track layer statuses
+  const layerStatuses: {
+    layer1: LayerStatus;
+    layer2: LayerStatus;
+    layer3: { status: "PASS" | "FAIL"; categories?: string[] };
+  } = {
+    layer1: { status: "COMPLETED", counts: {} },
+    layer2: { status: "COMPLETED", counts: {} },
+    layer3: { status: "PASS" },
+  };
+
   // Emit start event
   await logEyeEvent(supabase, sessionId, "REDACTION_STARTED", {
     input_length: transcript.length,
@@ -403,10 +427,11 @@ async function runRedactionPipeline(
   console.log("[Redact] Running Layer 1: Regex Redaction");
   const layer1Result = regexRedact(transcript);
   
-  // Merge counts
+  // Merge counts and track layer status
   Object.entries(layer1Result.counts).forEach(([key, value]) => {
     combinedCounts[key as keyof RedactionCounts] += value || 0;
   });
+  layerStatuses.layer1 = { status: "COMPLETED", counts: layer1Result.counts };
 
   await logEyeEvent(supabase, sessionId, "REGEX_REDACTION_COMPLETED", {
     counts: layer1Result.counts,
@@ -421,6 +446,15 @@ async function runRedactionPipeline(
     combinedCounts[key as keyof RedactionCounts] += value || 0;
   });
 
+  // Track layer 2 status
+  if (layer2Result.method === "presidio") {
+    layerStatuses.layer2 = { status: "COMPLETED", counts: layer2Result.counts, method: "presidio" };
+  } else if (layer2Result.method === "regex_fallback") {
+    layerStatuses.layer2 = { status: "SKIPPED", counts: layer2Result.counts, method: "regex_fallback", skipped_reason: layer2Result.skipped_reason };
+  } else {
+    layerStatuses.layer2 = { status: "SKIPPED", counts: layer2Result.counts, skipped_reason: layer2Result.skipped_reason };
+  }
+
   // Log completion with method used
   await logEyeEvent(supabase, sessionId, "NER_REDACTION_COMPLETED", {
     counts: layer2Result.counts,
@@ -428,9 +462,19 @@ async function runRedactionPipeline(
     ...(layer2Result.skipped_reason && { skipped_reason: layer2Result.skipped_reason }),
   });
 
+  // Determine minimized_text source
+  const minimizedTextSource: "ner" | "regex" = layer2Result.method === "presidio" ? "ner" : "regex";
+
+  // Log MINIMIZED_TEXT_SET event
+  await logEyeEvent(supabase, sessionId, "MINIMIZED_TEXT_SET", {
+    source_layer: minimizedTextSource,
+  });
+
   // ========== LAYER 3: LLM Verification ==========
   console.log("[Redact] Running Layer 3: LLM Verification");
   const verification = await verifyWithLLM(layer2Result.text, openAIApiKey);
+
+  layerStatuses.layer3 = verification;
 
   if (verification.status === "PASS") {
     await logEyeEvent(supabase, sessionId, "REDACTION_VERIFICATION_PASSED", {});
@@ -444,6 +488,8 @@ async function runRedactionPipeline(
     minimized_text: layer2Result.text,
     redaction_counts: combinedCounts,
     verification_result: verification,
+    redaction: layerStatuses,
+    minimized_text_source: minimizedTextSource,
   };
 }
 
@@ -475,23 +521,31 @@ async function runVerificationOnly(
     });
   }
 
-  // Return empty counts since no redaction was performed
+  const emptyCounts: RedactionCounts = {
+    phone: 0,
+    email: 0,
+    ssn: 0,
+    dob: 0,
+    address: 0,
+    case_id: 0,
+    generic_id: 0,
+    person: 0,
+    location: 0,
+    organization: 0,
+    date: 0,
+  };
+
+  // Return result with verification-only mode indicated
   return {
     minimized_text: text,
-    redaction_counts: {
-      phone: 0,
-      email: 0,
-      ssn: 0,
-      dob: 0,
-      address: 0,
-      case_id: 0,
-      generic_id: 0,
-      person: 0,
-      location: 0,
-      organization: 0,
-      date: 0,
-    },
+    redaction_counts: emptyCounts,
     verification_result: verification,
+    redaction: {
+      layer1: { status: "SKIPPED" },
+      layer2: { status: "SKIPPED" },
+      layer3: verification,
+    },
+    minimized_text_source: "ner", // Preserve existing source
   };
 }
 
@@ -560,25 +614,32 @@ serve(async (req) => {
       result = await runRedactionPipeline(session_id, transcript, openAIApiKey, supabase);
     }
 
-    // Store minimized transcript as ephemeral artifact (only if verification passed)
-    if (result.verification_result.status === "PASS") {
-      const ttlExpiresAt = new Date(Date.now() + MINIMIZED_TRANSCRIPT_TTL_SECONDS * 1000).toISOString();
-      
-      // Delete raw transcript (never retain after redaction)
+    const ttlExpiresAt = new Date(Date.now() + MINIMIZED_TRANSCRIPT_TTL_SECONDS * 1000).toISOString();
+
+    // Always delete raw transcript after redaction (never retain)
+    if (!verification_only) {
       await supabase
         .from("ephemeral_artifacts")
         .delete()
         .eq("session_id", session_id)
         .eq("artifact_type", "raw_transcript");
+    }
 
-      // Store minimized transcript
-      await supabase.from("ephemeral_artifacts").insert({
-        session_id,
-        artifact_type: "minimized_transcript",
-        content: result.minimized_text,
-        ttl_expires_at: ttlExpiresAt,
-      });
+    // Always store/update minimized transcript (regardless of verification status)
+    // This ensures the UI always has access to the redacted text
+    if (!verification_only) {
+      // Upsert minimized transcript
+      await supabase
+        .from("ephemeral_artifacts")
+        .upsert({
+          session_id,
+          artifact_type: "minimized_transcript",
+          content: result.minimized_text,
+          ttl_expires_at: ttlExpiresAt,
+        }, { onConflict: "session_id,artifact_type" });
+    }
 
+    if (result.verification_result.status === "PASS") {
       // Update session state to ready for generation
       await supabase
         .from("sessions")
@@ -587,7 +648,12 @@ serve(async (req) => {
 
       console.log(`[Redact] Pipeline complete - PASSED. Minimized length: ${result.minimized_text.length}`);
     } else {
-      // Verification failed - keep in REDACTING state, don't proceed
+      // Verification failed - update state to VERIFICATION_REVIEW
+      await supabase
+        .from("sessions")
+        .update({ state: "VERIFICATION_REVIEW" })
+        .eq("session_id", session_id);
+
       console.log(`[Redact] Pipeline complete - FAILED. Categories: ${result.verification_result.categories?.join(", ")}`);
     }
 
@@ -597,6 +663,8 @@ serve(async (req) => {
         minimized_text: result.minimized_text,
         redaction_counts: result.redaction_counts,
         verification_result: result.verification_result,
+        redaction: result.redaction,
+        minimized_text_source: result.minimized_text_source,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

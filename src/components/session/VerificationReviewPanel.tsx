@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,9 +16,14 @@ import {
 } from "@/components/ui/alert-dialog";
 
 interface VerificationReviewPanelProps {
-  minimizedText: string;
+  minimizedText: string | undefined;
   failedCategories: string[];
   isReverifying: boolean;
+  isLoading?: boolean;
+  layerStatus?: {
+    layer1?: { status: string };
+    layer2?: { status: string; method?: string };
+  };
   onReverify: (editedText: string) => void;
   onCancelSession: () => void;
   onDiscardAndStartOver: () => void;
@@ -28,13 +33,22 @@ export function VerificationReviewPanel({
   minimizedText,
   failedCategories,
   isReverifying,
+  isLoading = false,
+  layerStatus,
   onReverify,
   onCancelSession,
   onDiscardAndStartOver,
 }: VerificationReviewPanelProps) {
-  const [editedText, setEditedText] = useState(minimizedText);
+  const [editedText, setEditedText] = useState(minimizedText || "");
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [showDiscardDialog, setShowDiscardDialog] = useState(false);
+
+  // Sync editedText when minimizedText prop changes (e.g., after re-verification)
+  useEffect(() => {
+    if (minimizedText !== undefined && minimizedText !== editedText) {
+      setEditedText(minimizedText);
+    }
+  }, [minimizedText]);
 
   const handleReverify = useCallback(() => {
     onReverify(editedText);
@@ -65,6 +79,12 @@ export function VerificationReviewPanel({
     };
     return labels[category] || category;
   };
+
+  // Show loading state if minimizedText is not ready
+  const isTextReady = minimizedText !== undefined && minimizedText !== null && minimizedText.length > 0;
+
+  // Dev mode indicator for layer status
+  const isDev = import.meta.env.DEV;
 
   return (
     <>
@@ -122,6 +142,22 @@ export function VerificationReviewPanel({
         </CardHeader>
 
         <CardContent className="space-y-6">
+          {/* Dev mode layer status indicator */}
+          {isDev && layerStatus && (
+            <div className="text-xs font-mono bg-muted/50 p-2 rounded border border-dashed">
+              <span className="text-muted-foreground">Layer 1: </span>
+              <span className={layerStatus.layer1?.status === "COMPLETED" ? "text-green-600" : "text-amber-600"}>
+                {layerStatus.layer1?.status || "N/A"}
+              </span>
+              <span className="mx-2">|</span>
+              <span className="text-muted-foreground">Layer 2: </span>
+              <span className={layerStatus.layer2?.status === "COMPLETED" ? "text-green-600" : "text-amber-600"}>
+                {layerStatus.layer2?.status || "N/A"}
+                {layerStatus.layer2?.method && ` (${layerStatus.layer2.method})`}
+              </span>
+            </div>
+          )}
+
           {/* Detected Categories */}
           {failedCategories.length > 0 && (
             <div className="space-y-2">
@@ -140,7 +176,7 @@ export function VerificationReviewPanel({
             </div>
           )}
 
-          {/* Editable Text Area */}
+          {/* Editable Text Area or Loading State */}
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">
               Minimized session notes (editable)
@@ -148,13 +184,23 @@ export function VerificationReviewPanel({
             <p className="text-xs text-muted-foreground">
               Replace names with roles (e.g., "the client", "the provider") and generalize locations or identifiers.
             </p>
-            <Textarea
-              value={editedText}
-              onChange={(e) => setEditedText(e.target.value)}
-              className="min-h-[240px] font-mono text-sm resize-y"
-              disabled={isReverifying}
-              placeholder="Minimized text will appear here..."
-            />
+            
+            {isLoading || !isTextReady ? (
+              <div className="min-h-[240px] border rounded-md flex items-center justify-center bg-muted/30">
+                <div className="text-center">
+                  <Loader2 className="h-8 w-8 mx-auto text-muted-foreground animate-spin mb-2" />
+                  <p className="text-sm text-muted-foreground">Preparing minimized notes…</p>
+                </div>
+              </div>
+            ) : (
+              <Textarea
+                value={editedText}
+                onChange={(e) => setEditedText(e.target.value)}
+                className="min-h-[240px] font-mono text-sm resize-y"
+                disabled={isReverifying}
+                placeholder="Minimized text will appear here..."
+              />
+            )}
           </div>
 
           {/* Action Buttons */}
@@ -162,7 +208,7 @@ export function VerificationReviewPanel({
             {/* Primary: Re-check */}
             <Button
               onClick={handleReverify}
-              disabled={isReverifying || !editedText.trim()}
+              disabled={isReverifying || !isTextReady || !editedText.trim()}
               className="flex-1 sm:flex-none"
             >
               {isReverifying ? (
