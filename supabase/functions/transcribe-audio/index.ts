@@ -118,10 +118,26 @@ serve(async (req) => {
       throw new Error("Failed to download audio file from storage");
     }
 
+    // Determine file extension and MIME type from object key
+    const fileExtension = audio_object_key.split('.').pop()?.toLowerCase() || 'webm';
+    const mimeTypes: Record<string, string> = {
+      'mp3': 'audio/mpeg',
+      'mp4': 'audio/mp4',
+      'm4a': 'audio/mp4',
+      'wav': 'audio/wav',
+      'webm': 'audio/webm',
+      'ogg': 'audio/ogg',
+      'mpeg': 'audio/mpeg',
+    };
+    const mimeType = mimeTypes[fileExtension] || 'audio/mpeg';
+    const fileName = `audio.${fileExtension}`;
+    
+    console.log(`[Transcribe] File extension: ${fileExtension}, MIME type: ${mimeType}`);
+
     // Prepare form data for OpenAI
     const formData = new FormData();
-    const audioBlob = new Blob([audioData], { type: "audio/webm" });
-    formData.append("file", audioBlob, "audio.webm");
+    const audioBlob = new Blob([audioData], { type: mimeType });
+    formData.append("file", audioBlob, fileName);
     formData.append("model", model);
     formData.append("response_format", "text");
 
