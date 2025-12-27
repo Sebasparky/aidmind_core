@@ -329,15 +329,30 @@ export function useSessionMachine({
     
     if (useRealTranscription && (data.transcript || data.textNotes)) {
       try {
-        // Use the redact function - it will fetch from artifacts or use provided transcript
-        const minimized = await transcription.redact(data.sessionId, data.transcript || data.textNotes);
-        if (!minimized) {
+        // Use the 3-layer redact function
+        const result = await transcription.redact(data.sessionId, data.transcript || data.textNotes);
+        
+        if (!result.minimizedTranscript) {
           throw new Error("Redaction failed");
+        }
+        
+        // Check verification result
+        if (!result.verificationPassed) {
+          // Verification failed - show error but don't block completely
+          setData((prev) => ({
+            ...prev,
+            minimizedTranscript: result.minimizedTranscript || "",
+            errorMessage: "Possible identifying info remains. Please remove names/addresses/IDs and try again.",
+            previousStateBeforeError: "REDACTING",
+          }));
+          setState("ERROR");
+          console.log("[AidMind Event] REDACTION_VERIFICATION_FAILED");
+          return;
         }
         
         setData((prev) => ({
           ...prev,
-          minimizedTranscript: minimized,
+          minimizedTranscript: result.minimizedTranscript || "",
         }));
         setState("INPUT_READY");
         

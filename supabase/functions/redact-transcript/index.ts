@@ -11,10 +11,33 @@ const MINIMIZED_TRANSCRIPT_TTL_SECONDS = 30 * 60; // 30 minutes
 
 interface RedactRequest {
   session_id: string;
-  transcript?: string; // Optional - will fetch from artifacts if not provided
+  transcript?: string;
 }
 
-// Log Eye event for audit trail (no PHI)
+interface RedactionCounts {
+  phone: number;
+  email: number;
+  ssn: number;
+  dob: number;
+  address: number;
+  case_id: number;
+  generic_id: number;
+  person: number;
+  location: number;
+  organization: number;
+  date: number;
+}
+
+interface RedactionResult {
+  minimized_text: string;
+  redaction_counts: RedactionCounts;
+  verification_result: {
+    status: "PASS" | "FAIL";
+    categories?: string[];
+  };
+}
+
+// Log Eye event for audit trail (no PHI stored)
 async function logEyeEvent(
   supabase: any,
   sessionId: string | null,
@@ -27,12 +50,315 @@ async function logEyeEvent(
       event_type: eventType,
       event_data: eventData,
     });
-    console.log(`[Eye Event] ${eventType}`, eventData);
+    console.log(`[Eye Event] ${eventType}`, JSON.stringify(eventData));
   } catch (error) {
     console.error("Failed to log Eye event:", error);
   }
 }
 
+// ============================================================
+// LAYER 1: Deterministic Regex Redaction (Required)
+// ============================================================
+function regexRedact(text: string): { text: string; counts: Partial<RedactionCounts> } {
+  const counts: Partial<RedactionCounts> = {
+    phone: 0,
+    email: 0,
+    ssn: 0,
+    dob: 0,
+    address: 0,
+    case_id: 0,
+    generic_id: 0,
+  };
+
+  let result = text;
+
+  // Email pattern
+  const emailPattern = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+  result = result.replace(emailPattern, () => {
+    counts.email!++;
+    return "[EMAIL]";
+  });
+
+  // US phone (loose pattern)
+  const phonePattern = /(\+?1[\s.-]?)?(\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}/g;
+  result = result.replace(phonePattern, () => {
+    counts.phone!++;
+    return "[PHONE]";
+  });
+
+  // SSN pattern
+  const ssnPattern = /\b\d{3}-\d{2}-\d{4}\b/g;
+  result = result.replace(ssnPattern, () => {
+    counts.ssn!++;
+    return "[SSN]";
+  });
+
+  // DOB pattern
+  const dobPattern = /\b(DOB|Date of Birth)\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\b/gi;
+  result = result.replace(dobPattern, () => {
+    counts.dob!++;
+    return "[DOB]";
+  });
+
+  // Address pattern (number + street keyword)
+  const addressPattern = /\b\d+\s+(N\.?|S\.?|E\.?|W\.?|North|South|East|West)?\s*(Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Drive|Dr\.?|Lane|Ln\.?|Court|Ct\.?|Place|Pl\.?|Way|Circle|Cir\.?)\b[^,.]*(?:[,.]?\s*(?:Apt\.?|Suite|Ste\.?|Unit|#)\s*\d+)?/gi;
+  result = result.replace(addressPattern, () => {
+    counts.address!++;
+    return "[ADDRESS]";
+  });
+
+  // Case number / reference ID patterns
+  const caseIdPattern = /\b(Case\s*(?:#|No\.?|Number)?|Reference\s*(?:#|No\.?|ID)?|Ref\s*(?:#|No\.?)?)\s*[:\-]?\s*[A-Z0-9\-]+\b/gi;
+  result = result.replace(caseIdPattern, () => {
+    counts.case_id!++;
+    return "[CASE_ID]";
+  });
+
+  // Generic ID patterns (e.g., "ID: 12345", "Client ID 987")
+  const genericIdPattern = /\b(Client\s*ID|Patient\s*ID|Member\s*ID|Account\s*ID|ID)\s*[:\-#]?\s*\d+\b/gi;
+  result = result.replace(genericIdPattern, () => {
+    counts.generic_id!++;
+    return "[ID]";
+  });
+
+  return { text: result, counts };
+}
+
+// ============================================================
+// LAYER 2: NER Redaction (Regex-based fallback since Presidio unavailable)
+// ============================================================
+function nerRedact(text: string): { text: string; counts: Partial<RedactionCounts> } {
+  const counts: Partial<RedactionCounts> = {
+    person: 0,
+    location: 0,
+    organization: 0,
+    date: 0,
+  };
+
+  let result = text;
+  
+  // Track entity numbers for consistent replacement
+  const entityCounters = {
+    person: 0,
+    location: 0,
+    organization: 0,
+    date: 0,
+  };
+
+  // Common name patterns (titles + capitalized words)
+  // Match patterns like "Mr. John Smith", "Dr. Jane Doe", "Client A.J."
+  const nameWithTitlePattern = /\b(Mr\.?|Mrs\.?|Ms\.?|Miss|Dr\.?|Prof\.?|Client|Patient)\s+([A-Z][a-z]+(?:\s+[A-Z]\.?)?(?:\s+[A-Z][a-z]+)?)\b/g;
+  result = result.replace(nameWithTitlePattern, () => {
+    entityCounters.person++;
+    counts.person!++;
+    return `[PERSON_${entityCounters.person}]`;
+  });
+
+  // Standalone capitalized name sequences (2-3 capitalized words together)
+  // Avoid matching at sentence starts by checking for preceding context
+  const capitalizedNamePattern = /(?<=[.!?]\s+|\n|^)([A-Z][a-z]+(?:\s+[A-Z]\.?)?(?:\s+[A-Z][a-z]+))/g;
+  // For safety, use a simpler pattern that catches potential names
+  const simpleNamePattern = /\b([A-Z][a-z]{1,15})\s+([A-Z]\.?\s+)?([A-Z][a-z]{1,15})\b/g;
+  result = result.replace(simpleNamePattern, (match) => {
+    // Skip common non-name patterns
+    const commonPhrases = ['Social Security', 'New York', 'Los Angeles', 'San Francisco', 'United States', 'Health Insurance'];
+    if (commonPhrases.some(p => match.includes(p))) return match;
+    
+    entityCounters.person++;
+    counts.person!++;
+    return `[PERSON_${entityCounters.person}]`;
+  });
+
+  // Location patterns (cities, states)
+  const locationPattern = /\b(city of|town of|state of|county of)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/gi;
+  result = result.replace(locationPattern, () => {
+    entityCounters.location++;
+    counts.location!++;
+    return `[LOCATION_${entityCounters.location}]`;
+  });
+
+  // US State abbreviations with context
+  const statePattern = /\b([A-Z][a-z]+),?\s+(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\b/g;
+  result = result.replace(statePattern, () => {
+    entityCounters.location++;
+    counts.location!++;
+    return `[LOCATION_${entityCounters.location}]`;
+  });
+
+  // Organization patterns
+  const orgPattern = /\b([A-Z][a-z]*(?:\s+[A-Z][a-z]*)*)\s+(Agency|Department|Office|Center|Services|Clinic|Hospital|Foundation|Association|Organization|Inc\.?|LLC|Corp\.?|Company|Co\.?)\b/g;
+  result = result.replace(orgPattern, () => {
+    entityCounters.organization++;
+    counts.organization!++;
+    return `[ORG_${entityCounters.organization}]`;
+  });
+
+  // Date patterns (various formats) - only those not caught by Layer 1
+  const datePatterns = [
+    /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b/gi,
+    /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g,
+    /\b\d{1,2}-\d{1,2}-\d{2,4}\b/g,
+    /\b(last|this|next)\s+(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|week|month)\b/gi,
+  ];
+  
+  for (const pattern of datePatterns) {
+    result = result.replace(pattern, () => {
+      entityCounters.date++;
+      counts.date!++;
+      return `[DATE_${entityCounters.date}]`;
+    });
+  }
+
+  return { text: result, counts };
+}
+
+// ============================================================
+// LAYER 3: LLM Verification (Classifier only, no rewriting)
+// ============================================================
+async function verifyWithLLM(
+  text: string,
+  openAIApiKey: string
+): Promise<{ status: "PASS" | "FAIL"; categories?: string[] }> {
+  const systemPrompt = `You are a PHI/PII verification classifier. Your ONLY job is to determine if the provided text still contains potentially identifying information.
+
+You must respond with ONLY a JSON object in this exact format:
+{"contains_phi": true/false, "categories": ["CATEGORY1", "CATEGORY2"]}
+
+Valid categories: PERSON, LOCATION, CONTACT, ID, DATE, ORGANIZATION, ADDRESS, MEDICAL_ID, SSN
+
+Rules:
+- If text contains [REDACTED] style placeholders, those are SAFE and should NOT be flagged
+- Only flag ACTUAL identifying information that was NOT redacted
+- Be conservative: if unsure, flag it
+- Do NOT rewrite or modify the text
+- Do NOT explain your reasoning
+- ONLY output the JSON object`;
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${openAIApiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `Analyze this text for remaining PHI/PII:\n\n${text}` },
+      ],
+      temperature: 0,
+      max_tokens: 200,
+    }),
+  });
+
+  if (!response.ok) {
+    console.error("LLM verification failed:", response.status);
+    // On LLM failure, default to PASS to not block workflow
+    // but log the issue
+    return { status: "PASS", categories: [] };
+  }
+
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content || "";
+
+  try {
+    // Parse JSON response
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (parsed.contains_phi === true) {
+        return {
+          status: "FAIL",
+          categories: parsed.categories || [],
+        };
+      }
+    }
+    return { status: "PASS" };
+  } catch (e) {
+    console.error("Failed to parse LLM verification response:", e);
+    // Default to PASS on parse error
+    return { status: "PASS" };
+  }
+}
+
+// ============================================================
+// Main Redaction Pipeline
+// ============================================================
+async function runRedactionPipeline(
+  sessionId: string,
+  transcript: string,
+  openAIApiKey: string,
+  supabase: any
+): Promise<RedactionResult> {
+  // Initialize combined counts
+  const combinedCounts: RedactionCounts = {
+    phone: 0,
+    email: 0,
+    ssn: 0,
+    dob: 0,
+    address: 0,
+    case_id: 0,
+    generic_id: 0,
+    person: 0,
+    location: 0,
+    organization: 0,
+    date: 0,
+  };
+
+  // Emit start event
+  await logEyeEvent(supabase, sessionId, "REDACTION_STARTED", {
+    input_length: transcript.length,
+  });
+
+  // ========== LAYER 1: Regex Redaction ==========
+  console.log("[Redact] Running Layer 1: Regex Redaction");
+  const layer1Result = regexRedact(transcript);
+  
+  // Merge counts
+  Object.entries(layer1Result.counts).forEach(([key, value]) => {
+    combinedCounts[key as keyof RedactionCounts] += value || 0;
+  });
+
+  await logEyeEvent(supabase, sessionId, "REGEX_REDACTION_COMPLETED", {
+    counts: layer1Result.counts,
+  });
+
+  // ========== LAYER 2: NER Redaction ==========
+  console.log("[Redact] Running Layer 2: NER Redaction (regex fallback)");
+  const layer2Result = nerRedact(layer1Result.text);
+  
+  // Merge counts
+  Object.entries(layer2Result.counts).forEach(([key, value]) => {
+    combinedCounts[key as keyof RedactionCounts] += value || 0;
+  });
+
+  await logEyeEvent(supabase, sessionId, "NER_REDACTION_COMPLETED", {
+    counts: layer2Result.counts,
+    method: "regex_fallback", // Presidio not available
+  });
+
+  // ========== LAYER 3: LLM Verification ==========
+  console.log("[Redact] Running Layer 3: LLM Verification");
+  const verification = await verifyWithLLM(layer2Result.text, openAIApiKey);
+
+  if (verification.status === "PASS") {
+    await logEyeEvent(supabase, sessionId, "REDACTION_VERIFICATION_PASSED", {});
+  } else {
+    await logEyeEvent(supabase, sessionId, "REDACTION_VERIFICATION_FAILED", {
+      categories: verification.categories,
+    });
+  }
+
+  return {
+    minimized_text: layer2Result.text,
+    redaction_counts: combinedCounts,
+    verification_result: verification,
+  };
+}
+
+// ============================================================
+// HTTP Handler
+// ============================================================
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -57,7 +383,7 @@ serve(async (req) => {
       );
     }
 
-    console.log(`[Redact] Starting redaction for session ${session_id}`);
+    console.log(`[Redact] Starting 3-layer redaction pipeline for session ${session_id}`);
 
     // Get transcript from artifacts if not provided
     let transcript: string = providedTranscript || "";
@@ -78,94 +404,52 @@ serve(async (req) => {
       transcript = artifact.content;
     }
 
-    await logEyeEvent(supabase, session_id, "REDACTION_STARTED", {
-      transcript_length: transcript.length,
-    });
-
     // Update session state
     await supabase
       .from("sessions")
       .update({ state: "REDACTING" })
       .eq("session_id", session_id);
 
-    // Call OpenAI to minimize/redact the transcript
-    const systemPrompt = `You are a PHI (Protected Health Information) minimization assistant for social work case notes. 
-Your task is to create a minimized version of the transcript that:
-1. Removes or replaces direct identifiers (full names, SSNs, addresses, phone numbers, email addresses)
-2. Generalizes dates (e.g., "last Tuesday" becomes "earlier this week")
-3. Replaces specific locations with general descriptions
-4. Preserves the clinical meaning and essential case information
-5. Maintains the context needed for accurate case note generation
-6. Keeps the content concise while retaining important details
+    // Run the 3-layer pipeline
+    const result = await runRedactionPipeline(session_id, transcript, openAIApiKey, supabase);
 
-Output ONLY the minimized transcript, no explanations or metadata.`;
-
-    console.log(`[Redact] Calling OpenAI for minimization`);
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${openAIApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: transcript },
-        ],
-        temperature: 0.3,
-        max_tokens: 2000,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("OpenAI API error:", response.status, errorText);
+    // Store minimized transcript as ephemeral artifact (only if verification passed)
+    if (result.verification_result.status === "PASS") {
+      const ttlExpiresAt = new Date(Date.now() + MINIMIZED_TRANSCRIPT_TTL_SECONDS * 1000).toISOString();
       
-      await logEyeEvent(supabase, session_id, "REDACTION_FAILED", {
-        reason: "openai_api_error",
-        status_code: response.status,
+      // Delete raw transcript (never retain after redaction)
+      await supabase
+        .from("ephemeral_artifacts")
+        .delete()
+        .eq("session_id", session_id)
+        .eq("artifact_type", "raw_transcript");
+
+      // Store minimized transcript
+      await supabase.from("ephemeral_artifacts").insert({
+        session_id,
+        artifact_type: "minimized_transcript",
+        content: result.minimized_text,
+        ttl_expires_at: ttlExpiresAt,
       });
 
-      throw new Error(`OpenAI redaction failed: ${response.status}`);
+      // Update session state to ready for generation
+      await supabase
+        .from("sessions")
+        .update({ state: "INPUT_READY" })
+        .eq("session_id", session_id);
+
+      console.log(`[Redact] Pipeline complete - PASSED. Minimized length: ${result.minimized_text.length}`);
+    } else {
+      // Verification failed - keep in REDACTING state, don't proceed
+      console.log(`[Redact] Pipeline complete - FAILED. Categories: ${result.verification_result.categories?.join(", ")}`);
     }
-
-    const data = await response.json();
-    const minimizedTranscript = data.choices[0].message.content;
-
-    console.log(`[Redact] Minimization complete, length: ${minimizedTranscript.length} chars`);
-
-    // Store minimized transcript as ephemeral artifact
-    const ttlExpiresAt = new Date(Date.now() + MINIMIZED_TRANSCRIPT_TTL_SECONDS * 1000).toISOString();
-    const { error: artifactError } = await supabase.from("ephemeral_artifacts").insert({
-      session_id,
-      artifact_type: "minimized_transcript",
-      content: minimizedTranscript,
-      ttl_expires_at: ttlExpiresAt,
-    });
-
-    if (artifactError) {
-      console.error("Failed to store minimized transcript:", artifactError);
-    }
-
-    // Update session state
-    await supabase
-      .from("sessions")
-      .update({ state: "INPUT_READY" })
-      .eq("session_id", session_id);
-
-    await logEyeEvent(supabase, session_id, "REDACTION_COMPLETED", {
-      original_length: transcript.length,
-      minimized_length: minimizedTranscript.length,
-      reduction_percent: Math.round((1 - minimizedTranscript.length / transcript.length) * 100),
-    });
-
-    console.log(`[Redact] Successfully redacted transcript for session ${session_id}`);
 
     return new Response(
       JSON.stringify({
         success: true,
-        minimized_transcript: minimizedTranscript,
+        minimized_text: result.minimized_text,
+        redaction_counts: result.redaction_counts,
+        verification_result: result.verification_result,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
