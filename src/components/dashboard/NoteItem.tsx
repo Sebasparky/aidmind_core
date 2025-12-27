@@ -1,0 +1,107 @@
+import { FileText, Upload, Save, XCircle, Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+
+export type NoteStatus = "exported" | "saved" | "cancelled" | "in-progress";
+
+export interface Note {
+  id: string;
+  title: string;
+  interactionType: string;
+  status: NoteStatus;
+  updatedAt: string;
+}
+
+interface NoteItemProps {
+  note: Note;
+}
+
+const statusConfig: Record<NoteStatus, {
+  icon: typeof FileText;
+  iconClass: string;
+  bgClass: string;
+  badgeClass: string;
+  label: string;
+}> = {
+  exported: {
+    icon: Upload,
+    iconClass: "text-status-success",
+    bgClass: "bg-[hsl(var(--status-success-muted))]",
+    badgeClass: "badge-success",
+    label: "Exported",
+  },
+  saved: {
+    icon: Save,
+    iconClass: "text-status-info",
+    bgClass: "bg-[hsl(var(--status-info-muted))]",
+    badgeClass: "badge-info",
+    label: "Saved for later",
+  },
+  cancelled: {
+    icon: XCircle,
+    iconClass: "text-status-neutral",
+    bgClass: "bg-[hsl(var(--status-neutral-muted))]",
+    badgeClass: "badge-neutral",
+    label: "Cancelled",
+  },
+  "in-progress": {
+    icon: Loader2,
+    iconClass: "text-status-warning",
+    bgClass: "bg-[hsl(var(--status-warning-muted))]",
+    badgeClass: "badge-warning",
+    label: "In progress",
+  },
+};
+
+const interactionTypeLabels: Record<string, string> = {
+  "phone-call": "Phone Call",
+  "in-person": "In-Person",
+  "text-sms": "Text/SMS",
+  "collateral-contact": "Collateral Contact",
+  "case-conference": "Case Conference",
+  "other": "Other",
+};
+
+export function NoteItem({ note }: NoteItemProps) {
+  const config = statusConfig[note.status] || statusConfig.saved;
+  const Icon = config.icon;
+  const interactionLabel = interactionTypeLabels[note.interactionType] || note.interactionType;
+
+  return (
+    <div className="flex items-start gap-3 p-3 hover:bg-secondary/50 rounded-lg transition-colors cursor-pointer">
+      {/* Status icon */}
+      <div
+        className={cn(
+          "w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0",
+          config.bgClass
+        )}
+      >
+        <Icon className={cn("h-4 w-4", config.iconClass, note.status === "in-progress" && "animate-spin")} />
+      </div>
+
+      <div className="flex-1 min-w-0">
+        {/* Note title */}
+        <p className="text-sm font-medium text-foreground truncate">
+          {note.title}
+        </p>
+        
+        {/* Interaction type tag */}
+        <div className="flex items-center gap-2 mt-1">
+          <Badge variant="secondary" className="text-xs px-2 py-0">
+            {interactionLabel}
+          </Badge>
+        </div>
+        
+        {/* Status and timestamp */}
+        <div className="flex items-center gap-2 mt-1.5">
+          <Badge className={cn("text-xs px-2 py-0 border-0", config.badgeClass)}>
+            {config.label}
+          </Badge>
+          <span className="text-xs text-muted-foreground">
+            {note.updatedAt}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
