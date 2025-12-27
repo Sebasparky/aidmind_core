@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Search, ChevronDown, MoreHorizontal, X, FileEdit } from "lucide-react";
+import { Search, ChevronDown, MoreHorizontal, X, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -7,12 +7,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { CaseItem, Case } from "./CaseItem";
 import { useDashboard } from "@/contexts/DashboardContext";
 import { StartNoteModal } from "./StartNoteModal";
@@ -120,20 +114,10 @@ export function CasesPanel() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-semibold text-foreground">My Cases</h2>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button className="gap-1">
-              Start Note
-              <ChevronDown className="h-4 w-4 ml-1" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuItem onClick={() => setStartNoteOpen(true)} className="gap-2">
-              <FileEdit className="h-4 w-4" />
-              Start Note
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <Button onClick={() => setStartNoteOpen(true)} className="gap-2">
+          <Plus className="h-4 w-4" />
+          Start Note
+        </Button>
       </div>
 
       {/* Start Note Modal */}
