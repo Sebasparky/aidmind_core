@@ -125,9 +125,102 @@ function regexRedact(text: string): { text: string; counts: Partial<RedactionCou
 }
 
 // ============================================================
-// LAYER 2: NER Redaction (Regex-based fallback since Presidio unavailable)
+// LAYER 2: NER Redaction with Presidio (fallback to regex if unavailable)
 // ============================================================
-function nerRedact(text: string): { text: string; counts: Partial<RedactionCounts> } {
+
+const PRESIDIO_SERVICE_URL = Deno.env.get("PRESIDIO_SERVICE_URL") || "http://localhost:8001";
+const PRESIDIO_TIMEOUT_MS = 5000; // 5 second timeout
+
+interface PresidioResponse {
+  redacted_text: string;
+  counts: Record<string, number>;
+  spans: Array<{ entity_type: string; start: number; end: number }>;
+}
+
+async function nerRedactWithPresidio(
+  sessionId: string,
+  text: string,
+  supabase: any
+): Promise<{ text: string; counts: Partial<RedactionCounts>; method: "presidio" | "regex_fallback" | "skipped"; skipped_reason?: string }> {
+  
+  // Emit NER_REDACTION_STARTED
+  await logEyeEvent(supabase, sessionId, "NER_REDACTION_STARTED", {});
+
+  try {
+    // Create abort controller for timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), PRESIDIO_TIMEOUT_MS);
+
+    const response = await fetch(`${PRESIDIO_SERVICE_URL}/redact-ner`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: sessionId,
+        text: text,
+        language: "en",
+        entities: ["PERSON", "LOCATION", "ORGANIZATION", "DATE"],
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`Presidio service returned ${response.status}`);
+    }
+
+    const data: PresidioResponse = await response.json();
+
+    const counts: Partial<RedactionCounts> = {
+      person: data.counts.PERSON || 0,
+      location: data.counts.LOCATION || 0,
+      organization: data.counts.ORGANIZATION || 0,
+      date: data.counts.DATE || 0,
+    };
+
+    console.log(`[Redact] Presidio NER completed: ${JSON.stringify(counts)}`);
+
+    return {
+      text: data.redacted_text,
+      counts,
+      method: "presidio",
+    };
+
+  } catch (error) {
+    // Determine skip reason
+    let skippedReason: "service_unavailable" | "timeout" | "error" = "error";
+    
+    if (error instanceof Error) {
+      if (error.name === "AbortError") {
+        skippedReason = "timeout";
+        console.warn("[Redact] Presidio service timeout - falling back to regex");
+      } else if (error.message.includes("fetch") || error.message.includes("connect")) {
+        skippedReason = "service_unavailable";
+        console.warn("[Redact] Presidio service unavailable - falling back to regex");
+      } else {
+        console.warn(`[Redact] Presidio error: ${error.message} - falling back to regex`);
+      }
+    }
+
+    // Log skip event
+    await logEyeEvent(supabase, sessionId, "NER_REDACTION_SKIPPED", {
+      reason_code: skippedReason,
+    });
+
+    // Fall back to regex-based NER
+    const fallbackResult = nerRedactFallback(text);
+    
+    return {
+      text: fallbackResult.text,
+      counts: fallbackResult.counts,
+      method: "regex_fallback",
+      skipped_reason: skippedReason,
+    };
+  }
+}
+
+// Regex-based fallback for when Presidio is unavailable
+function nerRedactFallback(text: string): { text: string; counts: Partial<RedactionCounts> } {
   const counts: Partial<RedactionCounts> = {
     person: 0,
     location: 0,
@@ -146,7 +239,6 @@ function nerRedact(text: string): { text: string; counts: Partial<RedactionCount
   };
 
   // Common name patterns (titles + capitalized words)
-  // Match patterns like "Mr. John Smith", "Dr. Jane Doe", "Client A.J."
   const nameWithTitlePattern = /\b(Mr\.?|Mrs\.?|Ms\.?|Miss|Dr\.?|Prof\.?|Client|Patient)\s+([A-Z][a-z]+(?:\s+[A-Z]\.?)?(?:\s+[A-Z][a-z]+)?)\b/g;
   result = result.replace(nameWithTitlePattern, () => {
     entityCounters.person++;
@@ -154,13 +246,9 @@ function nerRedact(text: string): { text: string; counts: Partial<RedactionCount
     return `[PERSON_${entityCounters.person}]`;
   });
 
-  // Standalone capitalized name sequences (2-3 capitalized words together)
-  // Avoid matching at sentence starts by checking for preceding context
-  const capitalizedNamePattern = /(?<=[.!?]\s+|\n|^)([A-Z][a-z]+(?:\s+[A-Z]\.?)?(?:\s+[A-Z][a-z]+))/g;
-  // For safety, use a simpler pattern that catches potential names
+  // Standalone capitalized name sequences
   const simpleNamePattern = /\b([A-Z][a-z]{1,15})\s+([A-Z]\.?\s+)?([A-Z][a-z]{1,15})\b/g;
   result = result.replace(simpleNamePattern, (match) => {
-    // Skip common non-name patterns
     const commonPhrases = ['Social Security', 'New York', 'Los Angeles', 'San Francisco', 'United States', 'Health Insurance'];
     if (commonPhrases.some(p => match.includes(p))) return match;
     
@@ -169,7 +257,7 @@ function nerRedact(text: string): { text: string; counts: Partial<RedactionCount
     return `[PERSON_${entityCounters.person}]`;
   });
 
-  // Location patterns (cities, states)
+  // Location patterns
   const locationPattern = /\b(city of|town of|state of|county of)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/gi;
   result = result.replace(locationPattern, () => {
     entityCounters.location++;
@@ -193,7 +281,7 @@ function nerRedact(text: string): { text: string; counts: Partial<RedactionCount
     return `[ORG_${entityCounters.organization}]`;
   });
 
-  // Date patterns (various formats) - only those not caught by Layer 1
+  // Date patterns
   const datePatterns = [
     /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b/gi,
     /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g,
@@ -323,18 +411,20 @@ async function runRedactionPipeline(
     counts: layer1Result.counts,
   });
 
-  // ========== LAYER 2: NER Redaction ==========
-  console.log("[Redact] Running Layer 2: NER Redaction (regex fallback)");
-  const layer2Result = nerRedact(layer1Result.text);
+  // ========== LAYER 2: NER Redaction (Presidio with fallback) ==========
+  console.log("[Redact] Running Layer 2: NER Redaction");
+  const layer2Result = await nerRedactWithPresidio(sessionId, layer1Result.text, supabase);
   
   // Merge counts
   Object.entries(layer2Result.counts).forEach(([key, value]) => {
     combinedCounts[key as keyof RedactionCounts] += value || 0;
   });
 
+  // Log completion with method used
   await logEyeEvent(supabase, sessionId, "NER_REDACTION_COMPLETED", {
     counts: layer2Result.counts,
-    method: "regex_fallback", // Presidio not available
+    method: layer2Result.method,
+    ...(layer2Result.skipped_reason && { skipped_reason: layer2Result.skipped_reason }),
   });
 
   // ========== LAYER 3: LLM Verification ==========
