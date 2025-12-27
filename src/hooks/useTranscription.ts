@@ -10,12 +10,33 @@ export const TRANSCRIPTION_MODELS = {
 
 export type TranscriptionModel = keyof typeof TRANSCRIPTION_MODELS;
 
+export interface RedactionCounts {
+  phone: number;
+  email: number;
+  ssn: number;
+  dob: number;
+  address: number;
+  case_id: number;
+  generic_id: number;
+  person: number;
+  location: number;
+  organization: number;
+  date: number;
+}
+
+export interface VerificationResult {
+  status: "PASS" | "FAIL";
+  categories?: string[];
+}
+
 interface TranscriptionState {
   isUploading: boolean;
   isTranscribing: boolean;
   isRedacting: boolean;
   transcript: string | null;
   minimizedTranscript: string | null;
+  redactionCounts: RedactionCounts | null;
+  verificationResult: VerificationResult | null;
   error: string | null;
   audioObjectKey: string | null;
 }
@@ -34,6 +55,8 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
     isRedacting: false,
     transcript: null,
     minimizedTranscript: null,
+    redactionCounts: null,
+    verificationResult: null,
     error: null,
     audioObjectKey: null,
   });
@@ -114,12 +137,15 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
     [model, autoRedact]
   );
 
-  // Start redaction/minimization
-  const redact = useCallback(async (sessionId: string, transcript?: string): Promise<string | null> => {
-    setState((prev) => ({ ...prev, isRedacting: true, error: null }));
+  // Start 3-layer redaction/minimization pipeline
+  const redact = useCallback(async (sessionId: string, transcript?: string): Promise<{
+    minimizedTranscript: string | null;
+    verificationPassed: boolean;
+  }> => {
+    setState((prev) => ({ ...prev, isRedacting: true, error: null, verificationResult: null }));
 
     try {
-      console.log(`[Transcription] Starting redaction for session: ${sessionId}`);
+      console.log(`[Transcription] Starting 3-layer redaction pipeline for session: ${sessionId}`);
 
       const { data, error } = await supabase.functions.invoke("redact-transcript", {
         body: {
@@ -136,20 +162,44 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
         throw new Error(data.error || "Redaction failed");
       }
 
-      const minimizedTranscript = data.minimized_transcript;
-      setState((prev) => ({ ...prev, isRedacting: false, minimizedTranscript }));
-      console.log(`[Transcription] Redaction complete, length: ${minimizedTranscript.length}`);
-      return minimizedTranscript;
+      const minimizedTranscript = data.minimized_text;
+      const redactionCounts = data.redaction_counts as RedactionCounts;
+      const verificationResult = data.verification_result as VerificationResult;
+
+      setState((prev) => ({ 
+        ...prev, 
+        isRedacting: false, 
+        minimizedTranscript,
+        redactionCounts,
+        verificationResult,
+      }));
+
+      console.log(`[Transcription] Redaction complete. Verification: ${verificationResult.status}`);
+      console.log(`[Transcription] Redaction counts:`, redactionCounts);
+
+      if (verificationResult.status === "FAIL") {
+        console.warn(`[Transcription] Verification FAILED. Categories: ${verificationResult.categories?.join(", ")}`);
+      }
+
+      return {
+        minimizedTranscript,
+        verificationPassed: verificationResult.status === "PASS",
+      };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Redaction failed";
       setState((prev) => ({ ...prev, isRedacting: false, error: errorMessage }));
-      return null;
+      return { minimizedTranscript: null, verificationPassed: false };
     }
   }, []);
 
   // Full pipeline: upload → transcribe → redact
   const processAudio = useCallback(
-    async (sessionId: string, file: File): Promise<{ transcript: string; minimizedTranscript: string } | null> => {
+    async (sessionId: string, file: File): Promise<{ 
+      transcript: string; 
+      minimizedTranscript: string;
+      verificationPassed: boolean;
+      redactionCounts: RedactionCounts;
+    } | null> => {
       // Step 1: Upload
       const objectKey = await uploadAudio(sessionId, file);
       if (!objectKey) return null;
@@ -158,19 +208,19 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
       const transcript = await transcribe(sessionId, objectKey);
       if (!transcript) return null;
 
-      // If autoRedact is false, we need to wait for the minimized transcript
-      const minimizedTranscript = state.minimizedTranscript;
-      if (!minimizedTranscript && autoRedact) {
-        // Wait a bit for the state to update
+      // Wait for state to settle if autoRedact is true
+      if (autoRedact) {
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
 
       return {
         transcript,
         minimizedTranscript: state.minimizedTranscript || "",
+        verificationPassed: state.verificationResult?.status === "PASS",
+        redactionCounts: state.redactionCounts || {} as RedactionCounts,
       };
     },
-    [uploadAudio, transcribe, autoRedact, state.minimizedTranscript]
+    [uploadAudio, transcribe, autoRedact, state.minimizedTranscript, state.verificationResult, state.redactionCounts]
   );
 
   // Reset state
@@ -181,14 +231,22 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
       isRedacting: false,
       transcript: null,
       minimizedTranscript: null,
+      redactionCounts: null,
+      verificationResult: null,
       error: null,
       audioObjectKey: null,
     });
   }, []);
 
+  // Check if verification failed
+  const verificationFailed = state.verificationResult?.status === "FAIL";
+  const failedCategories = state.verificationResult?.categories || [];
+
   return {
     ...state,
     isProcessing: state.isUploading || state.isTranscribing || state.isRedacting,
+    verificationFailed,
+    failedCategories,
     uploadAudio,
     transcribe,
     redact,
