@@ -2,69 +2,66 @@ import { useState, useMemo } from "react";
 import { Search, X, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { NoteItem, Note } from "./NoteItem";
-import { useDashboard } from "@/contexts/DashboardContext";
+import { NoteItem } from "./NoteItem";
+import { useDashboard, RecentNote } from "@/contexts/DashboardContext";
 import { StartNoteModal } from "./StartNoteModal";
 
-// Sample notes data representing completed session outcomes only
-const sampleNotes: Note[] = [
-  {
-    id: "1",
-    title: "Phone call re housing assistance",
-    interactionType: "phone-call",
-    status: "exported",
-    updatedAt: "1 hour ago",
-  },
-  {
-    id: "2",
-    title: "Follow-up on medical support",
-    interactionType: "in-person",
-    status: "saved",
-    updatedAt: "2 hours ago",
-  },
-  {
-    id: "3",
-    title: "Job placement discussion",
-    interactionType: "phone-call",
-    status: "exported",
-    updatedAt: "Yesterday",
-  },
-  {
-    id: "4",
-    title: "Shelter placement coordination",
-    interactionType: "collateral-contact",
-    status: "cancelled",
-    updatedAt: "Mar 25",
-  },
-  {
-    id: "5",
-    title: "Benefits enrollment call",
-    interactionType: "phone-call",
-    status: "saved",
-    updatedAt: "Mar 20",
-  },
-];
+// Format relative time from a Date
+function formatRelativeTime(date: Date): string {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSeconds = Math.floor(diffMs / 1000);
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  const diffHours = Math.floor(diffMinutes / 60);
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffSeconds < 60) {
+    return "Just now";
+  } else if (diffMinutes < 60) {
+    return `${diffMinutes} minute${diffMinutes === 1 ? "" : "s"} ago`;
+  } else if (diffHours < 24) {
+    return `${diffHours} hour${diffHours === 1 ? "" : "s"} ago`;
+  } else if (diffDays === 1) {
+    return "Yesterday";
+  } else if (diffDays < 7) {
+    return `${diffDays} days ago`;
+  } else {
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
+}
 
 export function NotesPanel() {
-  const { searchQuery } = useDashboard();
+  const { searchQuery, recentNotes } = useDashboard();
   const [localSearch, setLocalSearch] = useState("");
   const [startNoteOpen, setStartNoteOpen] = useState(false);
 
   // Combine global and local search
   const effectiveSearch = searchQuery || localSearch;
 
+  // Transform RecentNote to the format NoteItem expects, with relative time
+  const formattedNotes = useMemo(() => {
+    return recentNotes.map((note) => ({
+      id: note.id,
+      title: note.title,
+      interactionType: note.interactionType,
+      status: note.status,
+      updatedAt: formatRelativeTime(note.updatedAt),
+    }));
+  }, [recentNotes]);
+
   // Filter notes by title
   const filteredNotes = useMemo(() => {
     if (!effectiveSearch.trim()) {
-      return sampleNotes;
+      return formattedNotes;
     }
     const query = effectiveSearch.toLowerCase();
-    return sampleNotes.filter((note) =>
+    return formattedNotes.filter((note) =>
       note.title.toLowerCase().includes(query)
     );
-  }, [effectiveSearch]);
+  }, [effectiveSearch, formattedNotes]);
 
   const showNoResults = effectiveSearch.trim() && filteredNotes.length === 0;
+  const showEmpty = !effectiveSearch.trim() && filteredNotes.length === 0;
 
   return (
     <div className="w-[380px] flex-shrink-0 flex flex-col h-full overflow-hidden bg-card rounded-xl border border-border p-5">
@@ -104,7 +101,14 @@ export function NotesPanel() {
 
       {/* Notes List */}
       <div className="overflow-y-auto flex-1 min-h-0 -mx-5 px-5">
-        {showNoResults ? (
+        {showEmpty ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <p className="text-sm text-muted-foreground">No notes yet</p>
+            <p className="text-xs text-muted-foreground/70 mt-1">
+              Start a note session to see it here
+            </p>
+          </div>
+        ) : showNoResults ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <p className="text-sm text-muted-foreground">No notes found</p>
             <p className="text-xs text-muted-foreground/70 mt-1">
