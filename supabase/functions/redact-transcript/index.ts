@@ -949,7 +949,7 @@ async function nerRedactWithPresidio(
               count: remaining.length,
               counts: remainingTypeCounts,
               top_20_entities: remaining.slice(0, 20).map((x) => ({
-                entity_type: x.entity_type ?? x.entity,
+                entity_type: String(x.entity_type ?? x.entity ?? "UNKNOWN"),
                 start: x.start,
                 end: x.end,
                 score: x.score ?? x.confidence ?? x.analysis_explanation?.score,
