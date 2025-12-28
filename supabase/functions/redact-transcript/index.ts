@@ -930,6 +930,179 @@ async function nerRedactWithPresidio(
       remainingEntities = await runVerifyAnalyze("PRESIDIO_VERIFY_ANALYZE_2", presidioRedactedText);
     }
 
+    // ========== STEP 4: LEFTOVER CANDIDATE NAME SWEEP ==========
+    // Detect likely person-name tokens that Presidio missed and run a final anonymize pass
+    const COMMON_NON_NAMES = new Set([
+      // Days
+      "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+      // Months
+      "January", "February", "March", "April", "May", "June", "July", 
+      "August", "September", "October", "November", "December",
+      // Common words at sentence start
+      "I", "OK", "Yeah", "Yes", "No", "The", "This", "That", "There", "Here",
+      "What", "When", "Where", "Who", "Why", "How", "It", "We", "They", "He", "She",
+      "Well", "Right", "Good", "Sure", "Okay", "Great", "Just", "And", "But", "So",
+      // Family roles (not names)
+      "Mom", "Dad", "Mother", "Father", "Grandma", "Grandpa", "Grandmother", "Grandfather",
+      "Aunt", "Uncle", "Brother", "Sister", "Cousin", "Son", "Daughter", "Parent",
+      // Common nouns that appear capitalized
+      "Children", "Services", "Department", "Case", "Network", "Safety", "County",
+      "Court", "Judge", "Attorney", "Lawyer", "Worker", "Office", "Center", "Agency",
+      "Police", "Hospital", "School", "Doctor", "Nurse", "Teacher", "Manager",
+      // Acronyms / abbreviations
+      "DDS", "CPS", "DSS", "DCF", "DCFS", "HHS", "SSA", "SSI", "TANF", "SNAP",
+      // Misc
+      "Everything", "Nothing", "Something", "Anything", "Someone", "Everyone",
+      "Today", "Tomorrow", "Yesterday", "Morning", "Afternoon", "Evening", "Night",
+    ]);
+
+    // Helper to check if a position is inside a redaction tag
+    const isInsideTag = (pos: number, text: string): boolean => {
+      let depth = 0;
+      for (let i = 0; i < pos; i++) {
+        if (text[i] === '<') depth++;
+        else if (text[i] === '>') depth = Math.max(0, depth - 1);
+      }
+      return depth > 0;
+    };
+
+    // Regex to find candidate names: capitalized words 3+ chars
+    const candidateNameRegex = /\b[A-Z][a-z]{2,}(?:-[A-Z][a-z]{2,})?\b/g;
+    const candidateMatches: Array<{ token: string; start: number; end: number }> = [];
+    let match;
+
+    while ((match = candidateNameRegex.exec(presidioRedactedText)) !== null) {
+      candidateMatches.push({
+        token: match[0],
+        start: match.index,
+        end: match.index + match[0].length,
+      });
+    }
+
+    // Filter candidates
+    const extraSpans: Array<{ entity_type: string; start: number; end: number; score: number }> = [];
+    const excludedCandidates: string[] = [];
+
+    for (const candidate of candidateMatches) {
+      const { token, start, end } = candidate;
+
+      // Skip if in allowlist
+      if (COMMON_NON_NAMES.has(token)) {
+        excludedCandidates.push(token);
+        continue;
+      }
+
+      // Skip if it's a placeholder tag (starts with < or token looks like a tag)
+      if (token.startsWith("<") || presidioRedactedText.slice(start - 1, start) === "<") {
+        excludedCandidates.push(token);
+        continue;
+      }
+
+      // Skip if inside a redaction tag like <PERSON>
+      if (isInsideTag(start, presidioRedactedText)) {
+        excludedCandidates.push(token);
+        continue;
+      }
+
+      // Skip if preceded/followed by brackets indicating ID tags [CASE_ID]
+      const before = presidioRedactedText.slice(Math.max(0, start - 1), start);
+      const after = presidioRedactedText.slice(end, end + 1);
+      if (before === "[" || after === "]" || before === "<" || after === ">") {
+        excludedCandidates.push(token);
+        continue;
+      }
+
+      // Valid candidate - add as PERSON span
+      extraSpans.push({
+        entity_type: "PERSON",
+        start,
+        end,
+        score: 0.99,
+      });
+    }
+
+    // Deduplicate spans (same start/end)
+    const uniqueSpans = extraSpans.filter((span, idx, arr) => {
+      return arr.findIndex(s => s.start === span.start && s.end === span.end) === idx;
+    });
+
+    // Sort by start and remove overlaps (keep first/longest)
+    uniqueSpans.sort((a, b) => a.start - b.start);
+    const nonOverlappingSpans: typeof uniqueSpans = [];
+    for (const span of uniqueSpans) {
+      const last = nonOverlappingSpans[nonOverlappingSpans.length - 1];
+      if (!last || span.start >= last.end) {
+        nonOverlappingSpans.push(span);
+      }
+    }
+
+    // Log the sweep results
+    const sampleDetected = nonOverlappingSpans.slice(0, 10).map(s => ({
+      token: presidioRedactedText.slice(s.start, s.end),
+      start: s.start,
+      end: s.end,
+    }));
+
+    console.log(JSON.stringify({
+      event: "LEFTOVER_SWEEP_SUMMARY",
+      total_candidates_found: candidateMatches.length,
+      total_candidates_excluded: excludedCandidates.length,
+      total_spans_added: nonOverlappingSpans.length,
+      sample_detected: sampleDetected,
+    }));
+
+    await logEyeEvent(supabase, sessionId, "LEFTOVER_SWEEP_SUMMARY", {
+      total_candidates_found: candidateMatches.length,
+      total_candidates_excluded: excludedCandidates.length,
+      total_spans_added: nonOverlappingSpans.length,
+      sample_detected: sampleDetected,
+    });
+
+    // Run third anonymize pass if we found leftover candidates
+    if (nonOverlappingSpans.length > 0) {
+      console.log(`[L2] Running 3rd anonymize pass for ${nonOverlappingSpans.length} leftover name candidates`);
+
+      const thirdAnonymizePayload = {
+        text: presidioRedactedText,
+        analyzer_results: nonOverlappingSpans,
+        operators,
+      };
+
+      const controller3 = new AbortController();
+      const timeoutId3 = setTimeout(() => controller3.abort(), PRESIDIO_TIMEOUT_MS);
+
+      const { res: anonymize3Res, text: anonymize3Body, json: anonymize3Json } = await fetchWithLogs(
+        "PRESIDIO_ANONYMIZE_3_SWEEP",
+        anonymizeUrl,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(thirdAnonymizePayload),
+          signal: controller3.signal,
+        }
+      );
+
+      clearTimeout(timeoutId3);
+
+      if (!anonymize3Res.ok) {
+        console.error(`[L2] 3rd anonymize pass failed: HTTP ${anonymize3Res.status}`);
+        // Don't throw - continue with current text
+      } else {
+        const anonymize3Result = anonymize3Json as { text?: string; items?: unknown[] };
+        const newText = typeof anonymize3Result.text === "string" ? anonymize3Result.text : "";
+
+        if (newText && newText.trim().length > 0) {
+          presidioRedactedText = newText;
+          console.log(`[L2] 3rd anonymize pass succeeded, new text length: ${presidioRedactedText.length}`);
+        }
+      }
+
+      // Final verification
+      remainingEntities = await runVerifyAnalyze("PRESIDIO_VERIFY_ANALYZE_FINAL", presidioRedactedText);
+    } else {
+      console.log(JSON.stringify({ event: "LEFTOVER_SWEEP_NONE_FOUND" }));
+    }
+
     // Build verification result based on leftover entities
     const remaining = Array.isArray(remainingEntities) ? remainingEntities : [];
     const remainingTypeCounts = remaining.reduce<Record<string, number>>((acc, e) => {
