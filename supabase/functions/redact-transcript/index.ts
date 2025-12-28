@@ -157,6 +157,102 @@ function regexRedact(text: string): { text: string; counts: Partial<RedactionCou
 }
 
 // ============================================================
+// FALLBACK NAME DETECTION
+// Detects capitalized standalone names when Presidio misses them
+// ============================================================
+function detectFallbackNames(
+  text: string, 
+  existingEntities: Array<{ entity_type: string; start: number; end: number; score: number }>
+): Array<{ entity_type: string; start: number; end: number; score: number }> {
+  // Common first names that are often missed (expanded list)
+  const commonNames = new Set([
+    // Female names
+    "grace", "chelsea", "michelle", "lauren", "carol", "mary", "candy", "sarah", "jessica",
+    "ashley", "amanda", "stephanie", "jennifer", "elizabeth", "megan", "hannah", "emily",
+    "nicole", "rachel", "samantha", "rebecca", "victoria", "brittany", "christina", "amber",
+    "heather", "melissa", "tiffany", "crystal", "brenda", "linda", "barbara", "patricia",
+    "susan", "nancy", "lisa", "betty", "dorothy", "sandra", "ruth", "helen", "sharon",
+    "donna", "laura", "cynthia", "kathleen", "amy", "angela", "shirley", "anna", "karen",
+    // Male names
+    "paul", "michael", "david", "john", "james", "robert", "william", "richard", "joseph",
+    "thomas", "charles", "christopher", "daniel", "matthew", "anthony", "mark", "donald",
+    "steven", "andrew", "kenneth", "joshua", "kevin", "brian", "george", "timothy", "ronald",
+    "edward", "jason", "jeffrey", "ryan", "jacob", "gary", "nicholas", "eric", "jonathan",
+    "stephen", "larry", "justin", "scott", "brandon", "raymond", "samuel", "benjamin", "gregory",
+    "frank", "patrick", "alexander", "jack", "dennis", "jerry", "tyler", "aaron", "jose",
+    // Gender neutral / Additional
+    "alex", "jordan", "taylor", "morgan", "casey", "riley", "avery", "quinn", "cameron",
+  ]);
+
+  // Create a set of existing entity spans to avoid duplicates
+  const existingSpans = new Set(
+    existingEntities.map(e => `${e.start}-${e.end}`)
+  );
+
+  const fallbackEntities: Array<{ entity_type: string; start: number; end: number; score: number }> = [];
+  
+  // Pattern: standalone capitalized words that could be names
+  // Match word boundaries, capitalized words 2-15 chars
+  const namePattern = /\b([A-Z][a-z]{1,14})\b/g;
+  let match;
+  
+  while ((match = namePattern.exec(text)) !== null) {
+    const word = match[1];
+    const start = match.index;
+    const end = start + word.length;
+    const spanKey = `${start}-${end}`;
+    
+    // Skip if already detected by Presidio
+    if (existingSpans.has(spanKey)) continue;
+    
+    // Check if it overlaps with any existing entity
+    const overlaps = existingEntities.some(e => 
+      (start >= e.start && start < e.end) || (end > e.start && end <= e.end)
+    );
+    if (overlaps) continue;
+    
+    // Check if it's a known common name
+    const isKnownName = commonNames.has(word.toLowerCase());
+    
+    // Also check for repeated capitalized words (likely names in conversational context)
+    const wordLower = word.toLowerCase();
+    const occurrences = (text.toLowerCase().match(new RegExp(`\\b${wordLower}\\b`, "g")) || []).length;
+    const isRepeatedCapitalized = occurrences >= 2;
+    
+    // Skip common non-name words
+    const skipWords = new Set([
+      "the", "and", "but", "for", "not", "you", "all", "can", "had", "her", "was", "one",
+      "our", "out", "are", "his", "has", "have", "this", "will", "your", "from", "they",
+      "been", "have", "many", "some", "them", "these", "would", "there", "their", "what",
+      "about", "which", "when", "make", "like", "time", "just", "know", "take", "people",
+      "into", "year", "good", "could", "them", "than", "then", "look", "only", "come",
+      "over", "such", "also", "back", "after", "use", "two", "how", "first", "well",
+      "way", "even", "new", "want", "because", "any", "give", "day", "most", "us",
+      "okay", "yeah", "yes", "hey", "monday", "tuesday", "wednesday", "thursday", 
+      "friday", "saturday", "sunday", "january", "february", "march", "april", "may",
+      "june", "july", "august", "september", "october", "november", "december",
+      "department", "services", "agency", "office", "school", "hospital", "center",
+      "home", "work", "case", "report", "client", "family", "children", "child",
+      "mother", "father", "parent", "guardian", "worker", "caseworker", "supervisor",
+    ]);
+    
+    if (skipWords.has(wordLower)) continue;
+    
+    if (isKnownName || isRepeatedCapitalized) {
+      fallbackEntities.push({
+        entity_type: "PERSON",
+        start,
+        end,
+        score: isKnownName ? 0.6 : 0.4, // Higher confidence for known names
+      });
+      existingSpans.add(spanKey);
+    }
+  }
+
+  return fallbackEntities;
+}
+
+// ============================================================
 // LAYER 2: NER Redaction with Presidio (NO FALLBACK)
 // ============================================================
 
@@ -383,11 +479,22 @@ async function nerRedactWithPresidio(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), PRESIDIO_TIMEOUT_MS);
 
+    // Request all entity types with explicit inclusion of PERSON variants
+    // Use a lower score threshold for PERSON detection (0.3) to catch more names
     const analyzePayload = {
       text: text,
       language: "en",
-      entities: ["PERSON", "LOCATION", "ORGANIZATION", "DATE_TIME"],
+      entities: [
+        "PERSON",           // Standard person detection
+        "LOCATION", 
+        "ORGANIZATION", 
+        "DATE_TIME",
+        "NRP",              // Nationality, religious or political group
+      ],
+      score_threshold: 0.3, // Lower threshold for high recall on names
     };
+
+    console.log(`[L2] Analyzer payload: entities=${analyzePayload.entities.join(",")}, score_threshold=${analyzePayload.score_threshold}`);
 
     const analyzeResponse = await fetch(analyzeUrl, {
       method: "POST",
@@ -428,7 +535,11 @@ async function nerRedactWithPresidio(
     }
 
     entities = JSON.parse(analyzeBody);
-    console.log(`[L2] Analyzer found ${entities.length} entities`);
+    
+    // Log entity breakdown for debugging
+    const personCount = entities.filter(e => e.entity_type === "PERSON").length;
+    const locationCount = entities.filter(e => e.entity_type === "LOCATION").length;
+    console.log(`[L2] Analyzer found ${entities.length} entities total: ${personCount} PERSON, ${locationCount} LOCATION`);
 
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
@@ -457,7 +568,27 @@ async function nerRedactWithPresidio(
     };
   }
 
-  // If no entities found, return original text
+  // ========== FALLBACK NAME DETECTION ==========
+  // If Presidio found suspiciously few PERSON entities, run fallback detection
+  const personEntities = entities.filter(e => e.entity_type === "PERSON");
+  const personCount = personEntities.length;
+  
+  if (personCount <= 2) {
+    console.log(`[L2] Low PERSON count (${personCount}) - running fallback name detection`);
+    const fallbackEntities = detectFallbackNames(text, entities);
+    
+    if (fallbackEntities.length > 0) {
+      console.log(`[L2] Fallback detected ${fallbackEntities.length} additional names`);
+      entities = [...entities, ...fallbackEntities];
+      
+      await logEyeEvent(supabase, sessionId, "FALLBACK_NAME_DETECTION", {
+        original_person_count: personCount,
+        fallback_count: fallbackEntities.length,
+      });
+    }
+  }
+
+  // If still no entities found after fallback, return original text
   if (entities.length === 0) {
     console.log("[L2] No entities found - returning original text");
     await logEyeEvent(supabase, sessionId, "NER_REDACTION_COMPLETED", {
@@ -590,11 +721,81 @@ async function nerRedactWithPresidio(
 
 // ============================================================
 // LAYER 3: LLM Verification (Classifier only, no rewriting)
+// Enhanced to detect leftover names more aggressively
 // ============================================================
+
+// Pre-LLM check for obvious leftover names
+function checkForLeftoverNames(text: string): string[] {
+  const categories: string[] = [];
+  
+  // Common first names that should be redacted
+  const commonNames = new Set([
+    "grace", "chelsea", "michelle", "lauren", "carol", "mary", "candy", "sarah", "jessica",
+    "ashley", "amanda", "stephanie", "jennifer", "elizabeth", "paul", "michael", "david",
+    "john", "james", "robert", "william", "richard", "joseph", "thomas", "charles",
+  ]);
+  
+  // Pattern: Capitalized words that are known names and NOT inside brackets
+  const namePattern = /\b([A-Z][a-z]{1,14})\b/g;
+  let match;
+  const foundNames: string[] = [];
+  
+  while ((match = namePattern.exec(text)) !== null) {
+    const word = match[1];
+    const position = match.index;
+    
+    // Check if this is inside a redaction bracket like [PERSON] or <PERSON>
+    const beforeText = text.slice(Math.max(0, position - 20), position);
+    const afterText = text.slice(position + word.length, position + word.length + 5);
+    const isInsideBracket = (beforeText.includes("[") && afterText.includes("]")) ||
+                            (beforeText.includes("<") && afterText.includes(">"));
+    
+    if (!isInsideBracket && commonNames.has(word.toLowerCase())) {
+      foundNames.push(word);
+    }
+  }
+  
+  if (foundNames.length > 0) {
+    console.log(`[L3] Pre-check found ${foundNames.length} potential leftover names: ${foundNames.slice(0, 5).join(", ")}`);
+    categories.push("PERSON");
+  }
+  
+  // Check for repeated capitalized tokens (likely names in conversation)
+  const capitalizedWords: Record<string, number> = {};
+  const capPattern = /\b([A-Z][a-z]{2,14})\b/g;
+  
+  while ((match = capPattern.exec(text)) !== null) {
+    const word = match[1];
+    const position = match.index;
+    
+    // Skip if inside brackets
+    const beforeText = text.slice(Math.max(0, position - 5), position);
+    if (beforeText.includes("[") || beforeText.includes("<")) continue;
+    
+    capitalizedWords[word] = (capitalizedWords[word] || 0) + 1;
+  }
+  
+  // Words that appear 3+ times capitalized are suspicious
+  const repeatedNames = Object.entries(capitalizedWords)
+    .filter(([_, count]) => count >= 3)
+    .map(([word, _]) => word);
+  
+  if (repeatedNames.length > 0 && !categories.includes("PERSON")) {
+    console.log(`[L3] Pre-check found repeated capitalized words: ${repeatedNames.join(", ")}`);
+    categories.push("PERSON");
+  }
+  
+  return categories;
+}
+
 async function verifyWithLLM(
   text: string,
   openAIApiKey: string
 ): Promise<{ status: "PASS" | "FAIL"; categories?: string[] }> {
+  
+  // First run pre-LLM pattern check for obvious leftover names
+  const preCheckCategories = checkForLeftoverNames(text);
+  
   const systemPrompt = `You are a PHI/PII verification classifier. Your ONLY job is to determine if the provided text still contains potentially identifying information.
 
 You must respond with ONLY a JSON object in this exact format:
@@ -602,56 +803,93 @@ You must respond with ONLY a JSON object in this exact format:
 
 Valid categories: PERSON, LOCATION, CONTACT, ID, DATE, ORGANIZATION, ADDRESS, MEDICAL_ID, SSN
 
-Rules:
-- If text contains [REDACTED] style placeholders (like [EMAIL], [PHONE], [SSN], [PERSON_1], etc.), those are SAFE and should NOT be flagged
-- Only flag ACTUAL identifying information that was NOT redacted
-- Be conservative: if unsure, flag it
-- Do NOT rewrite or modify the text
-- Do NOT explain your reasoning
-- ONLY output the JSON object`;
+CRITICAL RULES for PERSON detection:
+- First names (Grace, Chelsea, Paul, Michelle, etc.) are PERSON identifiers and MUST be flagged
+- Names appearing multiple times throughout the text are especially important to flag
+- Short names (2-5 letters) are still PERSON identifiers
+- Names used in conversation context ("hi Grace", "okay Chelsea") are PERSON identifiers
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${openAIApiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: `Analyze this text for remaining PHI/PII:\n\n${text}` },
-      ],
-      temperature: 0,
-      max_tokens: 200,
-    }),
-  });
+SAFE patterns (do NOT flag):
+- [REDACTED] style placeholders like [EMAIL], [PHONE], [SSN], [PERSON], [LOCATION], <PERSON>, etc.
+- Role descriptions like "the client", "the caseworker", "the supervisor"
+- Generic references like "the child", "the parent", "the worker"
 
-  if (!response.ok) {
-    console.error("LLM verification failed:", response.status);
-    // On LLM failure, default to FAIL to force review
-    return { status: "FAIL", categories: ["UNKNOWN"] };
-  }
+UNSAFE patterns (MUST flag):
+- Any actual first or last names (Grace, Chelsea, Smith, Johnson, etc.)
+- Names with titles (Mr. Smith, Ms. Johnson)
+- Nicknames or informal names
 
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content || "";
+Be AGGRESSIVE about flagging PERSON - it's better to have false positives than miss names.
+Do NOT rewrite or modify the text.
+Do NOT explain your reasoning.
+ONLY output the JSON object.`;
 
   try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${openAIApiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: `Analyze this text for remaining PHI/PII:\n\n${text}` },
+        ],
+        temperature: 0,
+        max_tokens: 200,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error("LLM verification failed:", response.status);
+      // On LLM failure, include pre-check results and default to FAIL
+      const fallbackCategories = preCheckCategories.length > 0 ? preCheckCategories : ["UNKNOWN"];
+      return { status: "FAIL", categories: fallbackCategories };
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || "";
+
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
+      
+      // Merge LLM results with pre-check results
+      let finalCategories: string[] = [];
+      
       if (parsed.contains_phi === true) {
+        finalCategories = parsed.categories || [];
+      }
+      
+      // Add pre-check categories that weren't in LLM result
+      for (const cat of preCheckCategories) {
+        if (!finalCategories.includes(cat)) {
+          finalCategories.push(cat);
+        }
+      }
+      
+      if (finalCategories.length > 0) {
         return {
           status: "FAIL",
-          categories: parsed.categories || [],
+          categories: finalCategories,
         };
       }
+      
+      return { status: "PASS" };
     }
-    return { status: "PASS" };
+    
+    // Parse error - use pre-check results
+    console.error("Failed to parse LLM verification response");
+    const fallbackCategories = preCheckCategories.length > 0 ? preCheckCategories : ["PARSE_ERROR"];
+    return { status: "FAIL", categories: fallbackCategories };
+    
   } catch (e) {
-    console.error("Failed to parse LLM verification response:", e);
-    // Default to FAIL on parse error to be safe
-    return { status: "FAIL", categories: ["PARSE_ERROR"] };
+    console.error("Failed to call LLM verification:", e);
+    // Default to FAIL on error, include pre-check results
+    const fallbackCategories = preCheckCategories.length > 0 ? preCheckCategories : ["PARSE_ERROR"];
+    return { status: "FAIL", categories: fallbackCategories };
   }
 }
 
