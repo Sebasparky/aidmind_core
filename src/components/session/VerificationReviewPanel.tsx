@@ -27,6 +27,8 @@ interface Layer2Error {
   reason: string;
   detail: string;
   url?: string;
+  analyzer_url?: string;
+  anonymizer_url?: string;
 }
 
 interface VerificationReviewPanelProps {
@@ -122,6 +124,9 @@ export function VerificationReviewPanel({
   const getLayer2Badge = () => {
     if (!layer2Status) return null;
     
+    const error = layerStatus?.layer2?.error;
+    const reason = error?.reason || "";
+    
     const statusConfig: Record<string, { label: string; className: string }> = {
       "COMPLETED": { 
         label: "Layer 2: COMPLETED", 
@@ -140,7 +145,9 @@ export function VerificationReviewPanel({
         className: "text-red-600 border-red-600 bg-red-50 dark:bg-red-950/30 dark:text-red-400" 
       },
       "SKIPPED_CONFIG_MISSING": { 
-        label: "Layer 2: SKIPPED (not configured)", 
+        label: reason === "misconfigured_env" 
+          ? "Layer 2: FAILED (misconfigured)" 
+          : "Layer 2: SKIPPED (not configured)", 
         className: "text-amber-600 border-amber-600 bg-amber-50 dark:bg-amber-950/30 dark:text-amber-400" 
       },
       "SKIPPED": { 
@@ -239,8 +246,15 @@ export function VerificationReviewPanel({
                 {/* Show detailed error info */}
                 {layerStatus?.layer2?.error && (
                   <div className="mt-2 p-2 rounded bg-amber-100 dark:bg-amber-900/40 font-mono text-xs break-all">
-                    <p><strong>Error:</strong> {layerStatus.layer2.error.detail}</p>
-                    {layerStatus.layer2.error.url && (
+                    <p><strong>Reason:</strong> {layerStatus.layer2.error.reason}</p>
+                    <p className="mt-1"><strong>Detail:</strong> {layerStatus.layer2.error.detail}</p>
+                    {layerStatus.layer2.error.analyzer_url && (
+                      <p className="mt-1"><strong>Analyzer URL:</strong> {layerStatus.layer2.error.analyzer_url}</p>
+                    )}
+                    {layerStatus.layer2.error.anonymizer_url && (
+                      <p className="mt-1"><strong>Anonymizer URL:</strong> {layerStatus.layer2.error.anonymizer_url}</p>
+                    )}
+                    {layerStatus.layer2.error.url && !layerStatus.layer2.error.analyzer_url && (
                       <p className="mt-1"><strong>URL:</strong> {layerStatus.layer2.error.url}</p>
                     )}
                   </div>

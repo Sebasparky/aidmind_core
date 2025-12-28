@@ -35,9 +35,11 @@ interface RedactionCounts {
 type Layer2Status = "COMPLETED" | "FAILED_UNREACHABLE" | "FAILED_TIMEOUT" | "FAILED_ERROR" | "SKIPPED_CONFIG_MISSING" | "SKIPPED";
 
 interface Layer2Error {
-  reason: "missing_env_var" | "invalid_url_for_edge" | "unreachable" | "timeout" | "http_error" | "service_unhealthy" | "unknown";
+  reason: "missing_env_var" | "misconfigured_env" | "invalid_url_for_edge" | "unreachable" | "timeout" | "http_error" | "service_unhealthy" | "unknown";
   detail: string;
   url?: string;
+  analyzer_url?: string;
+  anonymizer_url?: string;
 }
 
 interface LayerStatus {
@@ -164,8 +166,59 @@ interface PresidioResponse {
   spans: Array<{ entity_type: string; start: number; end: number }>;
 }
 
-// Check if Presidio service is configured and healthy
-async function checkPresidioHealth(presidioUrl: string): Promise<{ healthy: boolean; error?: Layer2Error }> {
+// Validate a URL for use in Edge Functions
+function validatePresidioUrl(url: string | undefined, envVarName: string): { valid: boolean; error?: Layer2Error } {
+  if (!url) {
+    return {
+      valid: false,
+      error: {
+        reason: "missing_env_var",
+        detail: `${envVarName} environment variable is not configured in Supabase secrets`,
+      },
+    };
+  }
+  
+  // Check for placeholder characters like < or >
+  if (url.includes("<") || url.includes(">")) {
+    return {
+      valid: false,
+      error: {
+        reason: "misconfigured_env",
+        detail: `${envVarName} contains placeholder characters (< or >). Please set a real URL, not a template like 'https://<host>:8001'. Current value: ${url.slice(0, 80)}`,
+        url: url,
+      },
+    };
+  }
+  
+  // Check for proper protocol
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    return {
+      valid: false,
+      error: {
+        reason: "misconfigured_env",
+        detail: `${envVarName} must start with http:// or https://. Current value: ${url.slice(0, 80)}`,
+        url: url,
+      },
+    };
+  }
+  
+  // Check for localhost - Edge Functions cannot reach localhost
+  if (url.includes("localhost") || url.includes("127.0.0.1")) {
+    return {
+      valid: false,
+      error: {
+        reason: "invalid_url_for_edge",
+        detail: `${envVarName} cannot use localhost or 127.0.0.1. Edge Functions require a publicly accessible endpoint. Current value: ${url}`,
+        url: url,
+      },
+    };
+  }
+  
+  return { valid: true };
+}
+
+// Check if Presidio analyzer service is healthy
+async function checkPresidioHealth(analyzerUrl: string): Promise<{ healthy: boolean; error?: Layer2Error }> {
   const now = Date.now();
   
   // Return cached result if still valid
@@ -174,7 +227,8 @@ async function checkPresidioHealth(presidioUrl: string): Promise<{ healthy: bool
     return { healthy: presidioHealthy };
   }
   
-  const healthUrl = `${presidioUrl}/health`;
+  // Presidio Analyzer health endpoint
+  const healthUrl = `${analyzerUrl}/health`;
   console.log(`[Presidio] Health check URL: ${healthUrl}`);
   
   try {
@@ -188,9 +242,10 @@ async function checkPresidioHealth(presidioUrl: string): Promise<{ healthy: bool
     
     clearTimeout(timeoutId);
     
+    console.log(`[Presidio] Health check status: ${response.status}`);
+    
     if (response.ok) {
-      const data = await response.json();
-      presidioHealthy = data.status === "ok";
+      presidioHealthy = true;
       presidioHealthCheckedAt = now;
       console.log(`[Presidio] Health check passed`);
       return { healthy: true };
@@ -240,16 +295,19 @@ async function nerRedactWithPresidio(
 }> {
   
   // ========== ENV VAR CHECK ==========
-  const presidioUrl = Deno.env.get("PRESIDIO_SERVICE_URL");
+  const analyzerUrl = Deno.env.get("PRESIDIO_ANALYZER_URL");
+  const anonymizerUrl = Deno.env.get("PRESIDIO_ANONYMIZER_URL");
   
-  console.log("[L2] PRESIDIO_SERVICE_URL:", presidioUrl || "(not set)");
-  console.log("[L2] url_present:", !!presidioUrl);
-  console.log("[L2] url_ok:", presidioUrl ? presidioUrl.startsWith("http") : false);
+  console.log("[L2] PRESIDIO_ANALYZER_URL:", analyzerUrl || "(not set)");
+  console.log("[L2] PRESIDIO_ANONYMIZER_URL:", anonymizerUrl || "(not set)");
   
-  if (!presidioUrl) {
-    console.warn("[L2] PRESIDIO_SERVICE_URL not configured - Layer 2 skipped");
+  // Validate Analyzer URL
+  const analyzerValidation = validatePresidioUrl(analyzerUrl, "PRESIDIO_ANALYZER_URL");
+  if (!analyzerValidation.valid) {
+    console.warn(`[L2] Analyzer URL validation failed: ${analyzerValidation.error?.detail}`);
     await logEyeEvent(supabase, sessionId, "NER_REDACTION_SKIPPED", {
-      reason_code: "config_missing",
+      reason_code: analyzerValidation.error?.reason || "config_missing",
+      env_var: "PRESIDIO_ANALYZER_URL",
     });
     
     return {
@@ -258,59 +316,45 @@ async function nerRedactWithPresidio(
       layer2Status: "SKIPPED_CONFIG_MISSING",
       method: "none",
       error: {
-        reason: "missing_env_var",
-        detail: "PRESIDIO_SERVICE_URL environment variable is not configured in Supabase secrets",
+        ...analyzerValidation.error!,
+        analyzer_url: analyzerUrl || undefined,
+        anonymizer_url: anonymizerUrl || undefined,
       },
     };
   }
   
-  // ========== URL VALIDATION ==========
-  if (!presidioUrl.startsWith("http://") && !presidioUrl.startsWith("https://")) {
-    console.warn("[L2] Invalid URL format - must start with http:// or https://");
-    await logEyeEvent(supabase, sessionId, "NER_REDACTION_FAILED", {
-      reason_code: "invalid_url",
+  // Validate Anonymizer URL
+  const anonymizerValidation = validatePresidioUrl(anonymizerUrl, "PRESIDIO_ANONYMIZER_URL");
+  if (!anonymizerValidation.valid) {
+    console.warn(`[L2] Anonymizer URL validation failed: ${anonymizerValidation.error?.detail}`);
+    await logEyeEvent(supabase, sessionId, "NER_REDACTION_SKIPPED", {
+      reason_code: anonymizerValidation.error?.reason || "config_missing",
+      env_var: "PRESIDIO_ANONYMIZER_URL",
     });
     
     return {
       text: text,
       counts: { person: 0, location: 0, organization: 0, date: 0 },
-      layer2Status: "FAILED_ERROR",
+      layer2Status: "SKIPPED_CONFIG_MISSING",
       method: "none",
       error: {
-        reason: "invalid_url_for_edge",
-        detail: `URL must start with http:// or https://. Got: ${presidioUrl.slice(0, 50)}`,
-        url: presidioUrl,
-      },
-    };
-  }
-  
-  // Check for localhost - Edge Functions cannot reach localhost
-  if (presidioUrl.includes("localhost") || presidioUrl.includes("127.0.0.1")) {
-    console.warn("[L2] URL contains localhost - Edge Functions cannot reach localhost");
-    await logEyeEvent(supabase, sessionId, "NER_REDACTION_FAILED", {
-      reason_code: "invalid_url_localhost",
-    });
-    
-    return {
-      text: text,
-      counts: { person: 0, location: 0, organization: 0, date: 0 },
-      layer2Status: "FAILED_ERROR",
-      method: "none",
-      error: {
-        reason: "invalid_url_for_edge",
-        detail: "Edge Functions cannot reach localhost or 127.0.0.1. Deploy Presidio to a publicly accessible endpoint.",
-        url: presidioUrl,
+        ...anonymizerValidation.error!,
+        analyzer_url: analyzerUrl || undefined,
+        anonymizer_url: anonymizerUrl || undefined,
       },
     };
   }
 
   // Emit NER_REDACTION_STARTED
-  await logEyeEvent(supabase, sessionId, "NER_REDACTION_STARTED", {});
+  await logEyeEvent(supabase, sessionId, "NER_REDACTION_STARTED", {
+    analyzer_url: analyzerUrl,
+    anonymizer_url: anonymizerUrl,
+  });
 
-  // ========== HEALTH CHECK ==========
-  const healthResult = await checkPresidioHealth(presidioUrl);
+  // ========== HEALTH CHECK (Analyzer) ==========
+  const healthResult = await checkPresidioHealth(analyzerUrl!);
   if (!healthResult.healthy) {
-    console.warn("[L2] Presidio service unhealthy - Layer 2 failed");
+    console.warn("[L2] Presidio Analyzer service unhealthy - Layer 2 failed");
     await logEyeEvent(supabase, sessionId, "NER_REDACTION_FAILED", {
       reason_code: "service_unhealthy",
     });
@@ -322,132 +366,226 @@ async function nerRedactWithPresidio(
       method: "none",
       error: healthResult.error || {
         reason: "service_unhealthy",
-        detail: "Presidio health check failed",
-        url: presidioUrl,
+        detail: "Presidio Analyzer health check failed",
+        analyzer_url: analyzerUrl,
+        anonymizer_url: anonymizerUrl,
       },
     };
   }
 
-  // ========== REDACT CALL ==========
-  const redactUrl = `${presidioUrl}/redact-ner`;
-  let lastError: Layer2Error | null = null;
+  // ========== STEP 1: ANALYZE ==========
+  const analyzeUrl = `${analyzerUrl}/analyze`;
+  console.log(`[L2] Calling Presidio Analyzer: ${analyzeUrl}`);
   
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    console.log(`[L2] Attempt ${attempt}: calling ${redactUrl}`);
+  let entities: Array<{ entity_type: string; start: number; end: number; score: number }> = [];
+  
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), PRESIDIO_TIMEOUT_MS);
+
+    const analyzePayload = {
+      text: text,
+      language: "en",
+      entities: ["PERSON", "LOCATION", "ORGANIZATION", "DATE_TIME"],
+    };
+
+    const analyzeResponse = await fetch(analyzeUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(analyzePayload),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
     
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), PRESIDIO_TIMEOUT_MS);
+    console.log(`[L2] Analyzer status: ${analyzeResponse.status}`);
+    
+    const analyzeBody = await analyzeResponse.text();
+    console.log(`[L2] Analyzer response (first 500): ${analyzeBody.slice(0, 500)}`);
 
-      const payload = {
-        session_id: sessionId,
-        text: text,
-        language: "en",
-        entities: ["PERSON", "LOCATION", "ORGANIZATION", "DATE"],
+    if (!analyzeResponse.ok) {
+      const error: Layer2Error = {
+        reason: "http_error",
+        detail: `Presidio Analyzer returned HTTP ${analyzeResponse.status}: ${analyzeBody.slice(0, 200)}`,
+        url: analyzeUrl,
+        analyzer_url: analyzerUrl,
+        anonymizer_url: anonymizerUrl,
       };
-
-      const response = await fetch(redactUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
+      console.warn(`[L2] Analyzer HTTP error: ${error.detail}`);
+      
+      await logEyeEvent(supabase, sessionId, "NER_REDACTION_FAILED", {
+        reason_code: "analyzer_http_error",
+        status: analyzeResponse.status,
       });
-
-      clearTimeout(timeoutId);
       
-      console.log(`[L2] status: ${response.status}`);
-      
-      const bodyText = await response.text();
-      console.log(`[L2] body (first 300): ${bodyText.slice(0, 300)}`);
-
-      if (!response.ok) {
-        lastError = {
-          reason: "http_error",
-          detail: `Presidio returned HTTP ${response.status}: ${bodyText.slice(0, 200)}`,
-          url: redactUrl,
-        };
-        console.warn(`[L2] HTTP error on attempt ${attempt}: ${lastError.detail}`);
-        if (attempt < 2) continue;
-        throw new Error(lastError.detail);
-      }
-
-      // Parse the response
-      const data: PresidioResponse = JSON.parse(bodyText);
-
-      const counts: Partial<RedactionCounts> = {
-        person: data.counts.PERSON || 0,
-        location: data.counts.LOCATION || 0,
-        organization: data.counts.ORGANIZATION || 0,
-        date: data.counts.DATE || 0,
-      };
-
-      console.log(`[L2] Presidio NER completed: ${JSON.stringify(counts)}`);
-      
-      await logEyeEvent(supabase, sessionId, "NER_REDACTION_COMPLETED", {
-        counts,
-        method: "presidio",
-      });
-
       return {
-        text: data.redacted_text,
-        counts,
-        layer2Status: "COMPLETED",
-        method: "presidio",
+        text: text,
+        counts: { person: 0, location: 0, organization: 0, date: 0 },
+        layer2Status: "FAILED_ERROR",
+        method: "none",
+        error,
       };
+    }
 
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      console.error(`[L2] fetch error on attempt ${attempt}: ${err.name} - ${err.message}`);
-      if (err.stack) console.error(`[L2] stack: ${err.stack}`);
+    entities = JSON.parse(analyzeBody);
+    console.log(`[L2] Analyzer found ${entities.length} entities`);
+
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    console.error(`[L2] Analyzer fetch error: ${err.name} - ${err.message}`);
+    if (err.stack) console.error(`[L2] Analyzer stack: ${err.stack}`);
+    
+    const isTimeout = err.name === "AbortError";
+    const layer2Error: Layer2Error = {
+      reason: isTimeout ? "timeout" : "unreachable",
+      detail: `Analyzer: ${err.name}: ${err.message}`,
+      url: analyzeUrl,
+      analyzer_url: analyzerUrl,
+      anonymizer_url: anonymizerUrl,
+    };
+    
+    await logEyeEvent(supabase, sessionId, "NER_REDACTION_FAILED", {
+      reason_code: isTimeout ? "analyzer_timeout" : "analyzer_unreachable",
+    });
+    
+    return {
+      text: text,
+      counts: { person: 0, location: 0, organization: 0, date: 0 },
+      layer2Status: isTimeout ? "FAILED_TIMEOUT" : "FAILED_UNREACHABLE",
+      method: "none",
+      error: layer2Error,
+    };
+  }
+
+  // If no entities found, return original text
+  if (entities.length === 0) {
+    console.log("[L2] No entities found - returning original text");
+    await logEyeEvent(supabase, sessionId, "NER_REDACTION_COMPLETED", {
+      counts: { person: 0, location: 0, organization: 0, date: 0 },
+      method: "presidio",
+      entities_found: 0,
+    });
+    
+    return {
+      text: text,
+      counts: { person: 0, location: 0, organization: 0, date: 0 },
+      layer2Status: "COMPLETED",
+      method: "presidio",
+    };
+  }
+
+  // ========== STEP 2: ANONYMIZE ==========
+  const anonymizeUrl = `${anonymizerUrl}/anonymize`;
+  console.log(`[L2] Calling Presidio Anonymizer: ${anonymizeUrl}`);
+  
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), PRESIDIO_TIMEOUT_MS);
+
+    // Build anonymizer operators for deterministic replacement
+    const operators: Record<string, { type: string; new_value?: string }> = {
+      PERSON: { type: "replace", new_value: "[PERSON]" },
+      LOCATION: { type: "replace", new_value: "[LOCATION]" },
+      ORGANIZATION: { type: "replace", new_value: "[ORG]" },
+      DATE_TIME: { type: "replace", new_value: "[DATE]" },
+    };
+
+    const anonymizePayload = {
+      text: text,
+      analyzer_results: entities,
+      operators: operators,
+    };
+
+    const anonymizeResponse = await fetch(anonymizeUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(anonymizePayload),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+    
+    console.log(`[L2] Anonymizer status: ${anonymizeResponse.status}`);
+    
+    const anonymizeBody = await anonymizeResponse.text();
+    console.log(`[L2] Anonymizer response (first 500): ${anonymizeBody.slice(0, 500)}`);
+
+    if (!anonymizeResponse.ok) {
+      const error: Layer2Error = {
+        reason: "http_error",
+        detail: `Presidio Anonymizer returned HTTP ${anonymizeResponse.status}: ${anonymizeBody.slice(0, 200)}`,
+        url: anonymizeUrl,
+        analyzer_url: analyzerUrl,
+        anonymizer_url: anonymizerUrl,
+      };
+      console.warn(`[L2] Anonymizer HTTP error: ${error.detail}`);
       
-      if (err.name === "AbortError") {
-        lastError = {
-          reason: "timeout",
-          detail: `Request timed out after ${PRESIDIO_TIMEOUT_MS}ms`,
-          url: redactUrl,
-        };
-        console.warn(`[L2] Timeout on attempt ${attempt}`);
-        if (attempt < 2) continue;
-      } else {
-        lastError = {
-          reason: "unreachable",
-          detail: `${err.name}: ${err.message}`,
-          url: redactUrl,
-        };
-        if (attempt < 2) continue;
-      }
+      await logEyeEvent(supabase, sessionId, "NER_REDACTION_FAILED", {
+        reason_code: "anonymizer_http_error",
+        status: anonymizeResponse.status,
+      });
+      
+      return {
+        text: text,
+        counts: { person: 0, location: 0, organization: 0, date: 0 },
+        layer2Status: "FAILED_ERROR",
+        method: "none",
+        error,
+      };
     }
-  }
 
-  // ========== BOTH ATTEMPTS FAILED ==========
-  let layer2Status: Layer2Status = "FAILED_ERROR";
-  
-  if (lastError) {
-    if (lastError.reason === "timeout") {
-      layer2Status = "FAILED_TIMEOUT";
-    } else if (lastError.reason === "unreachable") {
-      layer2Status = "FAILED_UNREACHABLE";
-    }
+    const anonymizeResult = JSON.parse(anonymizeBody);
+    const redactedText = anonymizeResult.text;
+    
+    // Count entities by type
+    const counts: Partial<RedactionCounts> = {
+      person: entities.filter(e => e.entity_type === "PERSON").length,
+      location: entities.filter(e => e.entity_type === "LOCATION").length,
+      organization: entities.filter(e => e.entity_type === "ORGANIZATION").length,
+      date: entities.filter(e => e.entity_type === "DATE_TIME").length,
+    };
+
+    console.log(`[L2] Presidio NER completed: ${JSON.stringify(counts)}`);
+    
+    await logEyeEvent(supabase, sessionId, "NER_REDACTION_COMPLETED", {
+      counts,
+      method: "presidio",
+      entities_found: entities.length,
+    });
+
+    return {
+      text: redactedText,
+      counts,
+      layer2Status: "COMPLETED",
+      method: "presidio",
+    };
+
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    console.error(`[L2] Anonymizer fetch error: ${err.name} - ${err.message}`);
+    if (err.stack) console.error(`[L2] Anonymizer stack: ${err.stack}`);
+    
+    const isTimeout = err.name === "AbortError";
+    const layer2Error: Layer2Error = {
+      reason: isTimeout ? "timeout" : "unreachable",
+      detail: `Anonymizer: ${err.name}: ${err.message}`,
+      url: anonymizeUrl,
+      analyzer_url: analyzerUrl,
+      anonymizer_url: anonymizerUrl,
+    };
+    
+    await logEyeEvent(supabase, sessionId, "NER_REDACTION_FAILED", {
+      reason_code: isTimeout ? "anonymizer_timeout" : "anonymizer_unreachable",
+    });
+    
+    return {
+      text: text,
+      counts: { person: 0, location: 0, organization: 0, date: 0 },
+      layer2Status: isTimeout ? "FAILED_TIMEOUT" : "FAILED_UNREACHABLE",
+      method: "none",
+      error: layer2Error,
+    };
   }
-  
-  console.warn(`[L2] Presidio failed after retries - status: ${layer2Status}`);
-  
-  await logEyeEvent(supabase, sessionId, "NER_REDACTION_FAILED", {
-    reason_code: lastError?.reason || "unknown",
-    error: lastError?.detail,
-  });
-  
-  return {
-    text: text,
-    counts: { person: 0, location: 0, organization: 0, date: 0 },
-    layer2Status,
-    method: "none",
-    error: lastError || {
-      reason: "unknown",
-      detail: "Unknown error during Presidio NER",
-      url: presidioUrl,
-    },
-  };
 }
 
 // ============================================================

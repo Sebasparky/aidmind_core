@@ -33,9 +33,11 @@ export type Layer2StatusType =
   | "SKIPPED";
 
 export interface Layer2Error {
-  reason: "missing_env_var" | "invalid_url_for_edge" | "unreachable" | "timeout" | "http_error" | "service_unhealthy" | "unknown";
+  reason: "missing_env_var" | "misconfigured_env" | "invalid_url_for_edge" | "unreachable" | "timeout" | "http_error" | "service_unhealthy" | "unknown";
   detail: string;
   url?: string;
+  analyzer_url?: string;
+  anonymizer_url?: string;
 }
 
 export interface LayerStatus {
