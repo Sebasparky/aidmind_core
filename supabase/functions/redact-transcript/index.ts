@@ -538,6 +538,15 @@ async function nerRedactWithPresidio(
   layer2Status: Layer2Status;
   method: "presidio" | "none";
   error?: Layer2Error;
+  verification?: {
+    status: "PASS" | "FAIL";
+    categories?: string[];
+    remaining?: {
+      count: number;
+      counts: Record<string, number>;
+      top_20_entities: Array<{ entity_type: string; start: number; end: number; score?: number }>;
+    };
+  };
 }> {
   
   // ========== ENV VAR CHECK ==========
@@ -765,10 +774,11 @@ async function nerRedactWithPresidio(
 
     // Build anonymizer operators for deterministic replacement
     const operators: Record<string, { type: string; new_value?: string }> = {
-      PERSON: { type: "replace", new_value: "[PERSON]" },
-      LOCATION: { type: "replace", new_value: "[LOCATION]" },
-      ORGANIZATION: { type: "replace", new_value: "[ORG]" },
-      DATE_TIME: { type: "replace", new_value: "[DATE]" },
+      PERSON: { type: "replace", new_value: "<PERSON>" },
+      LOCATION: { type: "replace", new_value: "<LOCATION>" },
+      ORGANIZATION: { type: "replace", new_value: "<ORGANIZATION>" },
+      DATE_TIME: { type: "replace", new_value: "<DATE_TIME>" },
+      NRP: { type: "replace", new_value: "<NRP>" },
     };
 
     const anonymizePayload = {
@@ -815,19 +825,148 @@ async function nerRedactWithPresidio(
       };
     }
 
-    const anonymizeResult = anonymizeJson as { text: string; items?: unknown[] };
-    const redactedText = anonymizeResult.text;
-    
-    // Count entities by type
+    const anonymizeResult = anonymizeJson as { text?: string; items?: unknown[] };
+    let presidioRedactedText = typeof anonymizeResult.text === "string" ? anonymizeResult.text : "";
+
+    // HARD CHECKS: ensure we never accidentally return the un-redacted text
+    if (!presidioRedactedText || presidioRedactedText.trim().length === 0) {
+      console.error("[L2] ERROR: Presidio anonymizer returned empty text");
+      throw new Error("PRESIDIO_REDACTED_TEXT_EMPTY");
+    }
+
+    if (presidioRedactedText === text && entities.length > 0) {
+      console.error(
+        `[L2] ERROR: Presidio anonymizer returned unchanged text despite ${entities.length} entities`
+      );
+      throw new Error("PRESIDIO_REDACTED_TEXT_UNCHANGED");
+    }
+
+    // ========== STEP 3: VERIFY (ANALYZE AGAIN) ==========
+    const verifyBasePayload = {
+      language: "en",
+      entities: ["PERSON", "LOCATION", "ORGANIZATION", "DATE_TIME", "NRP"],
+      score_threshold: 0.3,
+    };
+
+    const runVerifyAnalyze = async (tag: string, textToAnalyze: string) => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), PRESIDIO_TIMEOUT_MS);
+
+      const { res, text: bodyText, json } = await fetchWithLogs(tag, analyzeUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...verifyBasePayload, text: textToAnalyze }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        throw new Error(
+          `Presidio verify-analyze returned HTTP ${res.status}: ${bodyText.slice(0, 200)}`
+        );
+      }
+
+      return json as Array<{
+        entity_type?: string;
+        entity?: string;
+        start: number;
+        end: number;
+        score?: number;
+        confidence?: number;
+        analysis_explanation?: { score?: number };
+      }>;
+    };
+
+    let remainingEntities = await runVerifyAnalyze("PRESIDIO_VERIFY_ANALYZE", presidioRedactedText);
+
+    // Optional 2nd anonymize pass for any leftover entities
+    if (Array.isArray(remainingEntities) && remainingEntities.length > 0) {
+      console.warn(
+        `[L2] Verification analyze found ${remainingEntities.length} leftover entities; running second anonymize pass`
+      );
+
+      const secondAnonymizePayload = {
+        text: presidioRedactedText,
+        analyzer_results: remainingEntities,
+        operators,
+      };
+
+      const controller2 = new AbortController();
+      const timeoutId2 = setTimeout(() => controller2.abort(), PRESIDIO_TIMEOUT_MS);
+
+      const { res: anonymize2Res, text: anonymize2Body, json: anonymize2Json } = await fetchWithLogs(
+        "PRESIDIO_ANONYMIZE_2",
+        anonymizeUrl,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(secondAnonymizePayload),
+          signal: controller2.signal,
+        }
+      );
+
+      clearTimeout(timeoutId2);
+
+      if (!anonymize2Res.ok) {
+        throw new Error(
+          `Presidio Anonymize (2nd pass) returned HTTP ${anonymize2Res.status}: ${anonymize2Body.slice(0, 200)}`
+        );
+      }
+
+      const anonymize2Result = anonymize2Json as { text?: string; items?: unknown[] };
+      presidioRedactedText = typeof anonymize2Result.text === "string" ? anonymize2Result.text : "";
+
+      if (!presidioRedactedText || presidioRedactedText.trim().length === 0) {
+        console.error("[L2] ERROR: Presidio anonymizer (2nd pass) returned empty text");
+        throw new Error("PRESIDIO_REDACTED_TEXT_EMPTY_2");
+      }
+
+      if (presidioRedactedText === text) {
+        console.error("[L2] ERROR: Presidio anonymizer (2nd pass) still equals input text");
+        throw new Error("PRESIDIO_REDACTED_TEXT_UNCHANGED_2");
+      }
+
+      remainingEntities = await runVerifyAnalyze("PRESIDIO_VERIFY_ANALYZE_2", presidioRedactedText);
+    }
+
+    // Build verification result based on leftover entities
+    const remaining = Array.isArray(remainingEntities) ? remainingEntities : [];
+    const remainingTypeCounts = remaining.reduce<Record<string, number>>((acc, e) => {
+      const t = String(e?.entity_type ?? e?.entity ?? "UNKNOWN");
+      acc[t] = (acc[t] || 0) + 1;
+      return acc;
+    }, {});
+    const remainingTypes = Object.keys(remainingTypeCounts);
+
+    const verification =
+      remainingTypes.length === 0
+        ? { status: "PASS" as const }
+        : {
+            status: "FAIL" as const,
+            categories: remainingTypes,
+            remaining: {
+              count: remaining.length,
+              counts: remainingTypeCounts,
+              top_20_entities: remaining.slice(0, 20).map((x) => ({
+                entity_type: x.entity_type ?? x.entity,
+                start: x.start,
+                end: x.end,
+                score: x.score ?? x.confidence ?? x.analysis_explanation?.score,
+              })),
+            },
+          };
+
+    // Count entities by type (from initial analyze)
     const counts: Partial<RedactionCounts> = {
-      person: entities.filter(e => e.entity_type === "PERSON").length,
-      location: entities.filter(e => e.entity_type === "LOCATION").length,
-      organization: entities.filter(e => e.entity_type === "ORGANIZATION").length,
-      date: entities.filter(e => e.entity_type === "DATE_TIME").length,
+      person: entities.filter((e) => e.entity_type === "PERSON").length,
+      location: entities.filter((e) => e.entity_type === "LOCATION").length,
+      organization: entities.filter((e) => e.entity_type === "ORGANIZATION").length,
+      date: entities.filter((e) => e.entity_type === "DATE_TIME").length,
     };
 
     console.log(`[L2] Presidio NER completed: ${JSON.stringify(counts)}`);
-    
+
     await logEyeEvent(supabase, sessionId, "NER_REDACTION_COMPLETED", {
       counts,
       method: "presidio",
@@ -835,10 +974,11 @@ async function nerRedactWithPresidio(
     });
 
     return {
-      text: redactedText,
+      text: presidioRedactedText,
       counts,
       layer2Status: "COMPLETED",
       method: "presidio",
+      verification,
     };
 
   } catch (error) {
@@ -1119,9 +1259,13 @@ async function runRedactionPipeline(
     layer2_status: layer2Result.layer2Status,
   });
 
-  // ========== LAYER 3: LLM Verification ==========
-  console.log("[Redact] Running Layer 3: LLM Verification");
-  const verification = await verifyWithLLM(layer2Result.text, openAIApiKey);
+  // ========== LAYER 3: Verification ==========
+  console.log("[Redact] Running Layer 3: Verification");
+
+  const verification =
+    layer2Result.layer2Status === "COMPLETED" && layer2Result.verification
+      ? layer2Result.verification
+      : await verifyWithLLM(layer2Result.text, openAIApiKey);
 
   layerStatuses.layer3 = verification;
 
