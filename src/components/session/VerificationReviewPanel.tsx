@@ -23,6 +23,12 @@ export type Layer2Status =
   | "SKIPPED_CONFIG_MISSING" 
   | "SKIPPED";
 
+interface Layer2Error {
+  reason: string;
+  detail: string;
+  url?: string;
+}
+
 interface VerificationReviewPanelProps {
   minimizedText: string | undefined;
   failedCategories: string[];
@@ -30,7 +36,7 @@ interface VerificationReviewPanelProps {
   isLoading?: boolean;
   layerStatus?: {
     layer1?: { status: string; counts?: Record<string, number> };
-    layer2?: { status: string; counts?: Record<string, number>; method?: string; skipped_reason?: string };
+    layer2?: { status: string; counts?: Record<string, number>; method?: string; skipped_reason?: string; error?: Layer2Error };
   };
   onReverify: (editedText: string) => void;
   onCancelSession: () => void;
@@ -230,6 +236,15 @@ export function VerificationReviewPanel({
                   Replace all names with roles (e.g., "the client", "the caseworker", "the supervisor") 
                   and generalize locations (e.g., "the office", "the shelter").
                 </p>
+                {/* Show detailed error info */}
+                {layerStatus?.layer2?.error && (
+                  <div className="mt-2 p-2 rounded bg-amber-100 dark:bg-amber-900/40 font-mono text-xs break-all">
+                    <p><strong>Error:</strong> {layerStatus.layer2.error.detail}</p>
+                    {layerStatus.layer2.error.url && (
+                      <p className="mt-1"><strong>URL:</strong> {layerStatus.layer2.error.url}</p>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}

@@ -32,11 +32,18 @@ export type Layer2StatusType =
   | "SKIPPED_CONFIG_MISSING" 
   | "SKIPPED";
 
+export interface Layer2Error {
+  reason: "missing_env_var" | "invalid_url_for_edge" | "unreachable" | "timeout" | "http_error" | "service_unhealthy" | "unknown";
+  detail: string;
+  url?: string;
+}
+
 export interface LayerStatus {
   status: string; // Allow any status string to support new Layer 2 statuses
   counts?: Partial<RedactionCounts>;
   method?: string;
   skipped_reason?: string;
+  error?: Layer2Error;
 }
 
 export interface RedactionStatus {
