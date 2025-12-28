@@ -80,10 +80,10 @@ export function VerificationReviewPanel({
     onDiscardAndStartOver();
   }, [onDiscardAndStartOver]);
 
-  // Map category codes to friendly labels
+  // Map category codes to friendly labels with descriptions
   const getCategoryLabel = (category: string): string => {
     const labels: Record<string, string> = {
-      PERSON: "Person",
+      PERSON: "Names (PERSON)",
       LOCATION: "Location",
       CONTACT: "Contact info",
       DATE: "Date",
@@ -97,6 +97,9 @@ export function VerificationReviewPanel({
     };
     return labels[category] || category;
   };
+
+  // Check if PERSON category is in failed categories
+  const hasPersonCategory = failedCategories.includes("PERSON");
 
   // Determine Layer 2 status for messaging
   const layer2Status = layerStatus?.layer2?.status as Layer2Status | undefined;
@@ -263,6 +266,20 @@ export function VerificationReviewPanel({
             </div>
           )}
 
+          {/* Warning for PERSON names still detected */}
+          {hasPersonCategory && (
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800">
+              <AlertTriangle className="h-5 w-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+              <div className="text-sm text-red-800 dark:text-red-200">
+                <p className="font-medium mb-1">Personal names detected</p>
+                <p className="text-red-700 dark:text-red-300">
+                  Some personal names may not have been fully anonymized. Please replace all names with role descriptions 
+                  (e.g., "Grace" → "the client", "Chelsea" → "the caseworker", "Paul" → "the supervisor").
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Detected Categories */}
           {failedCategories.length > 0 && (
             <div className="space-y-2">
@@ -272,7 +289,11 @@ export function VerificationReviewPanel({
                   <Badge
                     key={category}
                     variant="outline"
-                    className="bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800"
+                    className={`${
+                      category === "PERSON" 
+                        ? "bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800"
+                        : "bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800"
+                    }`}
                   >
                     {getCategoryLabel(category)}
                   </Badge>
