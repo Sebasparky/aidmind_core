@@ -34,11 +34,18 @@ interface RedactionCounts {
 // Layer 2 status values
 type Layer2Status = "COMPLETED" | "FAILED_UNREACHABLE" | "FAILED_TIMEOUT" | "FAILED_ERROR" | "SKIPPED_CONFIG_MISSING" | "SKIPPED";
 
+interface Layer2Error {
+  reason: "missing_env_var" | "invalid_url_for_edge" | "unreachable" | "timeout" | "http_error" | "service_unhealthy" | "unknown";
+  detail: string;
+  url?: string;
+}
+
 interface LayerStatus {
   status: string;
   counts?: Partial<RedactionCounts>;
   method?: string;
   skipped_reason?: string;
+  error?: Layer2Error;
 }
 
 interface RedactionResult {
@@ -158,20 +165,23 @@ interface PresidioResponse {
 }
 
 // Check if Presidio service is configured and healthy
-async function checkPresidioHealth(presidioUrl: string): Promise<boolean> {
+async function checkPresidioHealth(presidioUrl: string): Promise<{ healthy: boolean; error?: Layer2Error }> {
   const now = Date.now();
   
   // Return cached result if still valid
   if (presidioHealthy !== null && (now - presidioHealthCheckedAt) < PRESIDIO_HEALTH_CACHE_MS) {
     console.log(`[Presidio] Using cached health status: ${presidioHealthy ? "healthy" : "unhealthy"}`);
-    return presidioHealthy;
+    return { healthy: presidioHealthy };
   }
+  
+  const healthUrl = `${presidioUrl}/health`;
+  console.log(`[Presidio] Health check URL: ${healthUrl}`);
   
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second health check timeout
     
-    const response = await fetch(`${presidioUrl}/health`, {
+    const response = await fetch(healthUrl, {
       method: "GET",
       signal: controller.signal,
     });
@@ -183,18 +193,37 @@ async function checkPresidioHealth(presidioUrl: string): Promise<boolean> {
       presidioHealthy = data.status === "ok";
       presidioHealthCheckedAt = now;
       console.log(`[Presidio] Health check passed`);
-      return true;
+      return { healthy: true };
     } else {
-      console.warn(`[Presidio] Health check failed: HTTP ${response.status}`);
+      const bodyText = await response.text().catch(() => "");
+      console.warn(`[Presidio] Health check failed: HTTP ${response.status}, body: ${bodyText.slice(0, 300)}`);
       presidioHealthy = false;
       presidioHealthCheckedAt = now;
-      return false;
+      return { 
+        healthy: false, 
+        error: { 
+          reason: "http_error", 
+          detail: `Health check returned HTTP ${response.status}: ${bodyText.slice(0, 200)}`,
+          url: healthUrl 
+        } 
+      };
     }
   } catch (error) {
-    console.warn(`[Presidio] Health check error:`, error instanceof Error ? error.message : error);
+    const err = error instanceof Error ? error : new Error(String(error));
+    console.warn(`[Presidio] Health check error: ${err.name} - ${err.message}`);
+    if (err.stack) console.warn(`[Presidio] Stack: ${err.stack}`);
     presidioHealthy = false;
     presidioHealthCheckedAt = now;
-    return false;
+    
+    const isTimeout = err.name === "AbortError";
+    return { 
+      healthy: false, 
+      error: { 
+        reason: isTimeout ? "timeout" : "unreachable", 
+        detail: `${err.name}: ${err.message}`,
+        url: healthUrl 
+      } 
+    };
   }
 }
 
@@ -207,71 +236,143 @@ async function nerRedactWithPresidio(
   counts: Partial<RedactionCounts>; 
   layer2Status: Layer2Status;
   method: "presidio" | "none";
+  error?: Layer2Error;
 }> {
   
-  // Check if PRESIDIO_SERVICE_URL is configured
+  // ========== ENV VAR CHECK ==========
   const presidioUrl = Deno.env.get("PRESIDIO_SERVICE_URL");
   
+  console.log("[L2] PRESIDIO_SERVICE_URL:", presidioUrl || "(not set)");
+  console.log("[L2] url_present:", !!presidioUrl);
+  console.log("[L2] url_ok:", presidioUrl ? presidioUrl.startsWith("http") : false);
+  
   if (!presidioUrl) {
-    console.warn("[Redact] PRESIDIO_SERVICE_URL not configured - Layer 2 skipped");
+    console.warn("[L2] PRESIDIO_SERVICE_URL not configured - Layer 2 skipped");
     await logEyeEvent(supabase, sessionId, "NER_REDACTION_SKIPPED", {
       reason_code: "config_missing",
     });
     
     return {
-      text: text, // Return Layer 1 output unchanged
+      text: text,
       counts: { person: 0, location: 0, organization: 0, date: 0 },
       layer2Status: "SKIPPED_CONFIG_MISSING",
       method: "none",
+      error: {
+        reason: "missing_env_var",
+        detail: "PRESIDIO_SERVICE_URL environment variable is not configured in Supabase secrets",
+      },
+    };
+  }
+  
+  // ========== URL VALIDATION ==========
+  if (!presidioUrl.startsWith("http://") && !presidioUrl.startsWith("https://")) {
+    console.warn("[L2] Invalid URL format - must start with http:// or https://");
+    await logEyeEvent(supabase, sessionId, "NER_REDACTION_FAILED", {
+      reason_code: "invalid_url",
+    });
+    
+    return {
+      text: text,
+      counts: { person: 0, location: 0, organization: 0, date: 0 },
+      layer2Status: "FAILED_ERROR",
+      method: "none",
+      error: {
+        reason: "invalid_url_for_edge",
+        detail: `URL must start with http:// or https://. Got: ${presidioUrl.slice(0, 50)}`,
+        url: presidioUrl,
+      },
+    };
+  }
+  
+  // Check for localhost - Edge Functions cannot reach localhost
+  if (presidioUrl.includes("localhost") || presidioUrl.includes("127.0.0.1")) {
+    console.warn("[L2] URL contains localhost - Edge Functions cannot reach localhost");
+    await logEyeEvent(supabase, sessionId, "NER_REDACTION_FAILED", {
+      reason_code: "invalid_url_localhost",
+    });
+    
+    return {
+      text: text,
+      counts: { person: 0, location: 0, organization: 0, date: 0 },
+      layer2Status: "FAILED_ERROR",
+      method: "none",
+      error: {
+        reason: "invalid_url_for_edge",
+        detail: "Edge Functions cannot reach localhost or 127.0.0.1. Deploy Presidio to a publicly accessible endpoint.",
+        url: presidioUrl,
+      },
     };
   }
 
   // Emit NER_REDACTION_STARTED
   await logEyeEvent(supabase, sessionId, "NER_REDACTION_STARTED", {});
 
-  // Check health first (cached)
-  const isHealthy = await checkPresidioHealth(presidioUrl);
-  if (!isHealthy) {
-    console.warn("[Redact] Presidio service unhealthy - Layer 2 failed");
+  // ========== HEALTH CHECK ==========
+  const healthResult = await checkPresidioHealth(presidioUrl);
+  if (!healthResult.healthy) {
+    console.warn("[L2] Presidio service unhealthy - Layer 2 failed");
     await logEyeEvent(supabase, sessionId, "NER_REDACTION_FAILED", {
       reason_code: "service_unhealthy",
     });
     
     return {
-      text: text, // Return Layer 1 output unchanged
+      text: text,
       counts: { person: 0, location: 0, organization: 0, date: 0 },
       layer2Status: "FAILED_UNREACHABLE",
       method: "none",
+      error: healthResult.error || {
+        reason: "service_unhealthy",
+        detail: "Presidio health check failed",
+        url: presidioUrl,
+      },
     };
   }
 
-  // Attempt Presidio call with retry
-  let lastError: Error | null = null;
+  // ========== REDACT CALL ==========
+  const redactUrl = `${presidioUrl}/redact-ner`;
+  let lastError: Layer2Error | null = null;
   
   for (let attempt = 1; attempt <= 2; attempt++) {
+    console.log(`[L2] Attempt ${attempt}: calling ${redactUrl}`);
+    
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), PRESIDIO_TIMEOUT_MS);
 
-      const response = await fetch(`${presidioUrl}/redact-ner`, {
+      const payload = {
+        session_id: sessionId,
+        text: text,
+        language: "en",
+        entities: ["PERSON", "LOCATION", "ORGANIZATION", "DATE"],
+      };
+
+      const response = await fetch(redactUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: sessionId,
-          text: text,
-          language: "en",
-          entities: ["PERSON", "LOCATION", "ORGANIZATION", "DATE"],
-        }),
+        body: JSON.stringify(payload),
         signal: controller.signal,
       });
 
       clearTimeout(timeoutId);
+      
+      console.log(`[L2] status: ${response.status}`);
+      
+      const bodyText = await response.text();
+      console.log(`[L2] body (first 300): ${bodyText.slice(0, 300)}`);
 
       if (!response.ok) {
-        throw new Error(`Presidio service returned HTTP ${response.status}`);
+        lastError = {
+          reason: "http_error",
+          detail: `Presidio returned HTTP ${response.status}: ${bodyText.slice(0, 200)}`,
+          url: redactUrl,
+        };
+        console.warn(`[L2] HTTP error on attempt ${attempt}: ${lastError.detail}`);
+        if (attempt < 2) continue;
+        throw new Error(lastError.detail);
       }
 
-      const data: PresidioResponse = await response.json();
+      // Parse the response
+      const data: PresidioResponse = JSON.parse(bodyText);
 
       const counts: Partial<RedactionCounts> = {
         person: data.counts.PERSON || 0,
@@ -280,7 +381,7 @@ async function nerRedactWithPresidio(
         date: data.counts.DATE || 0,
       };
 
-      console.log(`[Redact] Presidio NER completed: ${JSON.stringify(counts)}`);
+      console.log(`[L2] Presidio NER completed: ${JSON.stringify(counts)}`);
       
       await logEyeEvent(supabase, sessionId, "NER_REDACTION_COMPLETED", {
         counts,
@@ -295,45 +396,57 @@ async function nerRedactWithPresidio(
       };
 
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
+      const err = error instanceof Error ? error : new Error(String(error));
+      console.error(`[L2] fetch error on attempt ${attempt}: ${err.name} - ${err.message}`);
+      if (err.stack) console.error(`[L2] stack: ${err.stack}`);
       
-      if (error instanceof Error && error.name === "AbortError") {
-        console.warn(`[Redact] Presidio timeout on attempt ${attempt}`);
-        if (attempt < 2) continue; // Retry on timeout
+      if (err.name === "AbortError") {
+        lastError = {
+          reason: "timeout",
+          detail: `Request timed out after ${PRESIDIO_TIMEOUT_MS}ms`,
+          url: redactUrl,
+        };
+        console.warn(`[L2] Timeout on attempt ${attempt}`);
+        if (attempt < 2) continue;
       } else {
-        console.warn(`[Redact] Presidio error on attempt ${attempt}: ${lastError.message}`);
-        if (attempt < 2) continue; // Retry on transient errors
+        lastError = {
+          reason: "unreachable",
+          detail: `${err.name}: ${err.message}`,
+          url: redactUrl,
+        };
+        if (attempt < 2) continue;
       }
     }
   }
 
-  // Both attempts failed - determine failure type
+  // ========== BOTH ATTEMPTS FAILED ==========
   let layer2Status: Layer2Status = "FAILED_ERROR";
-  let reasonCode = "error";
   
   if (lastError) {
-    if (lastError.name === "AbortError") {
+    if (lastError.reason === "timeout") {
       layer2Status = "FAILED_TIMEOUT";
-      reasonCode = "timeout";
-    } else if (lastError.message.includes("fetch") || lastError.message.includes("connect") || lastError.message.includes("network")) {
+    } else if (lastError.reason === "unreachable") {
       layer2Status = "FAILED_UNREACHABLE";
-      reasonCode = "unreachable";
     }
   }
   
-  console.warn(`[Redact] Presidio failed after retries - Layer 2 status: ${layer2Status}`);
+  console.warn(`[L2] Presidio failed after retries - status: ${layer2Status}`);
   
   await logEyeEvent(supabase, sessionId, "NER_REDACTION_FAILED", {
-    reason_code: reasonCode,
-    error: lastError?.message,
+    reason_code: lastError?.reason || "unknown",
+    error: lastError?.detail,
   });
   
-  // Return Layer 1 output unchanged - NO REGEX FALLBACK
   return {
     text: text,
     counts: { person: 0, location: 0, organization: 0, date: 0 },
     layer2Status,
     method: "none",
+    error: lastError || {
+      reason: "unknown",
+      detail: "Unknown error during Presidio NER",
+      url: presidioUrl,
+    },
   };
 }
 
@@ -469,6 +582,7 @@ async function runRedactionPipeline(
     status: layer2Result.layer2Status, 
     counts: layer2Result.counts,
     method: layer2Result.method,
+    error: layer2Result.error,
   };
 
   // Determine minimized_text source
