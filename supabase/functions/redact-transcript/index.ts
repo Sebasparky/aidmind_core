@@ -12,48 +12,121 @@ const PRESIDIO_TIMEOUT_MS = 5000; // 5 second timeout
 const PRESIDIO_HEALTH_CACHE_MS = 60000; // 60 seconds health cache
 
 // ============================================================
-// DEBUG HELPER: Logs full request/response for Presidio calls
+// DEBUG HELPER: Safe logging that masks PHI
 // ============================================================
+
+// Mask text for logs - replace letters/numbers with ▒ to show structure without leaking PHI
+function maskForLogs(s: string, maxLen = 200): string {
+  const snippet = (s ?? "").slice(0, maxLen);
+  return snippet.replace(/[A-Za-z0-9]/g, "▒");
+}
+
+// Log JSON safely with pretty printing
+function logJson(label: string, obj: unknown): void {
+  console.log(label, JSON.stringify(obj, null, 2));
+}
+
+// Safe fetch wrapper that logs request/response structure without PHI
 async function fetchWithLogs(
   tag: string, 
   url: string, 
   init: RequestInit
 ): Promise<{ res: Response; text: string; json: unknown }> {
-  const safeHeaders: Record<string, string> = {};
-  if (init.headers && typeof init.headers === "object") {
-    for (const [k, v] of Object.entries(init.headers as Record<string, string>)) {
-      if (!/authorization|api-key|token/i.test(k)) safeHeaders[k] = String(v);
-    }
-  }
   
-  let bodyStr = "";
+  // Parse the body to extract structure info
+  let bodyObj: Record<string, unknown> | null = null;
   try {
-    bodyStr = typeof init.body === "string" ? init.body : JSON.stringify(init.body);
+    const bodyStr = typeof init.body === "string" ? init.body : "";
+    bodyObj = bodyStr ? JSON.parse(bodyStr) : null;
   } catch {
-    bodyStr = "[unserializable body]";
+    bodyObj = null;
   }
   
-  console.log(`=== ${tag}_REQUEST ===`);
-  console.log("url:", url);
-  console.log("method:", init.method ?? "GET");
-  console.log("headers:", JSON.stringify(safeHeaders, null, 2));
-  console.log("body:", bodyStr);
+  // Log request metadata safely (no raw text)
+  const textContent = (bodyObj as Record<string, unknown>)?.text as string | undefined;
+  logJson(`=== ${tag}_REQUEST ===`, {
+    url: url,
+    method: init.method ?? "GET",
+    keys: bodyObj ? Object.keys(bodyObj) : [],
+    language: (bodyObj as Record<string, unknown>)?.language,
+    entities: (bodyObj as Record<string, unknown>)?.entities,
+    score_threshold: (bodyObj as Record<string, unknown>)?.score_threshold,
+    analyzer_results_count: Array.isArray((bodyObj as Record<string, unknown>)?.analyzer_results) 
+      ? ((bodyObj as Record<string, unknown>).analyzer_results as unknown[]).length 
+      : undefined,
+    text_length: textContent?.length ?? 0,
+    text_preview_masked: textContent ? maskForLogs(textContent, 200) : undefined,
+  });
   
+  const t0 = Date.now();
   const res = await fetch(url, init);
-  const text = await res.text();
+  const elapsed = Date.now() - t0;
+  const rawText = await res.text();
   
+  // Log response metadata
+  logJson(`=== ${tag}_RESPONSE_META ===`, {
+    status: res.status,
+    elapsed_ms: elapsed,
+    raw_len: rawText.length,
+  });
+  
+  // Parse response
   let parsed: unknown = null;
   try { 
-    parsed = JSON.parse(text); 
+    parsed = JSON.parse(rawText); 
   } catch { 
     parsed = null; 
   }
   
-  console.log(`=== ${tag}_RESPONSE ===`);
-  console.log("status:", res.status);
-  console.log("body:", parsed ? JSON.stringify(parsed, null, 2) : text);
+  if (!parsed) {
+    // If JSON parse failed, log masked raw response
+    console.log(`=== ${tag}_RESPONSE_RAW_MASKED ===`, maskForLogs(rawText, 500));
+  } else {
+    // For analyzer response (array of entities)
+    const items = Array.isArray(parsed) ? parsed : ((parsed as Record<string, unknown>)?.results as unknown[] ?? []);
+    
+    if (Array.isArray(items) && items.length > 0 && (items[0] as Record<string, unknown>)?.entity_type !== undefined) {
+      // This is an analyzer response - log entity summary
+      const entities = items as Array<Record<string, unknown>>;
+      const scores = entities
+        .map((x) => (x.score ?? x.confidence ?? (x.analysis_explanation as Record<string, unknown>)?.score) as number | undefined)
+        .filter((s): s is number => typeof s === "number");
+      
+      const top30 = entities.slice(0, 30).map((x) => ({
+        entity_type: x.entity_type ?? x.entity,
+        start: x.start,
+        end: x.end,
+        score: x.score ?? x.confidence ?? (x.analysis_explanation as Record<string, unknown>)?.score,
+      }));
+      
+      logJson(`=== ${tag}_RESPONSE_SUMMARY ===`, {
+        count: entities.length,
+        score_min: scores.length > 0 ? Math.min(...scores) : null,
+        score_max: scores.length > 0 ? Math.max(...scores) : null,
+        score_avg: scores.length > 0 ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(3) : null,
+        top_30_entities: top30,
+      });
+    } else if ((parsed as Record<string, unknown>)?.text !== undefined) {
+      // This is an anonymizer response - log structure without text
+      const anonResult = parsed as Record<string, unknown>;
+      const anonText = anonResult.text as string | undefined;
+      logJson(`=== ${tag}_RESPONSE_SUMMARY ===`, {
+        has_text: !!anonText,
+        text_length: anonText?.length ?? 0,
+        text_preview_masked: anonText ? maskForLogs(anonText, 200) : undefined,
+        items_count: Array.isArray(anonResult.items) ? (anonResult.items as unknown[]).length : 0,
+      });
+    } else {
+      // Unknown response structure - log keys only
+      logJson(`=== ${tag}_RESPONSE_SUMMARY ===`, {
+        type: typeof parsed,
+        is_array: Array.isArray(parsed),
+        keys: typeof parsed === "object" && parsed !== null ? Object.keys(parsed as object) : [],
+      });
+    }
+  }
   
-  return { res, text, json: parsed };
+  return { res, text: rawText, json: parsed };
 }
 
 // ============================================================
