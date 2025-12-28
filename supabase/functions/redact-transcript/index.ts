@@ -165,6 +165,7 @@ interface RedactRequest {
   session_id: string;
   transcript?: string;
   verification_only?: boolean;
+  redact_agency_refs?: boolean; // Feature flag for agency reference redaction (default: false)
 }
 
 interface RedactionCounts {
@@ -239,6 +240,270 @@ async function logEyeEvent(
 }
 
 // ============================================================
+// PRE-NER NORMALIZATION: Clean ASR/typing artifacts safely
+// ============================================================
+
+// Check if position is at sentence start (after . ? ! \n or start of text)
+function isSentenceStart(text: string, pos: number): boolean {
+  if (pos === 0) return true;
+  const before = text.slice(0, pos).trimEnd();
+  if (before.length === 0) return true;
+  const lastChar = before[before.length - 1];
+  return /[.!?\n]/.test(lastChar);
+}
+
+// Check if token is within a name-introducer window
+function isInNameIntroducerWindow(text: string, pos: number): boolean {
+  const windowSize = 30; // Check ~30 chars before
+  const before = text.slice(Math.max(0, pos - windowSize), pos).toLowerCase();
+  const introducers = [
+    "my name is", "this is", "i am", "i'm", "called", "named",
+    "mr.", "mrs.", "ms.", "dr.", "mr ", "mrs ", "ms ", "dr "
+  ];
+  return introducers.some(intro => before.includes(intro));
+}
+
+// Check if position is inside a placeholder like <PERSON> or [CASE_ID]
+function isInsidePlaceholder(text: string, pos: number): boolean {
+  // Find the last < or [ before pos
+  let bracketStart = -1;
+  for (let i = pos - 1; i >= 0; i--) {
+    if (text[i] === '<' || text[i] === '[') {
+      bracketStart = i;
+      break;
+    }
+    if (text[i] === '>' || text[i] === ']') {
+      break; // Found close before open, so not inside
+    }
+  }
+  if (bracketStart === -1) return false;
+  
+  // Find next > or ] after pos
+  const closeChar = text[bracketStart] === '<' ? '>' : ']';
+  const nextClose = text.indexOf(closeChar, pos);
+  return nextClose !== -1;
+}
+
+interface NormalizationResult {
+  text: string;
+  changes: Array<{ original: string; normalized: string; position: number }>;
+}
+
+function preNerNormalize(text: string): NormalizationResult {
+  const changes: Array<{ original: string; normalized: string; position: number }> = [];
+  let result = text;
+  
+  // Step 1: Normalize weird apostrophes (safe)
+  result = result.replace(/[''`]/g, "'");
+  
+  // Step 2: Collapse repeated whitespace
+  result = result.replace(/[ \t]+/g, " ");
+  
+  // Step 3: Collapse duplicate immediate words (e.g., "Mis misstate" → "misstate")
+  // Pattern: word repeated immediately (case-insensitive)
+  const duplicatePattern = /\b([A-Za-z]+)\s+\1\b/gi;
+  let dupMatch;
+  const duplicateOffsets: Array<{ start: number; end: number; replacement: string }> = [];
+  
+  while ((dupMatch = duplicatePattern.exec(result)) !== null) {
+    const fullMatch = dupMatch[0];
+    const word = dupMatch[1];
+    const start = dupMatch.index;
+    
+    // Skip if inside placeholder
+    if (isInsidePlaceholder(result, start)) continue;
+    
+    // Keep lowercase version
+    duplicateOffsets.push({
+      start,
+      end: start + fullMatch.length,
+      replacement: word.toLowerCase(),
+    });
+  }
+  
+  // Apply duplicate collapses in reverse order
+  for (let i = duplicateOffsets.length - 1; i >= 0; i--) {
+    const { start, end, replacement } = duplicateOffsets[i];
+    const original = result.slice(start, end);
+    result = result.slice(0, start) + replacement + result.slice(end);
+    changes.push({ original, normalized: replacement, position: start });
+  }
+  
+  // Step 4: Fix stray mid-sentence capitalization
+  // Pattern: Titlecase token not at sentence start, not in name window
+  const titleCasePattern = /\b([A-Z][a-z]{2,})\b/g;
+  let tcMatch;
+  const titleCaseOffsets: Array<{ start: number; end: number; replacement: string }> = [];
+  
+  while ((tcMatch = titleCasePattern.exec(result)) !== null) {
+    const word = tcMatch[1];
+    const start = tcMatch.index;
+    
+    // Skip if inside placeholder
+    if (isInsidePlaceholder(result, start)) continue;
+    
+    // Skip if at sentence start
+    if (isSentenceStart(result, start)) continue;
+    
+    // Skip if in name introducer window
+    if (isInNameIntroducerWindow(result, start)) continue;
+    
+    // Skip if preceded by punctuation (could be title or heading)
+    const charBefore = start > 0 ? result[start - 1] : "";
+    if (/[:\-"']/.test(charBefore)) continue;
+    
+    // Check what's before - should be a normal word (not punctuation boundary)
+    const beforeText = result.slice(Math.max(0, start - 15), start);
+    const lastWord = beforeText.match(/[a-zA-Z]+\s*$/);
+    if (!lastWord) continue; // Don't lowercase if no preceding word
+    
+    // Common words that get ASR-capitalized mid-sentence (typos/errors)
+    const commonMidSentenceWords = new Set([
+      "dental", "medical", "mental", "financial", "physical", "emotional",
+      "social", "legal", "general", "special", "personal", "professional",
+      "improvement", "appointment", "development", "assessment", "treatment",
+      "misstate", "understand", "remember", "explain", "describe",
+    ]);
+    
+    if (commonMidSentenceWords.has(word.toLowerCase())) {
+      titleCaseOffsets.push({
+        start,
+        end: start + word.length,
+        replacement: word.toLowerCase(),
+      });
+    }
+  }
+  
+  // Apply title case fixes in reverse order
+  for (let i = titleCaseOffsets.length - 1; i >= 0; i--) {
+    const { start, end, replacement } = titleCaseOffsets[i];
+    const original = result.slice(start, end);
+    result = result.slice(0, start) + replacement + result.slice(end);
+    changes.push({ original, normalized: replacement, position: start });
+  }
+  
+  return { text: result, changes };
+}
+
+// ============================================================
+// CASE_ID REGEX DETECTION (runs before Presidio)
+// ============================================================
+
+interface CaseIdResult {
+  text: string;
+  count: number;
+  examples: string[];
+}
+
+function redactCaseIds(text: string): CaseIdResult {
+  let result = text;
+  let count = 0;
+  const examples: string[] = [];
+  
+  // Don't match inside existing placeholders
+  const isInsideTag = (pos: number, txt: string): boolean => {
+    for (let i = pos - 1; i >= 0; i--) {
+      if (txt[i] === '<' || txt[i] === '[') {
+        const closeIdx = txt.indexOf(txt[i] === '<' ? '>' : ']', pos);
+        return closeIdx !== -1;
+      }
+      if (txt[i] === '>' || txt[i] === ']') break;
+    }
+    return false;
+  };
+  
+  // Pattern 1: Already has [CASE_ID] placeholder - convert to <CASE_ID>
+  result = result.replace(/\[CASE_ID\]/gi, () => {
+    count++;
+    if (examples.length < 3) examples.push("[CASE_ID]");
+    return "<CASE_ID>";
+  });
+  
+  // Pattern 2: Labeled IDs (case-insensitive)
+  // case id: ABC-12345, case #ABC12345, ref: XYZ-999, record id: 12345
+  const labeledPatterns = [
+    /\b(case\s*(?:id|#|number|no\.?))\s*[:\s]*([A-Z0-9][A-Z0-9\-_]{3,})\b/gi,
+    /\b(ref(?:erence)?(?:\s*(?:id|#|no\.?))?)\s*[:\s]*([A-Z0-9][A-Z0-9\-_]{3,})\b/gi,
+    /\b(record\s*id)\s*[:\s]*([A-Z0-9][A-Z0-9\-_]{3,})\b/gi,
+  ];
+  
+  for (const pattern of labeledPatterns) {
+    result = result.replace(pattern, (match, _label, _id, offset) => {
+      if (isInsideTag(offset, result)) return match;
+      count++;
+      if (examples.length < 3) examples.push(maskForLogs(match, 30));
+      return "<CASE_ID>";
+    });
+  }
+  
+  // Pattern 3: Long alphanumeric IDs when preceded by ID-related context within ~5 tokens
+  // Look for patterns like "the case ABC-12345-XYZ" or "assigned to case 12345678"
+  const contextualIdPattern = /\b(case|ref|reference|record|file|matter|number)\b[^.!?\n]{0,30}\b([A-Z0-9][A-Z0-9\-_]{7,})\b/gi;
+  result = result.replace(contextualIdPattern, (match, label, id, offset) => {
+    if (isInsideTag(offset, result)) return match;
+    // Replace only the ID part, keep the label
+    const idStart = match.lastIndexOf(id);
+    const beforeId = match.slice(0, idStart);
+    count++;
+    if (examples.length < 3) examples.push(maskForLogs(id, 20));
+    return beforeId + "<CASE_ID>";
+  });
+  
+  return { text: result, count, examples };
+}
+
+// ============================================================
+// AGENCY REFERENCE REDACTION (optional, off by default)
+// ============================================================
+
+interface AgencyResult {
+  text: string;
+  count: number;
+  examples: string[];
+}
+
+function redactAgencyRefs(text: string): AgencyResult {
+  let result = text;
+  let count = 0;
+  const examples: string[] = [];
+  
+  // Agency phrases to redact (case-insensitive)
+  const agencyPhrases = [
+    /\b(department\s+of\s+children'?s?\s+services)\b/gi,
+    /\b(children'?s?\s+services)\b/gi, // As a phrase
+    /\b(child\s+protective\s+services)\b/gi,
+    /\b(cps)\b/gi, // CPS as agency
+    /\b(dcfs)\b/gi, // Dept of Children and Family Services
+    /\b(dfcs)\b/gi, // Div of Family and Children Services
+  ];
+  
+  for (const pattern of agencyPhrases) {
+    result = result.replace(pattern, (match) => {
+      count++;
+      if (examples.length < 3) examples.push(maskForLogs(match, 40));
+      return "<AGENCY>";
+    });
+  }
+  
+  // DDS only in agency context
+  const ddsContextPattern = /\b(dds)\s+(worker|caseworker|case\s*worker|staff|employee|representative|office|supervisor)\b/gi;
+  result = result.replace(ddsContextPattern, (match) => {
+    count++;
+    if (examples.length < 3) examples.push(maskForLogs(match, 30));
+    return "<AGENCY>";
+  });
+  
+  const ddsFromPattern = /\b(from|at|with|to)\s+(dds)\b/gi;
+  result = result.replace(ddsFromPattern, (match, prep) => {
+    count++;
+    if (examples.length < 3) examples.push(maskForLogs(match, 20));
+    return `${prep} <AGENCY>`;
+  });
+  
+  return { text: result, count, examples };
+}
+
+// ============================================================
 // LAYER 1: Deterministic Regex Redaction (Required)
 // ============================================================
 function regexRedact(text: string): { text: string; counts: Partial<RedactionCounts> } {
@@ -289,7 +554,7 @@ function regexRedact(text: string): { text: string; counts: Partial<RedactionCou
     return "[ADDRESS]";
   });
 
-  // Case number / reference ID patterns
+  // Case number / reference ID patterns (legacy - now handled by redactCaseIds)
   const caseIdPattern = /\b(Case\s*(?:#|No\.?|Number)?|Reference\s*(?:#|No\.?|ID)?|Ref\s*(?:#|No\.?)?)\s*[:\-]?\s*[A-Z0-9\-]+\b/gi;
   result = result.replace(caseIdPattern, () => {
     counts.case_id!++;
@@ -1363,8 +1628,11 @@ async function runRedactionPipeline(
   sessionId: string,
   transcript: string,
   openAIApiKey: string,
-  supabase: any
+  supabase: any,
+  options: { redact_agency_refs?: boolean } = {}
 ): Promise<RedactionResult> {
+  const { redact_agency_refs = false } = options;
+  
   const combinedCounts: RedactionCounts = {
     phone: 0,
     email: 0,
@@ -1389,16 +1657,81 @@ async function runRedactionPipeline(
     layer3: { status: "PASS" },
   };
 
+  // ========== INPUT LOGGING ==========
+  console.log(JSON.stringify({
+    event: "INPUT_SUMMARY",
+    raw_length: transcript.length,
+    preview_masked: maskForLogs(transcript, 200),
+    redact_agency_refs,
+  }));
+
   await logEyeEvent(supabase, sessionId, "REDACTION_STARTED", {
     input_length: transcript.length,
+    redact_agency_refs,
   });
 
-  // ========== LAYER 1: Regex Redaction ==========
+  // ========== STEP 1: PRE-NER NORMALIZATION ==========
+  console.log("[Redact] Running Step 1: Pre-NER Normalization");
+  const normResult = preNerNormalize(transcript);
+  let workingText = normResult.text;
+  
+  // Log normalization summary
+  const normExamples = normResult.changes.slice(0, 3).map(c => ({
+    original: maskForLogs(c.original, 20),
+    normalized: maskForLogs(c.normalized, 20),
+  }));
+  console.log(JSON.stringify({
+    event: "NORMALIZATION_SUMMARY",
+    tokens_changed: normResult.changes.length,
+    examples: normExamples,
+  }));
+
+  await logEyeEvent(supabase, sessionId, "NORMALIZATION_COMPLETED", {
+    tokens_changed: normResult.changes.length,
+  });
+
+  // ========== STEP 2: CASE_ID REDACTION ==========
+  console.log("[Redact] Running Step 2: Case ID Redaction");
+  const caseIdResult = redactCaseIds(workingText);
+  workingText = caseIdResult.text;
+  combinedCounts.case_id += caseIdResult.count;
+  
+  console.log(JSON.stringify({
+    event: "CASE_ID_REDACTION_SUMMARY",
+    count: caseIdResult.count,
+    examples: caseIdResult.examples,
+  }));
+
+  await logEyeEvent(supabase, sessionId, "CASE_ID_REDACTION_COMPLETED", {
+    count: caseIdResult.count,
+  });
+
+  // ========== STEP 3: AGENCY REDACTION (optional) ==========
+  if (redact_agency_refs) {
+    console.log("[Redact] Running Step 3: Agency Reference Redaction");
+    const agencyResult = redactAgencyRefs(workingText);
+    workingText = agencyResult.text;
+    
+    console.log(JSON.stringify({
+      event: "AGENCY_REDACTION_SUMMARY",
+      count: agencyResult.count,
+      examples: agencyResult.examples,
+    }));
+
+    await logEyeEvent(supabase, sessionId, "AGENCY_REDACTION_COMPLETED", {
+      count: agencyResult.count,
+    });
+  }
+
+  // ========== STEP 4: LAYER 1 - Regex Redaction ==========
   console.log("[Redact] Running Layer 1: Regex Redaction");
-  const layer1Result = regexRedact(transcript);
+  const layer1Result = regexRedact(workingText);
+  workingText = layer1Result.text;
   
   Object.entries(layer1Result.counts).forEach(([key, value]) => {
-    combinedCounts[key as keyof RedactionCounts] += value || 0;
+    if (key !== 'case_id') { // case_id already counted above
+      combinedCounts[key as keyof RedactionCounts] += value || 0;
+    }
   });
   layerStatuses.layer1 = { status: "COMPLETED", counts: layer1Result.counts };
 
@@ -1406,9 +1739,9 @@ async function runRedactionPipeline(
     counts: layer1Result.counts,
   });
 
-  // ========== LAYER 2: NER Redaction (Presidio - NO FALLBACK) ==========
+  // ========== STEP 5: LAYER 2 - NER Redaction (Presidio) ==========
   console.log("[Redact] Running Layer 2: NER Redaction (Presidio)");
-  const layer2Result = await nerRedactWithPresidio(sessionId, layer1Result.text, supabase);
+  const layer2Result = await nerRedactWithPresidio(sessionId, workingText, supabase);
   
   // Only merge counts if Presidio succeeded
   if (layer2Result.layer2Status === "COMPLETED") {
@@ -1424,6 +1757,13 @@ async function runRedactionPipeline(
     error: layer2Result.error,
   };
 
+  // Log Presidio counts
+  console.log(JSON.stringify({
+    event: "PRESIDIO_COUNTS",
+    pass1_counts: layer2Result.counts,
+    layer2_status: layer2Result.layer2Status,
+  }));
+
   // Determine minimized_text source
   const minimizedTextSource: "ner" | "regex" = layer2Result.layer2Status === "COMPLETED" ? "ner" : "regex";
 
@@ -1432,7 +1772,7 @@ async function runRedactionPipeline(
     layer2_status: layer2Result.layer2Status,
   });
 
-  // ========== LAYER 3: Verification ==========
+  // ========== STEP 6: LAYER 3 - Verification ==========
   console.log("[Redact] Running Layer 3: Verification");
 
   const verification =
@@ -1450,6 +1790,13 @@ async function runRedactionPipeline(
       layer2_status: layer2Result.layer2Status,
     });
   }
+
+  // Final preview log
+  console.log(JSON.stringify({
+    event: "FINAL_PREVIEW_MASKED",
+    length: layer2Result.text.length,
+    preview: maskForLogs(layer2Result.text, 200),
+  }));
 
   return {
     minimized_text: layer2Result.text,
@@ -1535,7 +1882,7 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { session_id, transcript: providedTranscript, verification_only }: RedactRequest = await req.json();
+    const { session_id, transcript: providedTranscript, verification_only, redact_agency_refs }: RedactRequest = await req.json();
 
     if (!session_id) {
       return new Response(
@@ -1575,7 +1922,9 @@ serve(async (req) => {
         .update({ state: "REDACTING" })
         .eq("session_id", session_id);
 
-      result = await runRedactionPipeline(session_id, transcript, openAIApiKey, supabase);
+      result = await runRedactionPipeline(session_id, transcript, openAIApiKey, supabase, {
+        redact_agency_refs: redact_agency_refs ?? false,
+      });
     }
 
     const ttlExpiresAt = new Date(Date.now() + MINIMIZED_TRANSCRIPT_TTL_SECONDS * 1000).toISOString();
