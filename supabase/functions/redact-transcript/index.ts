@@ -11,6 +11,83 @@ const MINIMIZED_TRANSCRIPT_TTL_SECONDS = 30 * 60; // 30 minutes
 const PRESIDIO_TIMEOUT_MS = 5000; // 5 second timeout
 const PRESIDIO_HEALTH_CACHE_MS = 60000; // 60 seconds health cache
 
+// ============================================================
+// DEBUG HELPER: Logs full request/response for Presidio calls
+// ============================================================
+async function fetchWithLogs(
+  tag: string, 
+  url: string, 
+  init: RequestInit
+): Promise<{ res: Response; text: string; json: unknown }> {
+  const safeHeaders: Record<string, string> = {};
+  if (init.headers && typeof init.headers === "object") {
+    for (const [k, v] of Object.entries(init.headers as Record<string, string>)) {
+      if (!/authorization|api-key|token/i.test(k)) safeHeaders[k] = String(v);
+    }
+  }
+  
+  let bodyStr = "";
+  try {
+    bodyStr = typeof init.body === "string" ? init.body : JSON.stringify(init.body);
+  } catch {
+    bodyStr = "[unserializable body]";
+  }
+  
+  console.log(`=== ${tag}_REQUEST ===`);
+  console.log("url:", url);
+  console.log("method:", init.method ?? "GET");
+  console.log("headers:", JSON.stringify(safeHeaders, null, 2));
+  console.log("body:", bodyStr);
+  
+  const res = await fetch(url, init);
+  const text = await res.text();
+  
+  let parsed: unknown = null;
+  try { 
+    parsed = JSON.parse(text); 
+  } catch { 
+    parsed = null; 
+  }
+  
+  console.log(`=== ${tag}_RESPONSE ===`);
+  console.log("status:", res.status);
+  console.log("body:", parsed ? JSON.stringify(parsed, null, 2) : text);
+  
+  return { res, text, json: parsed };
+}
+
+// ============================================================
+// ENV VAR SANITY CHECK: Log at function start
+// ============================================================
+function logEnvVarSanityCheck() {
+  console.log("=== PRESIDIO ENV VAR SANITY CHECK ===");
+  
+  const analyzerUrl = Deno.env.get("PRESIDIO_ANALYZER_URL") ?? "";
+  const anonymizerUrl = Deno.env.get("PRESIDIO_ANONYMIZER_URL") ?? "";
+  const legacyServiceUrl = Deno.env.get("PRESIDIO_SERVICE_URL") ?? "";
+  
+  console.log("PRESIDIO_ANALYZER_URL:", analyzerUrl || "(NOT SET)");
+  console.log("PRESIDIO_ANONYMIZER_URL:", anonymizerUrl || "(NOT SET)");
+  console.log("PRESIDIO_SERVICE_URL (legacy):", legacyServiceUrl || "(NOT SET)");
+  
+  // Check for placeholder characters
+  const hasPlaceholder = (url: string) => url.includes("<") || url.includes(">");
+  
+  if (!analyzerUrl) {
+    console.warn("⚠️ WARNING: PRESIDIO_ANALYZER_URL is MISSING - Layer 2 will fail!");
+  } else if (hasPlaceholder(analyzerUrl)) {
+    console.warn(`⚠️ WARNING: PRESIDIO_ANALYZER_URL contains placeholder '<' or '>' - Layer 2 will fail! Value: ${analyzerUrl}`);
+  }
+  
+  if (!anonymizerUrl) {
+    console.warn("⚠️ WARNING: PRESIDIO_ANONYMIZER_URL is MISSING - Layer 2 will fail!");
+  } else if (hasPlaceholder(anonymizerUrl)) {
+    console.warn(`⚠️ WARNING: PRESIDIO_ANONYMIZER_URL contains placeholder '<' or '>' - Layer 2 will fail! Value: ${anonymizerUrl}`);
+  }
+  
+  console.log("=== END SANITY CHECK ===");
+}
+
 interface RedactRequest {
   session_id: string;
   transcript?: string;
@@ -496,19 +573,19 @@ async function nerRedactWithPresidio(
 
     console.log(`[L2] Analyzer payload: entities=${analyzePayload.entities.join(",")}, score_threshold=${analyzePayload.score_threshold}`);
 
-    const analyzeResponse = await fetch(analyzeUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(analyzePayload),
-      signal: controller.signal,
-    });
+    // Use fetchWithLogs for detailed debugging
+    const { res: analyzeResponse, text: analyzeBody, json: analyzeJson } = await fetchWithLogs(
+      "PRESIDIO_ANALYZE",
+      analyzeUrl,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(analyzePayload),
+        signal: controller.signal,
+      }
+    );
 
     clearTimeout(timeoutId);
-    
-    console.log(`[L2] Analyzer status: ${analyzeResponse.status}`);
-    
-    const analyzeBody = await analyzeResponse.text();
-    console.log(`[L2] Analyzer response (first 500): ${analyzeBody.slice(0, 500)}`);
 
     if (!analyzeResponse.ok) {
       const error: Layer2Error = {
@@ -534,7 +611,7 @@ async function nerRedactWithPresidio(
       };
     }
 
-    entities = JSON.parse(analyzeBody);
+    entities = analyzeJson as Array<{ entity_type: string; start: number; end: number; score: number }>;
     
     // Log entity breakdown for debugging
     const personCount = entities.filter(e => e.entity_type === "PERSON").length;
@@ -627,19 +704,19 @@ async function nerRedactWithPresidio(
       operators: operators,
     };
 
-    const anonymizeResponse = await fetch(anonymizeUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(anonymizePayload),
-      signal: controller.signal,
-    });
+    // Use fetchWithLogs for detailed debugging
+    const { res: anonymizeResponse, text: anonymizeBody, json: anonymizeJson } = await fetchWithLogs(
+      "PRESIDIO_ANONYMIZE",
+      anonymizeUrl,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(anonymizePayload),
+        signal: controller.signal,
+      }
+    );
 
     clearTimeout(timeoutId);
-    
-    console.log(`[L2] Anonymizer status: ${anonymizeResponse.status}`);
-    
-    const anonymizeBody = await anonymizeResponse.text();
-    console.log(`[L2] Anonymizer response (first 500): ${anonymizeBody.slice(0, 500)}`);
 
     if (!anonymizeResponse.ok) {
       const error: Layer2Error = {
@@ -665,7 +742,7 @@ async function nerRedactWithPresidio(
       };
     }
 
-    const anonymizeResult = JSON.parse(anonymizeBody);
+    const anonymizeResult = anonymizeJson as { text: string; items?: unknown[] };
     const redactedText = anonymizeResult.text;
     
     // Count entities by type
@@ -1051,6 +1128,9 @@ async function runVerificationOnly(
 // HTTP Handler
 // ============================================================
 serve(async (req) => {
+  // Run env var sanity check at function start
+  logEnvVarSanityCheck();
+  
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
