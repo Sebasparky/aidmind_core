@@ -709,8 +709,124 @@ function redactAgencyRefs(text: string): AgencyResult {
 }
 
 // ============================================================
-// LAYER 1: Deterministic Regex Redaction (Required)
+// FINAL AGENCY CLEANUP (runs AFTER all redaction passes)
+// Fixes awkward fragments and catches any remaining org leaks
 // ============================================================
+
+interface FinalCleanupResult {
+  text: string;
+  replacementsMade: number;
+  patternsMatched: string[];
+  issuesFound: string[];
+}
+
+function finalAgencyCleanup(text: string): FinalCleanupResult {
+  let result = text;
+  let replacementsMade = 0;
+  const patternsMatched: string[] = [];
+  const issuesFound: string[] = [];
+  
+  // ========== RULE 1: Fix bad splices ==========
+  // "<AGENCY_REF> of children's services" → <AGENCY>
+  const badSplicePatterns: Array<{ pattern: RegExp; name: string }> = [
+    { pattern: /<AGENCY_REF>\s+of\s+(?:the\s+)?department\s+of\s+child(?:ren)?['']?s?\s+services/gi, name: "agency_ref_of_dept" },
+    { pattern: /<AGENCY_REF>\s+of\s+child(?:ren)?['']?s?\s+services/gi, name: "agency_ref_of_children_services" },
+    { pattern: /<AGENCY_REF>\s+of\s+child\s+services/gi, name: "agency_ref_of_child_services" },
+    { pattern: /<AGENCY_REF>\s+of\s+family\s+services/gi, name: "agency_ref_of_family_services" },
+    { pattern: /<AGENCY_REF>\s+of\s+social\s+services/gi, name: "agency_ref_of_social_services" },
+    { pattern: /<AGENCY_REF>\s+of\s+human\s+services/gi, name: "agency_ref_of_human_services" },
+    // Also fix if <AGENCY> somehow got this suffix
+    { pattern: /<AGENCY>\s+of\s+child(?:ren)?['']?s?\s+services/gi, name: "agency_of_children_services" },
+    { pattern: /<AGENCY>\s+of\s+child\s+services/gi, name: "agency_of_child_services" },
+  ];
+  
+  for (const { pattern, name } of badSplicePatterns) {
+    const before = result;
+    result = result.replace(pattern, "<AGENCY>");
+    if (result !== before) {
+      replacementsMade++;
+      patternsMatched.push(name);
+    }
+    pattern.lastIndex = 0;
+  }
+  
+  // ========== RULE 2: Replace remaining org phrase leaks ==========
+  // These are phrases that should have been caught but weren't
+  const orgLeakPatterns: Array<{ pattern: RegExp; replacement: string; name: string }> = [
+    // Full department names → <AGENCY>
+    { pattern: /\b(?:the\s+)?department\s+of\s+child(?:ren)?['']?s?\s+(?:and\s+)?(?:family\s+)?services\b/gi, replacement: "<AGENCY>", name: "dept_children_services" },
+    { pattern: /\b(?:the\s+)?division\s+of\s+child(?:ren)?['']?s?\s+services\b/gi, replacement: "<AGENCY>", name: "div_children_services" },
+    // Standalone "Children's Services" → <AGENCY>
+    { pattern: /\bchild(?:ren)?['']?s?\s+services\b/gi, replacement: "<AGENCY>", name: "children_services" },
+    // "child protective services" → <AGENCY>
+    { pattern: /\bchild\s+protective\s+services\b/gi, replacement: "<AGENCY>", name: "child_protective_services" },
+    // "child welfare" → <AGENCY>
+    { pattern: /\bchild\s+welfare(?:\s+services)?\b/gi, replacement: "<AGENCY>", name: "child_welfare" },
+    // "social services" → <AGENCY>
+    { pattern: /\b(?:the\s+)?social\s+services\b/gi, replacement: "<AGENCY>", name: "social_services" },
+    // "family services" → <AGENCY>
+    { pattern: /\b(?:the\s+)?family\s+services\b/gi, replacement: "<AGENCY>", name: "family_services" },
+    // Generic references → <AGENCY_REF> (only when clearly an agency reference)
+    { pattern: /\bour\s+department\b/gi, replacement: "<AGENCY_REF>", name: "our_department" },
+    { pattern: /\bour\s+agency\b/gi, replacement: "<AGENCY_REF>", name: "our_agency" },
+    { pattern: /\bthe\s+department\b/gi, replacement: "<AGENCY_REF>", name: "the_department" },
+    { pattern: /\bthe\s+agency\b/gi, replacement: "<AGENCY_REF>", name: "the_agency" },
+  ];
+  
+  for (const { pattern, replacement, name } of orgLeakPatterns) {
+    const before = result;
+    result = result.replace(pattern, replacement);
+    if (result !== before) {
+      replacementsMade++;
+      patternsMatched.push(name);
+    }
+    pattern.lastIndex = 0;
+  }
+  
+  // ========== RULE 3: Collapse double agency tokens ==========
+  const collapsePatterns: Array<{ pattern: RegExp; replacement: string; name: string }> = [
+    { pattern: /<AGENCY>\s*<AGENCY>/gi, replacement: "<AGENCY>", name: "double_agency" },
+    { pattern: /<AGENCY_REF>\s*<AGENCY_REF>/gi, replacement: "<AGENCY_REF>", name: "double_agency_ref" },
+    { pattern: /<AGENCY_REF>\s*<AGENCY>/gi, replacement: "<AGENCY>", name: "agency_ref_then_agency" },
+    { pattern: /<AGENCY>\s*<AGENCY_REF>/gi, replacement: "<AGENCY>", name: "agency_then_agency_ref" },
+    // Also handle with "of" in between
+    { pattern: /<AGENCY>\s+of\s+<AGENCY>/gi, replacement: "<AGENCY>", name: "agency_of_agency" },
+    { pattern: /<AGENCY_REF>\s+of\s+<AGENCY>/gi, replacement: "<AGENCY>", name: "agency_ref_of_agency" },
+  ];
+  
+  for (const { pattern, replacement, name } of collapsePatterns) {
+    const before = result;
+    result = result.replace(pattern, replacement);
+    if (result !== before) {
+      replacementsMade++;
+      patternsMatched.push(name);
+    }
+    pattern.lastIndex = 0;
+  }
+  
+  // ========== FINAL VALIDATION: Check for remaining issues ==========
+  // These are patterns that should NOT exist in the final output
+  const validationPatterns = [
+    { pattern: /of\s+child(?:ren)?['']?s?\s+services/gi, issue: "of_children_services" },
+    { pattern: /\bchildren['']?s?\s+services\b/gi, issue: "children_services_literal" },
+    { pattern: /<AGENCY_REF>\s+of\b/gi, issue: "agency_ref_of" },
+  ];
+  
+  for (const { pattern, issue } of validationPatterns) {
+    if (pattern.test(result)) {
+      issuesFound.push(issue);
+      console.warn(`[FinalCleanup] Validation failed: found "${issue}" in output`);
+    }
+    pattern.lastIndex = 0;
+  }
+  
+  // Clean up multiple spaces
+  result = result.replace(/\s+/g, ' ').trim();
+  
+  return { text: result, replacementsMade, patternsMatched, issuesFound };
+}
+
+//
 function regexRedact(text: string): { text: string; counts: Partial<RedactionCounts> } {
   const counts: Partial<RedactionCounts> = {
     phone: 0,
@@ -1976,19 +2092,39 @@ async function runRedactionPipeline(
 
   // Determine minimized_text source
   const minimizedTextSource: "ner" | "regex" = layer2Result.layer2Status === "COMPLETED" ? "ner" : "regex";
+  
+  // Get the text from layer 2 result
+  let finalText = layer2Result.text;
 
   await logEyeEvent(supabase, sessionId, "MINIMIZED_TEXT_SET", {
     source_layer: minimizedTextSource,
     layer2_status: layer2Result.layer2Status,
   });
 
-  // ========== STEP 6: LAYER 3 - Verification ==========
+  // ========== STEP 6: FINAL AGENCY CLEANUP ==========
+  console.log("[Redact] Running Step 6: Final Agency Cleanup");
+  const cleanupResult = finalAgencyCleanup(finalText);
+  finalText = cleanupResult.text;
+  
+  console.log(JSON.stringify({
+    event: "FINAL_AGENCY_CLEANUP_SUMMARY",
+    replacements_made: cleanupResult.replacementsMade,
+    patterns_matched: cleanupResult.patternsMatched,
+    issues_found: cleanupResult.issuesFound,
+  }));
+
+  await logEyeEvent(supabase, sessionId, "FINAL_AGENCY_CLEANUP_COMPLETED", {
+    replacements_made: cleanupResult.replacementsMade,
+    patterns_matched: cleanupResult.patternsMatched,
+  });
+
+  // ========== STEP 7: LAYER 3 - Verification ==========
   console.log("[Redact] Running Layer 3: Verification");
 
   const verification =
     layer2Result.layer2Status === "COMPLETED" && layer2Result.verification
       ? layer2Result.verification
-      : await verifyWithLLM(layer2Result.text, openAIApiKey);
+      : await verifyWithLLM(finalText, openAIApiKey);
 
   layerStatuses.layer3 = verification;
 
@@ -2004,12 +2140,14 @@ async function runRedactionPipeline(
   // Final preview log
   console.log(JSON.stringify({
     event: "FINAL_PREVIEW_MASKED",
-    length: layer2Result.text.length,
-    preview: maskForLogs(layer2Result.text, 200),
+    length: finalText.length,
+    preview: maskForLogs(finalText, 200),
   }));
 
+  console.log(`[Redact] Pipeline complete - ${verification.status}. Minimized length: ${finalText.length}`);
+
   return {
-    minimized_text: layer2Result.text,
+    minimized_text: finalText,
     redaction_counts: combinedCounts,
     verification_result: verification,
     redaction: layerStatuses,
