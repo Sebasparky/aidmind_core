@@ -289,12 +289,16 @@ interface NormalizationResult {
   changes: Array<{ original: string; normalized: string; position: number }>;
 }
 
+// All possible apostrophe-like characters to normalize
+const APOSTROPHE_VARIANTS = /[\u0027\u0060\u00B4\u02B9\u02BC\u02C8\u0313\u0315\u055A\u05F3\u2018\u2019\u201B\u2032\uFF07'`´]/g;
+
 function preNerNormalize(text: string): NormalizationResult {
   const changes: Array<{ original: string; normalized: string; position: number }> = [];
   let result = text;
   
-  // Step 1: Normalize weird apostrophes (safe)
-  result = result.replace(/[''`]/g, "'");
+  // Step 1: Normalize ALL apostrophe variants to standard ASCII apostrophe (')
+  // This is critical for consistent pattern matching in agency redaction
+  result = result.replace(APOSTROPHE_VARIANTS, "'");
   
   // Step 2: Collapse repeated whitespace
   result = result.replace(/[ \t]+/g, " ");
@@ -562,19 +566,20 @@ interface AgencyResult {
 
 // Explicit agency names/acronyms - ORDER MATTERS (longer phrases first!)
 // These patterns match the FULL phrase and replace entirely with <AGENCY>
+// Note: After preNerNormalize, all apostrophes should be standard ASCII ('), but we match both for safety
 const AGENCY_NAMES: Array<{ pattern: RegExp; name: string }> = [
   // Full names with "department of" (longest first to avoid partial matches)
-  { pattern: /\b(?:the\s+)?department\s+of\s+child(?:ren)?['']?s?\s+(?:and\s+)?(?:family\s+)?services\b/gi, name: "dept_children_services" },
-  { pattern: /\b(?:the\s+)?division\s+of\s+child(?:ren)?['']?s?\s+services\b/gi, name: "div_children_services" },
+  { pattern: /\b(?:the\s+)?department\s+of\s+child(?:ren)?'?s?\s+(?:and\s+)?(?:family\s+)?services\b/gi, name: "dept_children_services" },
+  { pattern: /\b(?:the\s+)?division\s+of\s+child(?:ren)?'?s?\s+services\b/gi, name: "div_children_services" },
   { pattern: /\b(?:the\s+)?department\s+of\s+child\s+services\b/gi, name: "dept_child_services" },
   { pattern: /\b(?:the\s+)?department\s+of\s+social\s+services\b/gi, name: "dept_social_services" },
   { pattern: /\b(?:the\s+)?department\s+of\s+human\s+services\b/gi, name: "dept_human_services" },
   { pattern: /\b(?:the\s+)?department\s+of\s+family\s+services\b/gi, name: "dept_family_services" },
   // Phrases without "department of"
   { pattern: /\b(?:the\s+)?child\s+protective\s+services\b/gi, name: "child_protective_services" },
-  { pattern: /\b(?:the\s+)?child(?:ren)?['']?s?\s+services\b/gi, name: "children_services" },
+  { pattern: /\b(?:the\s+)?child(?:ren)?'?s?\s+services\b/gi, name: "children_services" },
   { pattern: /\b(?:the\s+)?child\s+welfare(?:\s+services)?\b/gi, name: "child_welfare" },
-  { pattern: /\b(?:the\s+)?family\s+(?:and\s+)?child(?:ren)?['']?s?\s+services\b/gi, name: "family_children_services" },
+  { pattern: /\b(?:the\s+)?family\s+(?:and\s+)?child(?:ren)?'?s?\s+services\b/gi, name: "family_children_services" },
   { pattern: /\b(?:the\s+)?family\s+services\b/gi, name: "family_services" },
   { pattern: /\b(?:the\s+)?social\s+services\b/gi, name: "social_services" },
   { pattern: /\b(?:the\s+)?human\s+services\b/gi, name: "human_services" },
@@ -611,15 +616,16 @@ const AGENCY_REF_PATTERNS = [
 ];
 
 // Cleanup patterns for fixing awkward output from previous passes
+// Note: After preNerNormalize, all apostrophes should be standard ASCII (')
 const AGENCY_CLEANUP_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   // Fix "<AGENCY_REF> of children's services" → <AGENCY>
-  { pattern: /<AGENCY_REF>\s+of\s+child(?:ren)?['']?s?\s+services/gi, replacement: "<AGENCY>" },
+  { pattern: /<AGENCY_REF>\s+of\s+child(?:ren)?'?s?\s+services/gi, replacement: "<AGENCY>" },
   { pattern: /<AGENCY_REF>\s+of\s+child\s+services/gi, replacement: "<AGENCY>" },
   { pattern: /<AGENCY_REF>\s+of\s+family\s+services/gi, replacement: "<AGENCY>" },
   { pattern: /<AGENCY_REF>\s+of\s+social\s+services/gi, replacement: "<AGENCY>" },
   { pattern: /<AGENCY_REF>\s+of\s+human\s+services/gi, replacement: "<AGENCY>" },
   // Fix any leftover "of children's services" fragments after <AGENCY>
-  { pattern: /<AGENCY>\s+of\s+child(?:ren)?['']?s?\s+services/gi, replacement: "<AGENCY>" },
+  { pattern: /<AGENCY>\s+of\s+child(?:ren)?'?s?\s+services/gi, replacement: "<AGENCY>" },
   // Fix double tags
   { pattern: /<AGENCY>\s*<AGENCY>/gi, replacement: "<AGENCY>" },
   { pattern: /<AGENCY_REF>\s*<AGENCY_REF>/gi, replacement: "<AGENCY_REF>" },
@@ -628,9 +634,10 @@ const AGENCY_CLEANUP_PATTERNS: Array<{ pattern: RegExp; replacement: string }> =
 ];
 
 // Leftover org name fragments that should have been caught
+// Note: After preNerNormalize, all apostrophes should be standard ASCII (')
 const LEFTOVER_ORG_PATTERNS: Array<{ pattern: RegExp; name: string }> = [
   // Standalone "children's services" that wasn't caught
-  { pattern: /\bchild(?:ren)?['']?s?\s+services\b/gi, name: "children_services_leftover" },
+  { pattern: /\bchild(?:ren)?'?s?\s+services\b/gi, name: "children_services_leftover" },
   // Standalone "child protective" without "services"
   { pattern: /\bchild\s+protective\b/gi, name: "child_protective_leftover" },
 ];
@@ -728,15 +735,16 @@ function finalAgencyCleanup(text: string): FinalCleanupResult {
   
   // ========== RULE 1: Fix bad splices ==========
   // "<AGENCY_REF> of children's services" → <AGENCY>
+  // Note: After preNerNormalize, all apostrophes should be standard ASCII (')
   const badSplicePatterns: Array<{ pattern: RegExp; name: string }> = [
-    { pattern: /<AGENCY_REF>\s+of\s+(?:the\s+)?department\s+of\s+child(?:ren)?['']?s?\s+services/gi, name: "agency_ref_of_dept" },
-    { pattern: /<AGENCY_REF>\s+of\s+child(?:ren)?['']?s?\s+services/gi, name: "agency_ref_of_children_services" },
+    { pattern: /<AGENCY_REF>\s+of\s+(?:the\s+)?department\s+of\s+child(?:ren)?'?s?\s+services/gi, name: "agency_ref_of_dept" },
+    { pattern: /<AGENCY_REF>\s+of\s+child(?:ren)?'?s?\s+services/gi, name: "agency_ref_of_children_services" },
     { pattern: /<AGENCY_REF>\s+of\s+child\s+services/gi, name: "agency_ref_of_child_services" },
     { pattern: /<AGENCY_REF>\s+of\s+family\s+services/gi, name: "agency_ref_of_family_services" },
     { pattern: /<AGENCY_REF>\s+of\s+social\s+services/gi, name: "agency_ref_of_social_services" },
     { pattern: /<AGENCY_REF>\s+of\s+human\s+services/gi, name: "agency_ref_of_human_services" },
     // Also fix if <AGENCY> somehow got this suffix
-    { pattern: /<AGENCY>\s+of\s+child(?:ren)?['']?s?\s+services/gi, name: "agency_of_children_services" },
+    { pattern: /<AGENCY>\s+of\s+child(?:ren)?'?s?\s+services/gi, name: "agency_of_children_services" },
     { pattern: /<AGENCY>\s+of\s+child\s+services/gi, name: "agency_of_child_services" },
   ];
   
@@ -752,12 +760,13 @@ function finalAgencyCleanup(text: string): FinalCleanupResult {
   
   // ========== RULE 2: Replace remaining org phrase leaks ==========
   // These are phrases that should have been caught but weren't
+  // Note: After preNerNormalize, all apostrophes should be standard ASCII (')
   const orgLeakPatterns: Array<{ pattern: RegExp; replacement: string; name: string }> = [
     // Full department names → <AGENCY>
-    { pattern: /\b(?:the\s+)?department\s+of\s+child(?:ren)?['']?s?\s+(?:and\s+)?(?:family\s+)?services\b/gi, replacement: "<AGENCY>", name: "dept_children_services" },
-    { pattern: /\b(?:the\s+)?division\s+of\s+child(?:ren)?['']?s?\s+services\b/gi, replacement: "<AGENCY>", name: "div_children_services" },
+    { pattern: /\b(?:the\s+)?department\s+of\s+child(?:ren)?'?s?\s+(?:and\s+)?(?:family\s+)?services\b/gi, replacement: "<AGENCY>", name: "dept_children_services" },
+    { pattern: /\b(?:the\s+)?division\s+of\s+child(?:ren)?'?s?\s+services\b/gi, replacement: "<AGENCY>", name: "div_children_services" },
     // Standalone "Children's Services" → <AGENCY>
-    { pattern: /\bchild(?:ren)?['']?s?\s+services\b/gi, replacement: "<AGENCY>", name: "children_services" },
+    { pattern: /\bchild(?:ren)?'?s?\s+services\b/gi, replacement: "<AGENCY>", name: "children_services" },
     // "child protective services" → <AGENCY>
     { pattern: /\bchild\s+protective\s+services\b/gi, replacement: "<AGENCY>", name: "child_protective_services" },
     // "child welfare" → <AGENCY>
@@ -806,9 +815,10 @@ function finalAgencyCleanup(text: string): FinalCleanupResult {
   
   // ========== FINAL VALIDATION: Check for remaining issues ==========
   // These are patterns that should NOT exist in the final output
+  // Note: After preNerNormalize, all apostrophes should be standard ASCII (')
   const validationPatterns = [
-    { pattern: /of\s+child(?:ren)?['']?s?\s+services/gi, issue: "of_children_services" },
-    { pattern: /\bchildren['']?s?\s+services\b/gi, issue: "children_services_literal" },
+    { pattern: /of\s+child(?:ren)?'?s?\s+services/gi, issue: "of_children_services" },
+    { pattern: /\bchildren'?s?\s+services\b/gi, issue: "children_services_literal" },
     { pattern: /<AGENCY_REF>\s+of\b/gi, issue: "agency_ref_of" },
   ];
   
