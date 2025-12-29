@@ -561,44 +561,78 @@ interface AgencyResult {
 }
 
 // Explicit agency names/acronyms - ORDER MATTERS (longer phrases first!)
+// These patterns match the FULL phrase and replace entirely with <AGENCY>
 const AGENCY_NAMES: Array<{ pattern: RegExp; name: string }> = [
-  // Full names (longest first to avoid partial matches)
-  { pattern: /\b(?:the\s+)?department\s+of\s+children['']?s?\s+services\b/gi, name: "dept_children_services" },
-  { pattern: /\b(?:the\s+)?department\s+of\s+child\s+(?:and\s+)?family\s+services\b/gi, name: "DCFS" },
-  { pattern: /\b(?:the\s+)?division\s+of\s+children['']?s?\s+services\b/gi, name: "div_children_services" },
+  // Full names with "department of" (longest first to avoid partial matches)
+  { pattern: /\b(?:the\s+)?department\s+of\s+child(?:ren)?['']?s?\s+(?:and\s+)?(?:family\s+)?services\b/gi, name: "dept_children_services" },
+  { pattern: /\b(?:the\s+)?division\s+of\s+child(?:ren)?['']?s?\s+services\b/gi, name: "div_children_services" },
+  { pattern: /\b(?:the\s+)?department\s+of\s+child\s+services\b/gi, name: "dept_child_services" },
+  { pattern: /\b(?:the\s+)?department\s+of\s+social\s+services\b/gi, name: "dept_social_services" },
+  { pattern: /\b(?:the\s+)?department\s+of\s+human\s+services\b/gi, name: "dept_human_services" },
+  { pattern: /\b(?:the\s+)?department\s+of\s+family\s+services\b/gi, name: "dept_family_services" },
+  // Phrases without "department of"
   { pattern: /\b(?:the\s+)?child\s+protective\s+services\b/gi, name: "child_protective_services" },
-  { pattern: /\b(?:the\s+)?children['']?s?\s+services\b/gi, name: "children_services" },
-  { pattern: /\b(?:the\s+)?child\s+welfare\b/gi, name: "child_welfare" },
+  { pattern: /\b(?:the\s+)?child(?:ren)?['']?s?\s+services\b/gi, name: "children_services" },
+  { pattern: /\b(?:the\s+)?child\s+welfare(?:\s+services)?\b/gi, name: "child_welfare" },
+  { pattern: /\b(?:the\s+)?family\s+(?:and\s+)?child(?:ren)?['']?s?\s+services\b/gi, name: "family_children_services" },
   { pattern: /\b(?:the\s+)?family\s+services\b/gi, name: "family_services" },
   { pattern: /\b(?:the\s+)?social\s+services\b/gi, name: "social_services" },
-  // Acronyms (standalone) - only match when not part of a larger word
+  { pattern: /\b(?:the\s+)?human\s+services\b/gi, name: "human_services" },
+  // Acronyms (standalone) - case sensitive for acronyms
   { pattern: /\bCPS\b/g, name: "CPS" },
   { pattern: /\bDCS\b/g, name: "DCS" },
   { pattern: /\bDCFS\b/g, name: "DCFS" },
   { pattern: /\bDFCS\b/g, name: "DFCS" },
+  { pattern: /\bDCF\b/g, name: "DCF" },
   { pattern: /\bDSS\b/g, name: "DSS" },
   { pattern: /\bDHHS\b/g, name: "DHHS" },
   { pattern: /\bDHS\b/g, name: "DHS" },
+  { pattern: /\bHHS\b/g, name: "HHS" },
 ];
 
 // DDS with context (worker, caseworker, etc.) → <AGENCY> or <AGENCY_ROLE>
 const DDS_CONTEXT_PATTERNS = [
+  // "my/our/the/a DDS worker" → "$1 <AGENCY_ROLE>"
+  { pattern: /\b(my|our|the|a)\s+DDS\s+(worker|caseworker|case\s*worker|staff|employee|representative|supervisor|rep)\b/gi, replacement: "$1 <AGENCY_ROLE>" },
   // "DDS worker", "DDS caseworker" etc → <AGENCY_ROLE>
   { pattern: /\bDDS\s+(worker|caseworker|case\s*worker|staff|employee|representative|supervisor|rep)\b/gi, replacement: "<AGENCY_ROLE>" },
-  // "my DDS worker" → "my <AGENCY_ROLE>"
-  { pattern: /\b(my|our|the|a)\s+DDS\s+(worker|caseworker|case\s*worker|staff|employee|representative|supervisor|rep)\b/gi, replacement: "$1 <AGENCY_ROLE>" },
   // "from DDS", "at DDS" etc → preposition + <AGENCY>
   { pattern: /\b(from|at|with|by|through)\s+DDS\b/gi, replacement: "$1 <AGENCY>" },
 ];
 
 // Generic agency references → <AGENCY_REF>
 const AGENCY_REF_PATTERNS = [
-  /\b(our\s+agency)\b/gi,
-  /\b(our\s+department)\b/gi,
-  /\b(the\s+agency)\b/gi,
-  /\b(the\s+department)\b/gi,
-  /\b(this\s+agency)\b/gi,
-  /\b(this\s+department)\b/gi,
+  /\bour\s+agency\b/gi,
+  /\bour\s+department\b/gi,
+  /\bthe\s+agency\b/gi,
+  /\bthe\s+department\b/gi,
+  /\bthis\s+agency\b/gi,
+  /\bthis\s+department\b/gi,
+];
+
+// Cleanup patterns for fixing awkward output from previous passes
+const AGENCY_CLEANUP_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
+  // Fix "<AGENCY_REF> of children's services" → <AGENCY>
+  { pattern: /<AGENCY_REF>\s+of\s+child(?:ren)?['']?s?\s+services/gi, replacement: "<AGENCY>" },
+  { pattern: /<AGENCY_REF>\s+of\s+child\s+services/gi, replacement: "<AGENCY>" },
+  { pattern: /<AGENCY_REF>\s+of\s+family\s+services/gi, replacement: "<AGENCY>" },
+  { pattern: /<AGENCY_REF>\s+of\s+social\s+services/gi, replacement: "<AGENCY>" },
+  { pattern: /<AGENCY_REF>\s+of\s+human\s+services/gi, replacement: "<AGENCY>" },
+  // Fix any leftover "of children's services" fragments after <AGENCY>
+  { pattern: /<AGENCY>\s+of\s+child(?:ren)?['']?s?\s+services/gi, replacement: "<AGENCY>" },
+  // Fix double tags
+  { pattern: /<AGENCY>\s*<AGENCY>/gi, replacement: "<AGENCY>" },
+  { pattern: /<AGENCY_REF>\s*<AGENCY_REF>/gi, replacement: "<AGENCY_REF>" },
+  { pattern: /<AGENCY_REF>\s*<AGENCY>/gi, replacement: "<AGENCY>" },
+  { pattern: /<AGENCY>\s*<AGENCY_REF>/gi, replacement: "<AGENCY>" },
+];
+
+// Leftover org name fragments that should have been caught
+const LEFTOVER_ORG_PATTERNS: Array<{ pattern: RegExp; name: string }> = [
+  // Standalone "children's services" that wasn't caught
+  { pattern: /\bchild(?:ren)?['']?s?\s+services\b/gi, name: "children_services_leftover" },
+  // Standalone "child protective" without "services"
+  { pattern: /\bchild\s+protective\b/gi, name: "child_protective_leftover" },
 ];
 
 function redactAgencyRefs(text: string): AgencyResult {
@@ -609,7 +643,6 @@ function redactAgencyRefs(text: string): AgencyResult {
   
   // 1. Redact explicit agency names → <AGENCY> (order matters - longest first)
   for (const { pattern, name } of AGENCY_NAMES) {
-    const before = result;
     result = result.replace(pattern, () => {
       agencyCount++;
       if (!patterns.includes(name)) patterns.push(name);
@@ -626,10 +659,10 @@ function redactAgencyRefs(text: string): AgencyResult {
       if (!patterns.includes("DDS_context")) patterns.push("DDS_context");
       // Handle backreferences in replacement string
       let finalReplacement = replacement;
-      // $1, $2 etc in replacement
+      // args: [fullMatch, group1, group2, ..., offset, string]
       for (let i = 1; i < args.length - 2; i++) {
         if (args[i]) {
-          finalReplacement = finalReplacement.replace(`$${i}`, args[i]);
+          finalReplacement = finalReplacement.replace(new RegExp(`\\$${i}`, 'g'), args[i]);
         }
       }
       return finalReplacement;
@@ -646,6 +679,31 @@ function redactAgencyRefs(text: string): AgencyResult {
     });
     pattern.lastIndex = 0;
   }
+  
+  // 4. Cleanup pass - fix awkward patterns like "<AGENCY_REF> of children's services"
+  for (const { pattern, replacement } of AGENCY_CLEANUP_PATTERNS) {
+    const before = result;
+    result = result.replace(pattern, replacement);
+    if (result !== before) {
+      if (!patterns.includes("cleanup")) patterns.push("cleanup");
+    }
+    pattern.lastIndex = 0;
+  }
+  
+  // 5. Final sweep - catch any leftover org name fragments
+  for (const { pattern, name } of LEFTOVER_ORG_PATTERNS) {
+    const before = result;
+    result = result.replace(pattern, () => {
+      agencyCount++;
+      if (!patterns.includes(name)) patterns.push(name);
+      return "<AGENCY>";
+    });
+    pattern.lastIndex = 0;
+  }
+  
+  // 6. Final cleanup - collapse multiple spaces and fix spacing around tags
+  result = result.replace(/\s+/g, ' ');
+  result = result.replace(/\s+([.,!?;:])/g, '$1');
   
   return { text: result, agencyCount, agencyRefCount, patterns };
 }
