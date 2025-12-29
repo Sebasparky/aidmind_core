@@ -438,6 +438,7 @@ function redactCaseIds(text: string): CaseIdResult {
   let result = text;
   let count = 0;
   let candidatesFound = 0;
+  let removedFalsePositives = 0;
   const examples: string[] = [];
   
   // Don't match inside existing placeholders
@@ -452,17 +453,32 @@ function redactCaseIds(text: string): CaseIdResult {
     return false;
   };
   
-  // Pattern 1: Already has [CASE_ID] or [CASE_ID: ...] placeholder - convert to <CASE_ID>
-  result = result.replace(/\[CASE_ID(?::\s*[^\]]+)?\]/gi, () => {
-    count++;
-    if (examples.length < 3) examples.push("[CASE_ID]");
-    return "<CASE_ID>";
+  // CLEANUP: Remove any stray [CASE_ID] tokens from buggy previous runs
+  // These are false positives - remove them entirely (replace with empty string)
+  result = result.replace(/\s*\[CASE_ID\]\s*/gi, (match) => {
+    removedFalsePositives++;
+    // Preserve a single space if surrounded by spaces
+    return ' ';
+  });
+  
+  // Pattern 1: Already has [CASE_ID: <actual_id>] placeholder - convert to <CASE_ID> only if it has an ID with digits
+  result = result.replace(/\[CASE_ID:\s*([^\]]+)\]/gi, (match, idPart) => {
+    // Only convert if the ID part contains at least one digit
+    if (/\d/.test(idPart)) {
+      count++;
+      if (examples.length < 3) examples.push(maskForLogs(`[CASE_ID:${idPart}]`, 20));
+      return "<CASE_ID>";
+    }
+    // No digits = not a real ID, remove it
+    removedFalsePositives++;
+    return '';
   });
   
   // Build a map of keyword positions for context checking
   const keywordPositions: Array<{ start: number; end: number; keyword: string }> = [];
   for (const keyword of CASE_ID_KEYWORDS) {
-    const regex = new RegExp(`\\b${keyword.replace(/[#]/g, '\\#').replace(/\s+/g, '\\s*')}`, 'gi');
+    const escapedKeyword = keyword.replace(/[#]/g, '\\#').replace(/\s+/g, '\\s*');
+    const regex = new RegExp(`\\b${escapedKeyword}`, 'gi');
     let match;
     while ((match = regex.exec(result)) !== null) {
       keywordPositions.push({
@@ -473,10 +489,10 @@ function redactCaseIds(text: string): CaseIdResult {
     }
   }
   
-  // Pattern 2: ID tokens near keywords (within ~30 chars after keyword)
+  // Pattern 2: ID tokens near keywords (within ~40 chars after keyword)
   // Matches alphanumeric tokens that could be IDs
   const idTokenPattern = /\b([A-Z0-9][A-Z0-9\-_]{3,})\b/gi;
-  const replacements: Array<{ start: number; end: number; redacted: boolean }> = [];
+  const replacements: Array<{ start: number; end: number }> = [];
   
   let idMatch;
   while ((idMatch = idTokenPattern.exec(result)) !== null) {
@@ -491,23 +507,28 @@ function redactCaseIds(text: string): CaseIdResult {
       continue;
     }
     
-    // Check if near a keyword (within ~30 chars after any keyword end)
+    // STRICT: Must contain at least 1 digit
+    if (!/\d/.test(candidate)) {
+      continue;
+    }
+    
+    // Check if near a keyword (within ~40 chars after any keyword end)
     const isNearKeyword = keywordPositions.some(kw => {
       const distance = matchStart - kw.end;
-      return distance >= 0 && distance <= 30;
+      return distance >= 0 && distance <= 40;
     });
     
     if (!isNearKeyword) {
       continue;
     }
     
-    // Validate the candidate looks like a real ID
+    // Validate the candidate looks like a real ID (already confirmed has digit above)
     if (!isValidCaseId(candidate)) {
       continue;
     }
     
     // Mark for replacement
-    replacements.push({ start: matchStart, end: matchEnd, redacted: true });
+    replacements.push({ start: matchStart, end: matchEnd });
     if (examples.length < 3) examples.push(maskForLogs(candidate, 20));
   }
   
@@ -516,6 +537,11 @@ function redactCaseIds(text: string): CaseIdResult {
   for (const rep of replacements) {
     result = result.slice(0, rep.start) + "<CASE_ID>" + result.slice(rep.end);
     count++;
+  }
+  
+  // Log cleanup stats
+  if (removedFalsePositives > 0) {
+    console.log(`[CaseID] Removed ${removedFalsePositives} false positive [CASE_ID] tokens`);
   }
   
   return { text: result, count, candidatesFound, candidatesRedacted: count, examples };
@@ -534,29 +560,35 @@ interface AgencyResult {
   patterns: string[];
 }
 
-// Explicit agency names/acronyms
-const AGENCY_NAMES = [
-  // Full names
-  { pattern: /\b(department\s+of\s+children'?s?\s+services)\b/gi, name: "dept_children_services" },
-  { pattern: /\b(children'?s?\s+services)\b/gi, name: "children_services" },
-  { pattern: /\b(child\s+protective\s+services)\b/gi, name: "child_protective_services" },
-  { pattern: /\b(child\s+welfare)\b/gi, name: "child_welfare" },
-  { pattern: /\b(family\s+services)\b/gi, name: "family_services" },
-  { pattern: /\b(social\s+services)\b/gi, name: "social_services" },
-  // Acronyms (standalone)
-  { pattern: /\b(cps)\b/gi, name: "CPS" },
-  { pattern: /\b(dcs)\b/gi, name: "DCS" },
-  { pattern: /\b(dcfs)\b/gi, name: "DCFS" },
-  { pattern: /\b(dfcs)\b/gi, name: "DFCS" },
-  { pattern: /\b(dss)\b/gi, name: "DSS" },
-  { pattern: /\b(dhhs)\b/gi, name: "DHHS" },
-  { pattern: /\b(dhs)\b/gi, name: "DHS" },
+// Explicit agency names/acronyms - ORDER MATTERS (longer phrases first!)
+const AGENCY_NAMES: Array<{ pattern: RegExp; name: string }> = [
+  // Full names (longest first to avoid partial matches)
+  { pattern: /\b(?:the\s+)?department\s+of\s+children['']?s?\s+services\b/gi, name: "dept_children_services" },
+  { pattern: /\b(?:the\s+)?department\s+of\s+child\s+(?:and\s+)?family\s+services\b/gi, name: "DCFS" },
+  { pattern: /\b(?:the\s+)?division\s+of\s+children['']?s?\s+services\b/gi, name: "div_children_services" },
+  { pattern: /\b(?:the\s+)?child\s+protective\s+services\b/gi, name: "child_protective_services" },
+  { pattern: /\b(?:the\s+)?children['']?s?\s+services\b/gi, name: "children_services" },
+  { pattern: /\b(?:the\s+)?child\s+welfare\b/gi, name: "child_welfare" },
+  { pattern: /\b(?:the\s+)?family\s+services\b/gi, name: "family_services" },
+  { pattern: /\b(?:the\s+)?social\s+services\b/gi, name: "social_services" },
+  // Acronyms (standalone) - only match when not part of a larger word
+  { pattern: /\bCPS\b/g, name: "CPS" },
+  { pattern: /\bDCS\b/g, name: "DCS" },
+  { pattern: /\bDCFS\b/g, name: "DCFS" },
+  { pattern: /\bDFCS\b/g, name: "DFCS" },
+  { pattern: /\bDSS\b/g, name: "DSS" },
+  { pattern: /\bDHHS\b/g, name: "DHHS" },
+  { pattern: /\bDHS\b/g, name: "DHS" },
 ];
 
-// DDS with context (worker, caseworker, etc.)
+// DDS with context (worker, caseworker, etc.) → <AGENCY> or <AGENCY_ROLE>
 const DDS_CONTEXT_PATTERNS = [
-  /\b(dds)\s+(worker|caseworker|case\s*worker|staff|employee|representative|office|supervisor|rep)\b/gi,
-  /\b(from|at|with|by)\s+(dds)\b/gi,
+  // "DDS worker", "DDS caseworker" etc → <AGENCY_ROLE>
+  { pattern: /\bDDS\s+(worker|caseworker|case\s*worker|staff|employee|representative|supervisor|rep)\b/gi, replacement: "<AGENCY_ROLE>" },
+  // "my DDS worker" → "my <AGENCY_ROLE>"
+  { pattern: /\b(my|our|the|a)\s+DDS\s+(worker|caseworker|case\s*worker|staff|employee|representative|supervisor|rep)\b/gi, replacement: "$1 <AGENCY_ROLE>" },
+  // "from DDS", "at DDS" etc → preposition + <AGENCY>
+  { pattern: /\b(from|at|with|by|through)\s+DDS\b/gi, replacement: "$1 <AGENCY>" },
 ];
 
 // Generic agency references → <AGENCY_REF>
@@ -575,27 +607,34 @@ function redactAgencyRefs(text: string): AgencyResult {
   let agencyRefCount = 0;
   const patterns: string[] = [];
   
-  // 1. Redact explicit agency names → <AGENCY>
+  // 1. Redact explicit agency names → <AGENCY> (order matters - longest first)
   for (const { pattern, name } of AGENCY_NAMES) {
+    const before = result;
     result = result.replace(pattern, () => {
       agencyCount++;
       if (!patterns.includes(name)) patterns.push(name);
       return "<AGENCY>";
     });
+    // Reset lastIndex for global patterns
+    pattern.lastIndex = 0;
   }
   
-  // 2. Redact DDS with context → <AGENCY>
-  for (const pattern of DDS_CONTEXT_PATTERNS) {
-    result = result.replace(pattern, (match) => {
+  // 2. Redact DDS with context → <AGENCY> or <AGENCY_ROLE>
+  for (const { pattern, replacement } of DDS_CONTEXT_PATTERNS) {
+    result = result.replace(pattern, (...args) => {
       agencyCount++;
       if (!patterns.includes("DDS_context")) patterns.push("DDS_context");
-      // For "from DDS" patterns, preserve the preposition
-      if (/^(from|at|with|by)\s+/i.test(match)) {
-        const prep = match.match(/^(from|at|with|by)/i)?.[0] || "";
-        return `${prep} <AGENCY>`;
+      // Handle backreferences in replacement string
+      let finalReplacement = replacement;
+      // $1, $2 etc in replacement
+      for (let i = 1; i < args.length - 2; i++) {
+        if (args[i]) {
+          finalReplacement = finalReplacement.replace(`$${i}`, args[i]);
+        }
       }
-      return "<AGENCY>";
+      return finalReplacement;
     });
+    pattern.lastIndex = 0;
   }
   
   // 3. Redact generic agency references → <AGENCY_REF>
@@ -605,6 +644,7 @@ function redactAgencyRefs(text: string): AgencyResult {
       if (!patterns.includes("agency_ref")) patterns.push("agency_ref");
       return "<AGENCY_REF>";
     });
+    pattern.lastIndex = 0;
   }
   
   return { text: result, agencyCount, agencyRefCount, patterns };
@@ -661,11 +701,16 @@ function regexRedact(text: string): { text: string; counts: Partial<RedactionCou
     return "[ADDRESS]";
   });
 
-  // Case number / reference ID patterns (legacy - now handled by redactCaseIds)
-  const caseIdPattern = /\b(Case\s*(?:#|No\.?|Number)?|Reference\s*(?:#|No\.?|ID)?|Ref\s*(?:#|No\.?)?)\s*[:\-]?\s*[A-Z0-9\-]+\b/gi;
-  result = result.replace(caseIdPattern, () => {
+  // Case number / reference ID patterns - STRICT: only match if contains digits
+  // This is a legacy fallback; primary detection is in redactCaseIds()
+  const caseIdPattern = /\b(Case\s*(?:#|No\.?|Number)|Reference\s*(?:#|No\.?|ID)|Ref\s*(?:#|No\.?))\s*[:\-]?\s*([A-Z0-9\-]{4,})\b/gi;
+  result = result.replace(caseIdPattern, (match, prefix, idPart) => {
+    // STRICT: Only redact if the ID part contains at least one digit
+    if (!/\d/.test(idPart)) {
+      return match; // Not a real ID, leave unchanged
+    }
     counts.case_id!++;
-    return "[CASE_ID]";
+    return "<CASE_ID>";
   });
 
   // Generic ID patterns (e.g., "ID: 12345", "Client ID 987")
