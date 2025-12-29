@@ -8,7 +8,12 @@ const corsHeaders = {
 };
 
 const MINIMIZED_TRANSCRIPT_TTL_SECONDS = 30 * 60; // 30 minutes
-const PRESIDIO_TIMEOUT_MS = 5000; // 5 second timeout
+
+// Tiered timeouts for different Presidio operations
+const PRESIDIO_ANALYZER_TIMEOUT_MS = 30000;   // 30 seconds - NER analysis is expensive for long text
+const PRESIDIO_ANONYMIZER_TIMEOUT_MS = 10000; // 10 seconds - replacement is fast
+const PRESIDIO_HEALTH_TIMEOUT_MS = 5000;      // 5 seconds - health check should be quick
+
 const PRESIDIO_HEALTH_CACHE_MS = 60000; // 60 seconds health cache
 
 // ============================================================
@@ -1237,7 +1242,7 @@ async function nerRedactWithPresidio(
   
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), PRESIDIO_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), PRESIDIO_ANALYZER_TIMEOUT_MS);
 
     // Request all entity types with explicit inclusion of PERSON variants
     // Use a lower score threshold for PERSON detection (0.3) to catch more names
@@ -1371,7 +1376,7 @@ async function nerRedactWithPresidio(
   
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), PRESIDIO_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), PRESIDIO_ANONYMIZER_TIMEOUT_MS);
 
     // Build anonymizer operators for deterministic replacement
     const operators: Record<string, { type: string; new_value?: string }> = {
@@ -1451,7 +1456,7 @@ async function nerRedactWithPresidio(
 
     const runVerifyAnalyze = async (tag: string, textToAnalyze: string) => {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), PRESIDIO_TIMEOUT_MS);
+      const timeoutId = setTimeout(() => controller.abort(), PRESIDIO_ANALYZER_TIMEOUT_MS);
 
       const { res, text: bodyText, json } = await fetchWithLogs(tag, analyzeUrl, {
         method: "POST",
@@ -1494,7 +1499,7 @@ async function nerRedactWithPresidio(
       };
 
       const controller2 = new AbortController();
-      const timeoutId2 = setTimeout(() => controller2.abort(), PRESIDIO_TIMEOUT_MS);
+      const timeoutId2 = setTimeout(() => controller2.abort(), PRESIDIO_ANONYMIZER_TIMEOUT_MS);
 
       const { res: anonymize2Res, text: anonymize2Body, json: anonymize2Json } = await fetchWithLogs(
         "PRESIDIO_ANONYMIZE_2",
@@ -1670,7 +1675,7 @@ async function nerRedactWithPresidio(
       };
 
       const controller3 = new AbortController();
-      const timeoutId3 = setTimeout(() => controller3.abort(), PRESIDIO_TIMEOUT_MS);
+      const timeoutId3 = setTimeout(() => controller3.abort(), PRESIDIO_ANONYMIZER_TIMEOUT_MS);
 
       const { res: anonymize3Res, text: anonymize3Body, json: anonymize3Json } = await fetchWithLogs(
         "PRESIDIO_ANONYMIZE_3_SWEEP",
