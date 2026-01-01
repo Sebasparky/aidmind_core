@@ -1,10 +1,12 @@
 /**
  * Event Filters Panel for Supervisor UI
+ * 
+ * Collapsible filter panel - hidden by default to reduce cognitive load.
  */
 
 import { useState } from "react";
 import { EventFilters } from "@/lib/eye/mock-data";
-import { EventCategory, EventSeverity, FUTURE_EVENTS } from "@/lib/eye/types";
+import { EventCategory, EventSeverity } from "@/lib/eye/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,7 +18,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { Filter, X, ChevronDown, ChevronRight, Clock } from "lucide-react";
+import { X, ChevronDown, ChevronRight, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface EventFiltersPanelProps {
@@ -25,19 +27,24 @@ interface EventFiltersPanelProps {
   onClearFilters: () => void;
 }
 
-const CATEGORIES: { value: EventCategory; label: string; implemented: boolean }[] = [
-  { value: "SESSION", label: "Session", implemented: true },
-  { value: "INGEST", label: "Ingest", implemented: true },
-  { value: "TRANSCRIPTION", label: "Transcription", implemented: true },
-  { value: "REDACTION", label: "Redaction", implemented: true },
-  { value: "PURGE", label: "Purge", implemented: true },
-  { value: "AUTH", label: "Auth", implemented: false },
-  { value: "GENERATION", label: "Generation", implemented: false },
-  { value: "VALIDATION", label: "Validation", implemented: false },
-  { value: "DRAFT", label: "Draft", implemented: false },
-  { value: "EXPORT", label: "Export", implemented: false },
-  { value: "CONFIG", label: "Config", implemented: false },
-  { value: "ANOMALY", label: "Anomaly", implemented: false },
+// Only show implemented categories
+const IMPLEMENTED_CATEGORIES: { value: EventCategory; label: string }[] = [
+  { value: "SESSION", label: "Session" },
+  { value: "INGEST", label: "Ingest" },
+  { value: "TRANSCRIPTION", label: "Transcription" },
+  { value: "REDACTION", label: "Redaction" },
+  { value: "PURGE", label: "Purge" },
+];
+
+// Future categories - collapsed by default
+const FUTURE_CATEGORIES: { value: EventCategory; label: string }[] = [
+  { value: "AUTH", label: "Auth" },
+  { value: "GENERATION", label: "Generation" },
+  { value: "VALIDATION", label: "Validation" },
+  { value: "DRAFT", label: "Draft" },
+  { value: "EXPORT", label: "Export" },
+  { value: "CONFIG", label: "Config" },
+  { value: "ANOMALY", label: "Anomaly" },
 ];
 
 const SEVERITIES: { value: EventSeverity; label: string; color: string }[] = [
@@ -56,6 +63,7 @@ export function EventFiltersPanel({
   const [categoryOpen, setCategoryOpen] = useState(true);
   const [severityOpen, setSeverityOpen] = useState(true);
   const [idsOpen, setIdsOpen] = useState(false);
+  const [futureOpen, setFutureOpen] = useState(false);
 
   const hasActiveFilters = 
     (filters.categories?.length ?? 0) > 0 ||
@@ -81,12 +89,9 @@ export function EventFiltersPanel({
 
   return (
     <div className="space-y-4">
-      {/* Header */}
+      {/* Header with clear button */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <Filter className="h-4 w-4" />
-          Filters
-        </div>
+        <span className="text-sm font-medium">Filters</span>
         {hasActiveFilters && (
           <Button
             variant="ghost"
@@ -95,14 +100,14 @@ export function EventFiltersPanel({
             className="h-7 text-xs text-muted-foreground"
           >
             <X className="h-3 w-3 mr-1" />
-            Clear
+            Clear all
           </Button>
         )}
       </div>
 
       <Separator />
 
-      {/* Category Filter */}
+      {/* Category Filter - only implemented */}
       <Collapsible open={categoryOpen} onOpenChange={setCategoryOpen}>
         <CollapsibleTrigger className="flex items-center justify-between w-full py-2 text-sm font-medium hover:text-foreground transition-colors">
           <span>Category</span>
@@ -113,33 +118,50 @@ export function EventFiltersPanel({
           )}
         </CollapsibleTrigger>
         <CollapsibleContent className="pt-2 space-y-2">
-          {CATEGORIES.map((cat) => (
-            <div
-              key={cat.value}
-              className="flex items-center gap-2"
-            >
+          {IMPLEMENTED_CATEGORIES.map((cat) => (
+            <div key={cat.value} className="flex items-center gap-2">
               <Checkbox
                 id={`cat-${cat.value}`}
                 checked={filters.categories?.includes(cat.value) ?? false}
                 onCheckedChange={() => toggleCategory(cat.value)}
-                disabled={!cat.implemented}
               />
               <Label
                 htmlFor={`cat-${cat.value}`}
-                className={cn(
-                  "text-sm cursor-pointer flex items-center gap-2",
-                  !cat.implemented && "text-muted-foreground/50"
-                )}
+                className="text-sm cursor-pointer"
               >
                 {cat.label}
-                {!cat.implemented && (
-                  <Badge variant="outline" className="text-[10px] px-1 py-0">
-                    TODO
-                  </Badge>
-                )}
               </Label>
             </div>
           ))}
+          
+          {/* Future categories - collapsed */}
+          <Collapsible open={futureOpen} onOpenChange={setFutureOpen}>
+            <CollapsibleTrigger className="flex items-center gap-2 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
+              {futureOpen ? (
+                <ChevronDown className="h-3 w-3" />
+              ) : (
+                <ChevronRight className="h-3 w-3" />
+              )}
+              <span>Coming soon</span>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="pt-2 pl-2 space-y-2">
+              {FUTURE_CATEGORIES.map((cat) => (
+                <div key={cat.value} className="flex items-center gap-2">
+                  <Checkbox
+                    id={`cat-${cat.value}`}
+                    disabled
+                    className="opacity-50"
+                  />
+                  <Label
+                    htmlFor={`cat-${cat.value}`}
+                    className="text-sm text-muted-foreground/50 cursor-not-allowed"
+                  >
+                    {cat.label}
+                  </Label>
+                </div>
+              ))}
+            </CollapsibleContent>
+          </Collapsible>
         </CollapsibleContent>
       </Collapsible>
 
@@ -157,10 +179,7 @@ export function EventFiltersPanel({
         </CollapsibleTrigger>
         <CollapsibleContent className="pt-2 space-y-2">
           {SEVERITIES.map((sev) => (
-            <div
-              key={sev.value}
-              className="flex items-center gap-2"
-            >
+            <div key={sev.value} className="flex items-center gap-2">
               <Checkbox
                 id={`sev-${sev.value}`}
                 checked={filters.severities?.includes(sev.value) ?? false}
@@ -221,7 +240,7 @@ export function EventFiltersPanel({
 
       <Separator />
 
-      {/* Time Range (placeholder for future) */}
+      {/* Time Range info */}
       <div className="text-xs text-muted-foreground flex items-center gap-2">
         <Clock className="h-3 w-3" />
         <span>Time range: Last 24 hours</span>

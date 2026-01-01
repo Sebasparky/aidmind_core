@@ -3,6 +3,8 @@
  * 
  * A trust, audit, and safety surface for supervisors to view
  * Eye events without any PHI exposure.
+ * 
+ * Session-first default view with collapsible filters.
  */
 
 import { useState, useMemo } from "react";
@@ -11,29 +13,28 @@ import { useAuth } from "@/contexts/AuthContext";
 import { 
   generateMockEyeEvents, 
   filterEvents, 
-  getEventCategory,
-  getEventSeverity,
   getPurgeProofEvents,
   getErrorEvents,
   EventFilters,
 } from "@/lib/eye/mock-data";
-import { 
-  EyeEvent, 
-  EventCategory, 
-  EventSeverity,
-  IMPLEMENTED_EVENTS,
-  FUTURE_EVENTS,
-} from "@/lib/eye/types";
-import { ROLE_DISPLAY_NAMES, ROLE_COLORS } from "@/lib/rbac/types";
+import { EyeEvent } from "@/lib/eye/types";
 import { SupervisorHeader } from "@/components/supervisor/SupervisorHeader";
 import { EventFiltersPanel } from "@/components/supervisor/EventFiltersPanel";
-import { EventFeed } from "@/components/supervisor/EventFeed";
+import { SessionsPanel } from "@/components/supervisor/SessionsPanel";
+import { IssuesPanel } from "@/components/supervisor/IssuesPanel";
 import { EventDetailDrawer } from "@/components/supervisor/EventDetailDrawer";
 import { PurgeProofPanel } from "@/components/supervisor/PurgeProofPanel";
-import { ErrorsWarningsPanel } from "@/components/supervisor/ErrorsWarningsPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Eye, ShieldCheck, AlertTriangle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { 
+  LayoutList, 
+  AlertTriangle, 
+  ShieldCheck,
+  Filter,
+  X,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 
 export default function Supervisor() {
   const { currentUser, canAccessSupervisor } = useAuth();
@@ -49,7 +50,8 @@ export default function Supervisor() {
   // Filter state
   const [filters, setFilters] = useState<EventFilters>({});
   const [selectedEvent, setSelectedEvent] = useState<EyeEvent | null>(null);
-  const [activeTab, setActiveTab] = useState("feed");
+  const [activeTab, setActiveTab] = useState("sessions");
+  const [showFilters, setShowFilters] = useState(false);
 
   // Apply filters
   const filteredEvents = useMemo(() => 
@@ -68,6 +70,13 @@ export default function Supervisor() {
     [allEvents]
   );
 
+  // Check if any filters are active
+  const hasActiveFilters = 
+    (filters.categories?.length ?? 0) > 0 ||
+    (filters.severities?.length ?? 0) > 0 ||
+    filters.sessionId ||
+    filters.caseId;
+
   // Handle filter changes
   const handleFilterChange = (newFilters: Partial<EventFilters>) => {
     setFilters((prev) => ({ ...prev, ...newFilters }));
@@ -84,69 +93,95 @@ export default function Supervisor() {
 
       {/* Main Content */}
       <div className="flex-1 flex">
-        {/* Filters Sidebar */}
-        <aside className="w-64 border-r border-border bg-card p-4 flex-shrink-0">
-          <EventFiltersPanel
-            filters={filters}
-            onFilterChange={handleFilterChange}
-            onClearFilters={clearFilters}
-          />
+        {/* Collapsible Filters Sidebar */}
+        <aside 
+          className={cn(
+            "border-r border-border bg-card flex-shrink-0 transition-all duration-200 overflow-hidden",
+            showFilters ? "w-64 p-4" : "w-0 p-0"
+          )}
+        >
+          {showFilters && (
+            <EventFiltersPanel
+              filters={filters}
+              onFilterChange={handleFilterChange}
+              onClearFilters={clearFilters}
+            />
+          )}
         </aside>
 
         {/* Main Panel */}
         <main className="flex-1 p-6 overflow-auto">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
             <div className="flex items-center justify-between mb-4">
-              <TabsList className="bg-muted/50">
-                <TabsTrigger value="feed" className="gap-2">
-                  <Eye className="h-4 w-4" />
-                  Event Feed
-                  <Badge variant="secondary" className="ml-1 text-xs">
-                    {filteredEvents.length}
-                  </Badge>
-                </TabsTrigger>
-                <TabsTrigger value="purge-proof" className="gap-2">
-                  <ShieldCheck className="h-4 w-4" />
-                  Purge Proof
-                  <Badge variant="secondary" className="ml-1 text-xs">
-                    {purgeProofEvents.length}
-                  </Badge>
-                </TabsTrigger>
-                <TabsTrigger value="errors" className="gap-2">
-                  <AlertTriangle className="h-4 w-4" />
-                  Errors & Warnings
-                  {errorEvents.length > 0 && (
-                    <Badge variant="destructive" className="ml-1 text-xs">
-                      {errorEvents.length}
+              {/* Filters toggle + Tabs */}
+              <div className="flex items-center gap-3">
+                <Button
+                  variant={showFilters ? "secondary" : "outline"}
+                  size="sm"
+                  onClick={() => setShowFilters(!showFilters)}
+                  className="gap-2"
+                >
+                  {showFilters ? (
+                    <X className="h-4 w-4" />
+                  ) : (
+                    <Filter className="h-4 w-4" />
+                  )}
+                  Filters
+                  {hasActiveFilters && (
+                    <Badge variant="secondary" className="ml-1 text-xs bg-primary text-primary-foreground">
+                      Active
                     </Badge>
                   )}
-                </TabsTrigger>
-              </TabsList>
+                </Button>
 
-              <div className="text-sm text-muted-foreground">
-                Showing {filteredEvents.length} of {allEvents.length} events
+                <TabsList className="bg-muted/50">
+                  <TabsTrigger value="sessions" className="gap-2">
+                    <LayoutList className="h-4 w-4" />
+                    Sessions
+                  </TabsTrigger>
+                  <TabsTrigger value="issues" className="gap-2">
+                    <AlertTriangle className="h-4 w-4" />
+                    Issues
+                    {errorEvents.length > 0 && (
+                      <Badge variant="destructive" className="ml-1 text-xs">
+                        {errorEvents.length}
+                      </Badge>
+                    )}
+                  </TabsTrigger>
+                  <TabsTrigger value="deletion-proof" className="gap-2">
+                    <ShieldCheck className="h-4 w-4" />
+                    Data Deletion Proof
+                  </TabsTrigger>
+                </TabsList>
               </div>
+
+              {/* Event count */}
+              {hasActiveFilters && (
+                <div className="text-sm text-muted-foreground">
+                  Showing {filteredEvents.length} of {allEvents.length} events
+                </div>
+              )}
             </div>
 
-            <TabsContent value="feed" className="flex-1 mt-0">
-              <EventFeed
+            <TabsContent value="sessions" className="flex-1 mt-0">
+              <SessionsPanel
                 events={filteredEvents}
                 onEventClick={setSelectedEvent}
                 selectedEventId={selectedEvent?.event_id}
               />
             </TabsContent>
 
-            <TabsContent value="purge-proof" className="flex-1 mt-0">
-              <PurgeProofPanel
-                events={purgeProofEvents}
-                allEvents={allEvents}
+            <TabsContent value="issues" className="flex-1 mt-0">
+              <IssuesPanel
+                events={filteredEvents}
                 onEventClick={setSelectedEvent}
               />
             </TabsContent>
 
-            <TabsContent value="errors" className="flex-1 mt-0">
-              <ErrorsWarningsPanel
-                events={errorEvents}
+            <TabsContent value="deletion-proof" className="flex-1 mt-0">
+              <PurgeProofPanel
+                events={purgeProofEvents}
+                allEvents={allEvents}
                 onEventClick={setSelectedEvent}
               />
             </TabsContent>

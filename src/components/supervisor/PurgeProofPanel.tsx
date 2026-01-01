@@ -1,5 +1,7 @@
 /**
- * Purge Proof Panel - Trust signal showing successful purges
+ * Data Deletion Proof Panel - Trust signal showing successful purges
+ * 
+ * Reframed from "Purge Proof" to "Data Deletion Proof" for clarity.
  */
 
 import { EyeEvent } from "@/lib/eye/types";
@@ -86,10 +88,10 @@ export function PurgeProofPanel({ events, allEvents, onEventClick }: PurgeProofP
       <CardHeader className="pb-3">
         <div className="flex items-center gap-2">
           <ShieldCheck className="h-5 w-5 text-[hsl(var(--status-success))]" />
-          <CardTitle className="text-base">Verified Purges</CardTitle>
+          <CardTitle className="text-base">Verified Data Deletions</CardTitle>
         </div>
         <CardDescription>
-          Sessions with confirmed deletion of all ephemeral data
+          Sessions with confirmed deletion of all ephemeral data (audio, transcripts, drafts)
         </CardDescription>
       </CardHeader>
       <Separator />
