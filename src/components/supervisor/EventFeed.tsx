@@ -1,8 +1,11 @@
 /**
- * Event Feed - Chronological list of Eye events
+ * Event Feed - Chronological list of Eye events (Session Detail Timeline)
+ * 
+ * Now used as the detail view when drilling into a session.
+ * Implements visual noise reduction for low-severity events.
  */
 
-import { EyeEvent, EVENT_CATEGORY_MAP, EVENT_SEVERITY_MAP } from "@/lib/eye/types";
+import { EyeEvent } from "@/lib/eye/types";
 import { getEventCategory, getEventSeverity } from "@/lib/eye/mock-data";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -45,14 +48,15 @@ const CATEGORY_STYLES: Record<string, string> = {
   ANOMALY: "border-l-destructive",
 };
 
-function ResultIcon({ result }: { result: string }) {
+function ResultIcon({ result, muted }: { result: string; muted?: boolean }) {
+  const baseClass = muted ? "opacity-50" : "";
   switch (result) {
     case "success":
-      return <CheckCircle2 className="h-4 w-4 text-[hsl(var(--status-success))]" />;
+      return <CheckCircle2 className={cn("h-4 w-4 text-[hsl(var(--status-success))]", baseClass)} />;
     case "failure":
-      return <XCircle className="h-4 w-4 text-destructive" />;
+      return <XCircle className={cn("h-4 w-4 text-destructive", baseClass)} />;
     case "partial":
-      return <AlertCircle className="h-4 w-4 text-[hsl(var(--status-warning))]" />;
+      return <AlertCircle className={cn("h-4 w-4 text-[hsl(var(--status-warning))]", baseClass)} />;
     default:
       return null;
   }
@@ -84,36 +88,56 @@ export function EventFeed({ events, onEventClick, selectedEventId }: EventFeedPr
             const category = getEventCategory(event);
             const severity = getEventSeverity(event);
             const isSelected = event.event_id === selectedEventId;
+            const isLowSeverity = severity === "INFO" || severity === "NOTICE";
+            const isHighSeverity = severity === "WARN" || severity === "HIGH" || severity === "CRITICAL";
 
             return (
               <div
                 key={event.event_id}
                 onClick={() => onEventClick(event)}
                 className={cn(
-                  "flex items-center gap-4 p-4 cursor-pointer transition-colors border-l-4",
-                  CATEGORY_STYLES[category] || "border-l-transparent",
-                  isSelected
-                    ? "bg-muted"
-                    : "hover:bg-muted/50"
+                  "flex items-center gap-4 p-4 cursor-pointer transition-colors border-l-4 group",
+                  // Only show colored border for high severity events
+                  isHighSeverity ? CATEGORY_STYLES[category] : "border-l-transparent",
+                  isSelected ? "bg-muted" : "hover:bg-muted/50",
+                  // Muted styling for low severity
+                  isLowSeverity && "text-muted-foreground"
                 )}
               >
                 {/* Result Icon */}
                 <div className="flex-shrink-0">
-                  <ResultIcon result={event.result} />
+                  <ResultIcon result={event.result} muted={isLowSeverity} />
                 </div>
 
                 {/* Event Info */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="font-medium text-sm truncate">
+                    <span className={cn(
+                      "text-sm truncate",
+                      isLowSeverity ? "font-normal" : "font-medium"
+                    )}>
                       {formatEventType(event.event_type)}
                     </span>
-                    <Badge 
-                      variant="outline" 
-                      className={cn("text-xs flex-shrink-0", SEVERITY_STYLES[severity])}
-                    >
-                      {severity}
-                    </Badge>
+                    {/* Only show badge by default for high severity, show on hover for low */}
+                    {isHighSeverity && (
+                      <Badge 
+                        variant="outline" 
+                        className={cn("text-xs flex-shrink-0", SEVERITY_STYLES[severity])}
+                      >
+                        {severity}
+                      </Badge>
+                    )}
+                    {isLowSeverity && (
+                      <Badge 
+                        variant="outline" 
+                        className={cn(
+                          "text-xs flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity",
+                          SEVERITY_STYLES[severity]
+                        )}
+                      >
+                        {severity}
+                      </Badge>
+                    )}
                   </div>
                   <div className="flex items-center gap-3 text-xs text-muted-foreground">
                     <span className="truncate">{event.actor_role || event.actor_type}</span>
@@ -127,7 +151,10 @@ export function EventFeed({ events, onEventClick, selectedEventId }: EventFeedPr
                 </div>
 
                 {/* Chevron */}
-                <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                <ChevronRight className={cn(
+                  "h-4 w-4 text-muted-foreground flex-shrink-0",
+                  isLowSeverity && "opacity-50"
+                )} />
               </div>
             );
           })}
