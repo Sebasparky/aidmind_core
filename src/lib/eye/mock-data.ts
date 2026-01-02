@@ -51,14 +51,22 @@ const MOCK_CASE_IDS = [
   "case_005",
 ];
 
+// Mock operator IDs (opaque employee identifiers, non-PHI)
+const MOCK_OPERATOR_IDS = [
+  "emp_0142",
+  "emp_0227",
+  "emp_0315",
+  "emp_0089",
+];
+
 // Mock actor IDs
 const MOCK_ACTORS = [
-  { id: "user_001", role: "caseworker" as ActorRole },
-  { id: "user_002", role: "caseworker" as ActorRole },
-  { id: "user_003", role: "supervisor" as ActorRole },
-  { id: "service_transcription", role: null },
-  { id: "service_redaction", role: null },
-  { id: "system_scheduler", role: null },
+  { id: "user_001", role: "caseworker" as ActorRole, operatorId: "emp_0142" },
+  { id: "user_002", role: "caseworker" as ActorRole, operatorId: "emp_0227" },
+  { id: "user_003", role: "supervisor" as ActorRole, operatorId: "emp_0315" },
+  { id: "service_transcription", role: null, operatorId: null },
+  { id: "service_redaction", role: null, operatorId: null },
+  { id: "system_scheduler", role: null, operatorId: null },
 ];
 
 // Create a complete mock event
@@ -83,6 +91,7 @@ function createMockEvent(
     actor_type: isService ? (actor.id.startsWith("system_") ? "system" : "service") : "user",
     actor_id: actor.id,
     actor_role: actor.role,
+    operator_id: actor.operatorId ?? undefined,
     session_id: sessionId,
     case_id: caseId,
     resource_type: "session" as ResourceType,
@@ -103,10 +112,12 @@ export function generateMockEyeEvents(): EyeEvent[] {
   // Session 1: Complete successful flow (2 hours ago)
   const session1 = "sess_complete_001";
   const case1 = "case_housing_001";
+  const operator1 = "emp_0142";
   
   events.push(createMockEvent("SESSION_STARTED", 2.5, {
     session_id: session1,
     case_id: case1,
+    operator_id: operator1,
     actor_id: "user_001",
     actor_type: "user",
     actor_role: "caseworker",
@@ -116,6 +127,7 @@ export function generateMockEyeEvents(): EyeEvent[] {
   events.push(createMockEvent("AUDIO_UPLOADED", 2.4, {
     session_id: session1,
     case_id: case1,
+    operator_id: operator1,
     actor_id: "user_001",
     actor_type: "user",
     actor_role: "caseworker",
@@ -244,6 +256,7 @@ export function generateMockEyeEvents(): EyeEvent[] {
   events.push(createMockEvent("SESSION_FINISH_CLICKED", 1.5, {
     session_id: session1,
     case_id: case1,
+    operator_id: operator1,
     actor_id: "user_001",
     actor_type: "user",
     actor_role: "caseworker",
@@ -329,13 +342,15 @@ export function generateMockEyeEvents(): EyeEvent[] {
     resource_id: session1,
   }));
 
-  // Session 2: Failed transcription (1 hour ago)
+  // Session 2: Failed transcription (1 hour ago) - same operator as session 4 for "repeat failures"
   const session2 = "sess_failed_001";
   const case2 = "case_benefits_002";
+  const operator2 = "emp_0227";
   
   events.push(createMockEvent("SESSION_STARTED", 1.0, {
     session_id: session2,
     case_id: case2,
+    operator_id: operator2,
     actor_id: "user_002",
     actor_type: "user",
     actor_role: "caseworker",
@@ -593,12 +608,190 @@ export function generateMockEyeEvents(): EyeEvent[] {
   events.push(createMockEvent("OBJECT_TTL_EXPIRED", 3.0, {
     session_id: "sess_old_001",
     case_id: "case_old_001",
+    operator_id: "emp_0089",
     actor_id: "system_scheduler",
     actor_type: "system",
     actor_role: null,
     resource_type: "audio",
     resource_id: "audio_old_001",
     tags: ["EPHEMERAL", "DELETION_PROOF"],
+  }));
+
+  // ============ SESSION 5: Save for Later (40 mins ago) ============
+  const session5 = "sess_saved_001";
+  const case5 = "case_medical_005";
+  const operator5 = "emp_0142"; // Same operator as session 1
+  const bundle5 = "bundle_wip_001";
+  
+  events.push(createMockEvent("SESSION_STARTED", 0.67, {
+    session_id: session5,
+    case_id: case5,
+    operator_id: operator5,
+    actor_id: "user_001",
+    actor_type: "user",
+    actor_role: "caseworker",
+    resource_type: "session",
+  }));
+  
+  events.push(createMockEvent("AUDIO_UPLOADED", 0.65, {
+    session_id: session5,
+    case_id: case5,
+    operator_id: operator5,
+    actor_id: "user_001",
+    actor_type: "user",
+    actor_role: "caseworker",
+    resource_type: "audio",
+    resource_id: "audio_005",
+    bytes_in: 3200000,
+    tags: ["PHI_TOUCHING", "EPHEMERAL"],
+  }));
+  
+  events.push(createMockEvent("TRANSCRIPTION_COMPLETED", 0.58, {
+    session_id: session5,
+    case_id: case5,
+    actor_id: "service_transcription",
+    actor_type: "service",
+    actor_role: null,
+    resource_type: "transcript",
+    resource_id: "transcript_005",
+    latency_ms: 8500,
+    tags: ["PHI_TOUCHING", "EPHEMERAL"],
+  }));
+  
+  events.push(createMockEvent("REDACTION_COMPLETED", 0.55, {
+    session_id: session5,
+    case_id: case5,
+    actor_id: "service_redaction",
+    actor_type: "service",
+    actor_role: null,
+    resource_type: "minimized_transcript",
+    resource_id: "minimized_005",
+    redaction_counts: { total: 12 },
+    redaction_strategy: "tokenize",
+    minimization_level: "strict",
+    latency_ms: 4500,
+  }));
+  
+  // User clicks "Save for Later"
+  events.push(createMockEvent("WIP_BUNDLE_EXPORTED", 0.5, {
+    session_id: session5,
+    case_id: case5,
+    operator_id: operator5,
+    actor_id: "user_001",
+    actor_type: "user",
+    actor_role: "caseworker",
+    resource_type: "session",
+    resource_id: session5,
+    bundle_id: bundle5,
+    severity: "NOTICE",
+  }));
+  
+  // Ephemeral inputs purged after save
+  events.push(createMockEvent("EPHEMERAL_INPUTS_PURGED", 0.48, {
+    session_id: session5,
+    case_id: case5,
+    actor_id: "system_scheduler",
+    actor_type: "system",
+    actor_role: null,
+    resource_type: "session",
+    resource_id: session5,
+    severity: "NOTICE",
+  }));
+  
+  events.push(createMockEvent("AUDIO_DELETED", 0.47, {
+    session_id: session5,
+    case_id: case5,
+    actor_id: "system_scheduler",
+    actor_type: "system",
+    actor_role: null,
+    resource_type: "audio",
+    resource_id: "audio_005",
+    tags: ["DELETION_PROOF", "EPHEMERAL"],
+  }));
+  
+  events.push(createMockEvent("EPHEMERAL_SCAN_RESULT", 0.46, {
+    session_id: session5,
+    case_id: case5,
+    actor_id: "system_scheduler",
+    actor_type: "system",
+    actor_role: null,
+    remaining_count: 0,
+    remaining_types: [],
+    tags: ["DELETION_PROOF"],
+  }));
+  
+  events.push(createMockEvent("PURGE_COMPLETED", 0.45, {
+    session_id: session5,
+    case_id: case5,
+    actor_id: "system_scheduler",
+    actor_type: "system",
+    actor_role: null,
+    tags: ["DELETION_PROOF"],
+  }));
+
+  // ============ SESSION 6: Resumed Draft (20 mins ago) ============
+  const session6 = "sess_resumed_001";
+  const case6 = "case_medical_005"; // Same case as session 5
+  const operator6 = "emp_0142"; // Same operator resuming their work
+  
+  events.push(createMockEvent("WIP_BUNDLE_IMPORTED", 0.33, {
+    session_id: session6,
+    case_id: case6,
+    operator_id: operator6,
+    actor_id: "user_001",
+    actor_type: "user",
+    actor_role: "caseworker",
+    resource_type: "session",
+    resource_id: session6,
+    bundle_id: bundle5, // Imported the saved bundle
+    previous_bundle_id: bundle5,
+    severity: "NOTICE",
+  }));
+  
+  events.push(createMockEvent("SESSION_STARTED", 0.32, {
+    session_id: session6,
+    case_id: case6,
+    operator_id: operator6,
+    actor_id: "user_001",
+    actor_type: "user",
+    actor_role: "caseworker",
+    resource_type: "session",
+  }));
+  
+  events.push(createMockEvent("SESSION_LINKED", 0.31, {
+    session_id: session6,
+    case_id: case6,
+    operator_id: operator6,
+    actor_id: "user_001",
+    actor_type: "user",
+    actor_role: "caseworker",
+    resource_type: "session",
+    resource_id: session6,
+    previous_bundle_id: bundle5,
+    linked_session_id: session5,
+    severity: "INFO",
+  }));
+  
+  // Resumed session completes successfully
+  events.push(createMockEvent("SESSION_FINISH_CLICKED", 0.2, {
+    session_id: session6,
+    case_id: case6,
+    operator_id: operator6,
+    actor_id: "user_001",
+    actor_type: "user",
+    actor_role: "caseworker",
+    resource_type: "session",
+    resource_id: session6,
+  }));
+  
+  events.push(createMockEvent("SESSION_CLOSED", 0.18, {
+    session_id: session6,
+    case_id: case6,
+    actor_id: "system_scheduler",
+    actor_type: "system",
+    actor_role: null,
+    resource_type: "session",
+    resource_id: session6,
   }));
 
   // Sort by timestamp (newest first)
@@ -623,6 +816,7 @@ export interface EventFilters {
   severities?: EventSeverity[];
   sessionId?: string;
   caseId?: string;
+  operatorId?: string;
   startTime?: Date;
   endTime?: Date;
   result?: EventResult;
@@ -640,6 +834,9 @@ export function filterEvents(events: EyeEvent[], filters: EventFilters): EyeEven
       return false;
     }
     if (filters.caseId && event.case_id !== filters.caseId) {
+      return false;
+    }
+    if (filters.operatorId && event.operator_id !== filters.operatorId) {
       return false;
     }
     if (filters.startTime && new Date(event.timestamp) < filters.startTime) {

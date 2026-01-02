@@ -105,6 +105,13 @@ export type EyeEventType =
   | "SESSION_CLOSED"
   | "SESSION_CANCELLED"
 
+  // Save for Later / Resume Draft
+  | "WIP_BUNDLE_EXPORTED"
+  | "EPHEMERAL_INPUTS_PURGED"
+  | "WIP_BUNDLE_IMPORTED"
+  | "SESSION_LINKED"
+  | "RESUME_REQUIRES_NEW_INPUT"
+
   // C) Ingest: Uploads & Object Storage
   | "AUDIO_UPLOAD_URL_ISSUED"
   | "AUDIO_UPLOADED"
@@ -228,6 +235,14 @@ export interface EyeEventOptional {
   bytes_out?: number;
   tags?: EventTag[];
   severity?: EventSeverity;
+
+  // Operator/identity fields (non-PHI)
+  operator_id?: string;          // e.g., emp_0142
+  
+  // Save for Later / Resume fields
+  bundle_id?: string;            // opaque WIP bundle ID
+  previous_bundle_id?: string;   // for SESSION_LINKED
+  linked_session_id?: string;    // for SESSION_LINKED
   
   // Category-specific optional fields
   ttl_seconds?: number;
@@ -287,6 +302,13 @@ export const EVENT_CATEGORY_MAP: Record<EyeEventType, EventCategory> = {
   SESSION_FINISH_CLICKED: "SESSION",
   SESSION_CLOSED: "SESSION",
   SESSION_CANCELLED: "SESSION",
+  
+  // Save for Later / Resume
+  WIP_BUNDLE_EXPORTED: "SESSION",
+  EPHEMERAL_INPUTS_PURGED: "SESSION",
+  WIP_BUNDLE_IMPORTED: "SESSION",
+  SESSION_LINKED: "SESSION",
+  RESUME_REQUIRES_NEW_INPUT: "SESSION",
 
   // Ingest
   AUDIO_UPLOAD_URL_ISSUED: "INGEST",
@@ -401,6 +423,13 @@ export const EVENT_SEVERITY_MAP: Record<EyeEventType, EventSeverity> = {
   SESSION_FINISH_CLICKED: "NOTICE",
   SESSION_CLOSED: "NOTICE",
   SESSION_CANCELLED: "NOTICE",
+  
+  // Save for Later / Resume
+  WIP_BUNDLE_EXPORTED: "NOTICE",
+  EPHEMERAL_INPUTS_PURGED: "NOTICE",
+  WIP_BUNDLE_IMPORTED: "NOTICE",
+  SESSION_LINKED: "INFO",
+  RESUME_REQUIRES_NEW_INPUT: "INFO",
 
   // Ingest
   AUDIO_UPLOAD_URL_ISSUED: "INFO",
@@ -500,6 +529,12 @@ export const IMPLEMENTED_EVENTS: EyeEventType[] = [
   "SESSION_FINISH_CLICKED",
   "SESSION_CLOSED",
   "SESSION_CANCELLED",
+  
+  // Save for Later / Resume
+  "WIP_BUNDLE_EXPORTED",
+  "EPHEMERAL_INPUTS_PURGED",
+  "WIP_BUNDLE_IMPORTED",
+  "SESSION_LINKED",
 
   // Ingest & storage
   "AUDIO_UPLOADED",

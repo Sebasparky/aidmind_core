@@ -21,6 +21,8 @@ import {
   Clock,
   Activity,
   Info,
+  User,
+  Link2,
 } from "lucide-react";
 
 interface SessionsPanelProps {
@@ -33,14 +35,17 @@ interface SessionsPanelProps {
 interface SessionSummary {
   sessionId: string;
   caseId: string | null;
+  operatorId: string | null;
   startTime: Date;
   endTime: Date | null;
-  status: "clean" | "issues" | "failed" | "active";
+  status: "clean" | "issues" | "failed" | "active" | "saved" | "resumed";
   totalEvents: number;
   errorCount: number;
   warningCount: number;
   purgeStatus: "verified" | "pending" | "failed" | "none";
   events: EyeEvent[];
+  isResumed: boolean;
+  linkedBundleId?: string;
 }
 
 function groupEventsBySession(events: EyeEvent[]): Map<string, EyeEvent[]> {
@@ -67,6 +72,10 @@ function calculateSessionSummary(sessionId: string, events: EyeEvent[]): Session
     (e) => e.event_type === "SESSION_CLOSED" || e.event_type === "SESSION_CANCELLED"
   );
   
+  // Get operator_id from the first user event
+  const operatorEvent = sortedEvents.find(e => e.operator_id);
+  const operatorId = operatorEvent?.operator_id ?? null;
+  
   const errorCount = events.filter((e) => e.result === "failure").length;
   const warningCount = events.filter((e) => {
     const severity = getEventSeverity(e);
@@ -80,6 +89,13 @@ function calculateSessionSummary(sessionId: string, events: EyeEvent[]): Session
     (e) => e.event_type === "EPHEMERAL_SCAN_RESULT" && e.remaining_count === 0
   );
   
+  // Check for Save for Later / Resume events
+  const wipExported = events.find((e) => e.event_type === "WIP_BUNDLE_EXPORTED");
+  const wipImported = events.find((e) => e.event_type === "WIP_BUNDLE_IMPORTED");
+  const sessionLinked = events.find((e) => e.event_type === "SESSION_LINKED");
+  const isResumed = !!wipImported || !!sessionLinked;
+  const linkedBundleId = sessionLinked?.previous_bundle_id ?? wipImported?.bundle_id;
+  
   let purgeStatus: SessionSummary["purgeStatus"] = "none";
   if (purgeCompleted && ephemeralScan) {
     purgeStatus = "verified";
@@ -90,19 +106,28 @@ function calculateSessionSummary(sessionId: string, events: EyeEvent[]): Session
   }
   
   let status: SessionSummary["status"] = "active";
-  if (endEvent) {
+  
+  // Determine status - check for Saved first
+  if (wipExported && !endEvent) {
+    status = "saved";
+  } else if (endEvent) {
     if (errorCount > 0) {
       status = "failed";
     } else if (warningCount > 0) {
       status = "issues";
+    } else if (isResumed) {
+      status = "resumed"; // Successfully completed resumed session
     } else {
       status = "clean";
     }
+  } else if (isResumed) {
+    status = "resumed"; // Active resumed session
   }
   
   return {
     sessionId,
     caseId: startEvent?.case_id ?? null,
+    operatorId,
     startTime: new Date(startEvent?.timestamp ?? Date.now()),
     endTime: endEvent ? new Date(endEvent.timestamp) : null,
     status,
@@ -111,6 +136,8 @@ function calculateSessionSummary(sessionId: string, events: EyeEvent[]): Session
     warningCount,
     purgeStatus,
     events: sortedEvents,
+    isResumed,
+    linkedBundleId,
   };
 }
 
@@ -119,6 +146,8 @@ const STATUS_STYLES: Record<SessionSummary["status"], { icon: typeof CheckCircle
   issues: { icon: AlertTriangle, className: "text-[hsl(var(--status-warning))]", label: "Issues" },
   failed: { icon: XCircle, className: "text-destructive", label: "Failed" },
   active: { icon: Activity, className: "text-[hsl(var(--status-info))]", label: "Active" },
+  saved: { icon: Clock, className: "text-muted-foreground", label: "Saved" },
+  resumed: { icon: Activity, className: "text-[hsl(var(--status-info))]", label: "Resumed" },
 };
 
 const PURGE_STYLES: Record<SessionSummary["purgeStatus"], { className: string; label: string }> = {
@@ -240,10 +269,10 @@ export function SessionsPanel({ events, onEventClick, selectedEventId, onSession
   return (
     <Card className="h-full overflow-hidden flex flex-col">
       {/* Educational callout - shown when no filters applied */}
-      {!hasFiltersApplied && (
+                      {!hasFiltersApplied && (
         <div className="flex items-center gap-2 px-4 py-2.5 bg-muted/40 border-b border-border text-sm text-muted-foreground">
           <Info className="h-4 w-4 flex-shrink-0" />
-          <span>Showing recent sessions. Click a session to inspect system activity.</span>
+          <span>Showing recent sessions. Click a session to inspect system activity. No PHI is shown.</span>
         </div>
       )}
       
@@ -292,16 +321,21 @@ export function SessionsPanel({ events, onEventClick, selectedEventId, onSession
                           session.status === "clean" && "bg-[hsl(var(--badge-success-bg))] text-[hsl(var(--badge-success-text))] border-transparent",
                           session.status === "issues" && "bg-[hsl(var(--badge-warning-bg))] text-[hsl(var(--badge-warning-text))] border-transparent",
                           session.status === "failed" && "bg-destructive text-destructive-foreground border-transparent",
-                          session.status === "active" && "bg-[hsl(var(--badge-info-bg))] text-[hsl(var(--badge-info-text))] border-transparent"
+                          session.status === "active" && "bg-[hsl(var(--badge-info-bg))] text-[hsl(var(--badge-info-text))] border-transparent",
+                          session.status === "saved" && "bg-muted text-muted-foreground border-transparent",
+                          session.status === "resumed" && "bg-[hsl(var(--badge-info-bg))] text-[hsl(var(--badge-info-text))] border-transparent"
                         )}
                       >
                         {STATUS_STYLES[session.status].label}
                       </Badge>
                     </div>
                     <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                      {session.caseId && (
+                      {session.operatorId && (
                         <>
-                          <span className="truncate">{session.caseId}</span>
+                          <span className="flex items-center gap-1">
+                            <User className="h-3 w-3" />
+                            Operator {session.operatorId}
+                          </span>
                           <span>•</span>
                         </>
                       )}
@@ -309,6 +343,21 @@ export function SessionsPanel({ events, onEventClick, selectedEventId, onSession
                         {format(session.startTime, "MMM d, HH:mm")}
                         {session.endTime && ` → ${format(session.endTime, "HH:mm")}`}
                       </span>
+                      {session.caseId && (
+                        <>
+                          <span>•</span>
+                          <span className="truncate font-mono text-[10px]">{session.caseId}</span>
+                        </>
+                      )}
+                      {session.isResumed && session.linkedBundleId && (
+                        <>
+                          <span>•</span>
+                          <span className="flex items-center gap-1 text-[10px]">
+                            <Link2 className="h-3 w-3" />
+                            linked
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                   
