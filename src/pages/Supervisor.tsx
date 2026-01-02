@@ -20,6 +20,7 @@ import {
 import { EyeEvent } from "@/lib/eye/types";
 import { SupervisorHeader } from "@/components/supervisor/SupervisorHeader";
 import { EventFiltersPanel } from "@/components/supervisor/EventFiltersPanel";
+import { DailyAssurancePanel } from "@/components/supervisor/DailyAssurancePanel";
 import { SessionsPanel } from "@/components/supervisor/SessionsPanel";
 import { IssuesPanel } from "@/components/supervisor/IssuesPanel";
 import { EventDetailDrawer } from "@/components/supervisor/EventDetailDrawer";
@@ -28,6 +29,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { 
+  Gauge,
   LayoutList, 
   AlertTriangle, 
   ShieldCheck,
@@ -50,7 +52,7 @@ export default function Supervisor() {
   // Filter state
   const [filters, setFilters] = useState<EventFilters>({});
   const [selectedEvent, setSelectedEvent] = useState<EyeEvent | null>(null);
-  const [activeTab, setActiveTab] = useState("sessions");
+  const [activeTab, setActiveTab] = useState("daily-assurance");
   const [showFilters, setShowFilters] = useState(false);
   const [reviewedIds, setReviewedIds] = useState<Set<string>>(new Set());
 
@@ -160,14 +162,18 @@ export default function Supervisor() {
                   )}
                 </Button>
 
-                <TabsList className="bg-muted/50">
+              <TabsList className="bg-muted/50">
+                  <TabsTrigger value="daily-assurance" className="gap-2">
+                    <Gauge className="h-4 w-4" />
+                    Daily Assurance
+                  </TabsTrigger>
                   <TabsTrigger value="sessions" className="gap-2">
                     <LayoutList className="h-4 w-4" />
                     Sessions
                   </TabsTrigger>
                   <TabsTrigger value="issues" className="gap-2">
                     <AlertTriangle className="h-4 w-4" />
-                    Issues
+                    System Issues
                     {unreviewedCount > 0 && (
                       <Badge variant="destructive" className="ml-1 text-xs">
                         {unreviewedCount}
@@ -188,6 +194,14 @@ export default function Supervisor() {
                 </div>
               )}
             </div>
+
+            <TabsContent value="daily-assurance" className="flex-1 mt-0">
+              <DailyAssurancePanel
+                allEvents={allEvents}
+                issueCount={unreviewedCount}
+                onNavigateToTab={setActiveTab}
+              />
+            </TabsContent>
 
             <TabsContent value="sessions" className="flex-1 mt-0">
               <SessionsPanel

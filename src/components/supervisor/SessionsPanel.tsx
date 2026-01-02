@@ -268,11 +268,11 @@ export function SessionsPanel({ events, onEventClick, selectedEventId, onSession
 
   return (
     <Card className="h-full overflow-hidden flex flex-col">
-      {/* Educational callout - shown when no filters applied */}
-                      {!hasFiltersApplied && (
+      {/* Supervisor-friendly framing callout */}
+      {!hasFiltersApplied && (
         <div className="flex items-center gap-2 px-4 py-2.5 bg-muted/40 border-b border-border text-sm text-muted-foreground">
           <Info className="h-4 w-4 flex-shrink-0" />
-          <span>Showing recent sessions. Click a session to inspect system activity. No PHI is shown.</span>
+          <span>Sessions are shown for transparency into system activity. No PHI is displayed.</span>
         </div>
       )}
       

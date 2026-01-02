@@ -21,6 +21,7 @@ import {
   Trash2,
   User,
   Filter,
+  Info,
 } from "lucide-react";
 
 interface PurgeProofPanelProps {
@@ -121,9 +122,11 @@ export function PurgeProofPanel({ events, allEvents, onEventClick }: PurgeProofP
             {cleanSessions.length} verified
           </Badge>
         </div>
-        <CardDescription>
-          Sessions with confirmed deletion of all ephemeral data (audio, transcripts, drafts)
-        </CardDescription>
+        {/* Supervisor-friendly framing callout */}
+        <div className="flex items-center gap-2 mt-2 p-2 rounded bg-muted/40 text-xs text-muted-foreground">
+          <Info className="h-3.5 w-3.5 flex-shrink-0" />
+          <span>Verified sessions have deleted all ephemeral data. Use this for compliance assurance.</span>
+        </div>
         
         {/* Filter toggle */}
         <div className="flex items-center gap-2 pt-2">
