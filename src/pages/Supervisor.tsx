@@ -168,9 +168,9 @@ export default function Supervisor() {
                   <TabsTrigger value="issues" className="gap-2">
                     <AlertTriangle className="h-4 w-4" />
                     Issues
-                    {errorEvents.length > 0 && (
+                    {unreviewedCount > 0 && (
                       <Badge variant="destructive" className="ml-1 text-xs">
-                        {errorEvents.length}
+                        {unreviewedCount}
                       </Badge>
                     )}
                   </TabsTrigger>
@@ -201,6 +201,9 @@ export default function Supervisor() {
               <IssuesPanel
                 events={filteredEvents}
                 onEventClick={setSelectedEvent}
+                reviewedIds={reviewedIds}
+                onMarkReviewed={handleMarkReviewed}
+                onMarkAllReviewed={handleMarkAllReviewed}
               />
             </TabsContent>
 
