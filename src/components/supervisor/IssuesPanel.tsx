@@ -29,6 +29,7 @@ import {
   Eye,
   EyeOff,
   CheckCheck,
+  Info,
 } from "lucide-react";
 
 interface IssuesPanelProps {
@@ -148,7 +149,10 @@ export function IssuesPanel({ events, onEventClick, reviewedIds, onMarkReviewed,
       <CardHeader className="pb-3">
         <div className="flex items-center gap-2">
           <AlertTriangle className="h-5 w-5 text-[hsl(var(--status-warning))]" />
-          <CardTitle className="text-base">Issues</CardTitle>
+          <div>
+            <CardTitle className="text-base">System Issues</CardTitle>
+            <span className="text-xs text-muted-foreground">Not caseworker errors</span>
+          </div>
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -162,10 +166,10 @@ export function IssuesPanel({ events, onEventClick, reviewedIds, onMarkReviewed,
             </Tooltip>
           </TooltipProvider>
         </div>
-        <div className="flex items-center justify-between mt-2">
-          <CardDescription>
-            Errors and warnings requiring attention
-          </CardDescription>
+        {/* Supervisor-friendly framing callout */}
+        <div className="flex items-center gap-2 mt-2 p-2 rounded bg-muted/40 text-xs text-muted-foreground">
+          <Info className="h-3.5 w-3.5 flex-shrink-0" />
+          <span>Issues reflect system-level warnings/errors. Caseworkers are not responsible for resolving platform failures.</span>
         </div>
         
         {/* Filter row */}
