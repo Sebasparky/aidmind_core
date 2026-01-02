@@ -7,7 +7,7 @@
  * Session-first default view with collapsible filters.
  */
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { 
@@ -52,6 +52,7 @@ export default function Supervisor() {
   const [selectedEvent, setSelectedEvent] = useState<EyeEvent | null>(null);
   const [activeTab, setActiveTab] = useState("sessions");
   const [showFilters, setShowFilters] = useState(false);
+  const [reviewedIds, setReviewedIds] = useState<Set<string>>(new Set());
 
   // Apply filters
   const filteredEvents = useMemo(() => 
@@ -75,7 +76,8 @@ export default function Supervisor() {
     (filters.categories?.length ?? 0) > 0 ||
     (filters.severities?.length ?? 0) > 0 ||
     filters.sessionId ||
-    filters.caseId;
+    filters.caseId ||
+    filters.operatorId;
 
   // Handle filter changes
   const handleFilterChange = (newFilters: Partial<EventFilters>) => {
@@ -85,6 +87,30 @@ export default function Supervisor() {
   const clearFilters = () => {
     setFilters({});
   };
+
+  // Issues review handlers
+  const handleMarkReviewed = useCallback((eventId: string) => {
+    setReviewedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(eventId)) {
+        next.delete(eventId);
+      } else {
+        next.add(eventId);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleMarkAllReviewed = useCallback(() => {
+    const issueIds = errorEvents.map(e => e.event_id);
+    setReviewedIds(new Set(issueIds));
+  }, [errorEvents]);
+
+  // Unreviewed count for badge
+  const unreviewedCount = useMemo(() => 
+    errorEvents.filter(e => !reviewedIds.has(e.event_id)).length,
+    [errorEvents, reviewedIds]
+  );
 
   return (
     <div className="min-h-screen bg-canvas flex flex-col">

@@ -69,7 +69,8 @@ export function EventFiltersPanel({
     (filters.categories?.length ?? 0) > 0 ||
     (filters.severities?.length ?? 0) > 0 ||
     filters.sessionId ||
-    filters.caseId;
+    filters.caseId ||
+    filters.operatorId;
 
   const toggleCategory = (category: EventCategory) => {
     const current = filters.categories || [];
@@ -212,6 +213,18 @@ export function EventFiltersPanel({
         </CollapsibleTrigger>
         <CollapsibleContent className="pt-2 space-y-3">
           <div className="space-y-1.5">
+            <Label htmlFor="operator-id" className="text-xs text-muted-foreground">
+              Operator ID
+            </Label>
+            <Input
+              id="operator-id"
+              placeholder="emp_..."
+              value={filters.operatorId || ""}
+              onChange={(e) => onFilterChange({ operatorId: e.target.value || undefined })}
+              className="h-8 text-sm"
+            />
+          </div>
+          <div className="space-y-1.5">
             <Label htmlFor="session-id" className="text-xs text-muted-foreground">
               Session ID
             </Label>
@@ -240,10 +253,10 @@ export function EventFiltersPanel({
 
       <Separator />
 
-      {/* Time Range info */}
-      <div className="text-xs text-muted-foreground flex items-center gap-2">
+      {/* Time Range info - placeholder */}
+      <div className="text-xs text-muted-foreground flex items-center gap-2 opacity-60">
         <Clock className="h-3 w-3" />
-        <span>Time range: Last 24 hours</span>
+        <span>Time range: Last 24 hours (coming soon)</span>
       </div>
     </div>
   );
