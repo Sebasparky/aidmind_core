@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useSessionMachine, SessionState, TimelineItem, ResumeBundle } from "@/hooks/useSessionMachine";
+import { useSessionNavigationGuard } from "@/hooks/useSessionNavigationGuard";
 import { useDashboard } from "@/contexts/DashboardContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -44,6 +45,7 @@ import {
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { VerificationReviewPanel } from "@/components/session/VerificationReviewPanel";
+import { LeaveSessionDialog } from "@/components/session/LeaveSessionDialog";
 
 const DENY_REASONS = [
   { value: "not_applicable", label: "Not applicable" },
@@ -88,9 +90,9 @@ export default function Session() {
   const [showTextInput, setShowTextInput] = useState(false);
   const [textInput, setTextInput] = useState("");
   
-  // Exit dialogs
-  const [showLeaveDialog, setShowLeaveDialog] = useState(false);
+  // Exit dialog - only for explicit cancel button
   const [showCancelDialog, setShowCancelDialog] = useState(false);
+  const [isNavigationCancelling, setIsNavigationCancelling] = useState(false);
   
   // Deny dialog state
   const [denyDialogOpen, setDenyDialogOpen] = useState(false);
@@ -187,32 +189,31 @@ export default function Session() {
     }
   }, [data.generatedDraft]);
 
-  // Handle browser back button
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (state !== "PURGED" && state !== "NEW") {
-        e.preventDefault();
-        e.returnValue = "";
+  // Determine if session is "dirty" (active and not terminal)
+  const isTerminalState = state === "PURGED" || state === "NEW";
+  const canSaveForLater = state === "DRAFT_READY";
+  const isDirtySession = !isTerminalState && data.sessionId !== "";
+
+  // Navigation guard for leaving mid-session
+  const {
+    showLeaveDialog,
+    handleStay,
+    handleCancelAndLeave,
+    handleSaveForLater: navGuardSave,
+    isSaveEnabled,
+  } = useSessionNavigationGuard({
+    isDirtySession,
+    onCancel: async () => {
+      setIsNavigationCancelling(true);
+      try {
+        await actions.cancelSession();
+      } finally {
+        setIsNavigationCancelling(false);
       }
-    };
-
-    const handlePopState = (e: PopStateEvent) => {
-      if (state !== "PURGED" && state !== "NEW") {
-        e.preventDefault();
-        window.history.pushState(null, "", window.location.href);
-        setShowLeaveDialog(true);
-      }
-    };
-
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    window.addEventListener("popstate", handlePopState);
-    window.history.pushState(null, "", window.location.href);
-
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-      window.removeEventListener("popstate", handlePopState);
-    };
-  }, [state]);
+    },
+    onSave: undefined, // Will be set after handleSaveForLater is defined
+    saveEnabled: false,
+  });
 
   const handleFileUpload = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -255,10 +256,7 @@ export default function Session() {
     setShowCancelDialog(true);
   }, []);
 
-  const handleConfirmLeave = useCallback(() => {
-    setShowLeaveDialog(false);
-    actions.cancelSession();
-  }, [actions]);
+  // Note: handleConfirmLeave is now handled by navigation guard
 
   const handleConfirmCancel = useCallback(() => {
     setShowCancelDialog(false);
@@ -461,26 +459,15 @@ export default function Session() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Leave Session Dialog */}
-      <AlertDialog open={showLeaveDialog} onOpenChange={setShowLeaveDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Leave session?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Your draft and session progress may be lost if you leave now.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Stay</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleConfirmLeave}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              Leave
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Leave Session Dialog - using new component with navigation guard */}
+      <LeaveSessionDialog
+        open={showLeaveDialog}
+        onStay={handleStay}
+        onCancel={handleCancelAndLeave}
+        onSave={canSaveForLater ? handleSaveForLater : undefined}
+        saveEnabled={canSaveForLater}
+        isLoading={isNavigationCancelling}
+      />
 
       {/* Cancel Session Dialog */}
       <AlertDialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
