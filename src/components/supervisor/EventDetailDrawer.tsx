@@ -5,8 +5,7 @@
  * Only metadata fields from The Eye event schema are shown.
  */
 
-import { EyeEvent, EVENT_CATEGORY_MAP, EventTag } from "@/lib/eye/types";
-import { getEventCategory, getEventSeverity } from "@/lib/eye/mock-data";
+import { EyeEvent, EVENT_CATEGORY_MAP, EventTag, getEventCategory, getEventSeverity } from "@/lib/eye/types";
 import {
   Sheet,
   SheetContent,

@@ -2,10 +2,11 @@
  * Event Filters Panel for Supervisor UI
  * 
  * Collapsible filter panel - hidden by default to reduce cognitive load.
+ * Now uses real EventFilters from useEyeEvents hook.
  */
 
 import { useState } from "react";
-import { EventFilters } from "@/lib/eye/mock-data";
+import { EventFilters } from "@/hooks/useEyeEvents";
 import { EventCategory, EventSeverity } from "@/lib/eye/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

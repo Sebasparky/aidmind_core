@@ -6,8 +6,7 @@
  */
 
 import { useMemo, useState, useCallback } from "react";
-import { EyeEvent } from "@/lib/eye/types";
-import { getEventSeverity } from "@/lib/eye/mock-data";
+import { EyeEvent, getEventSeverity } from "@/lib/eye/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
