@@ -9,11 +9,22 @@
  * - No performance rankings or per-employee evaluations
  * - No raw logs, reason codes, or event timelines
  * - Points, doesn't explain: links to Issues/Data Deletion Proof tabs
+ * 
+ * VERDICT LOGIC:
+ * See src/lib/eye/verdict.ts for deterministic, testable, recovery-aware logic.
  */
 
 import { useMemo, useState } from "react";
 import { EyeEvent } from "@/lib/eye/types";
-import { getEventSeverity } from "@/lib/eye/mock-data";
+import {
+  computeActionCounts,
+  computeVerdict,
+  computeSessionOutcomes,
+  computeComplianceStatus,
+  generateIncidentSummary,
+  getRelevantEvents,
+  VerdictLevel,
+} from "@/lib/eye/verdict";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -28,18 +39,17 @@ import {
   XOctagon,
   Users,
   Activity,
-  Clock,
   Bookmark,
   Lock,
   Trash2,
   Brain,
   UserCheck,
   Info,
-  ArrowRight,
   MessageSquare,
   Copy,
   XCircle,
   PlayCircle,
+  HelpCircle,
 } from "lucide-react";
 
 interface DailyAssurancePanelProps {
@@ -48,301 +58,54 @@ interface DailyAssurancePanelProps {
   onNavigateToTab: (tab: string) => void;
 }
 
-// Types for computed summaries
-type VerdictLevel = "green" | "yellow" | "red";
-
-interface VerdictState {
-  level: VerdictLevel;
+// Verdict UI configuration (maps verdict level to display properties)
+interface VerdictDisplayConfig {
   icon: typeof CheckCircle2;
-  title: string;
-  subtitle: string;
   className: string;
   bgClassName: string;
 }
 
-interface SessionOutcomes {
-  sessionsToday: number;
-  completed: number;
-  saved: number;
-  cancelled: number;
-  failed: number;
-  inProgress: number;
-  activeCaseworkers: number;
-}
-
-interface ComplianceStatus {
-  deletionsVerified: number;
-  retainedArtifacts: number;
-  llmApproved: boolean;
-  userApprovalRequired: boolean;
-}
-
-interface ActionCounts {
-  blockedSessionsCount: number;
-  issueSessionsCount: number;
-  complianceRiskCount: number;
-}
-
-// Filter events to "today" (last 24 hours for mock purposes)
-function getTodayEvents(events: EyeEvent[]): EyeEvent[] {
-  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  return events.filter(e => new Date(e.timestamp) >= twentyFourHoursAgo);
-}
-
-// Compute action counts for verdict determination
-function computeActionCounts(events: EyeEvent[]): ActionCounts {
-  const todayEvents = getTodayEvents(events);
-  
-  // Blocked sessions: critical errors, transcription/redaction failures that block progress, timeouts
-  const blockedSessionIds = new Set<string>();
-  const issueSessionIds = new Set<string>();
-  const complianceRiskSessionIds = new Set<string>();
-  
-  for (const event of todayEvents) {
-    const sessionId = event.session_id;
-    if (!sessionId) continue;
-    
-    const severity = getEventSeverity(event);
-    
-    // Critical issues = blocked
-    if (severity === "CRITICAL") {
-      blockedSessionIds.add(sessionId);
-      continue;
-    }
-    
-    // Blocking failures
-    if (event.event_type === "TRANSCRIPTION_FAILED" || 
-        event.event_type === "REDACTION_FAILED") {
-      blockedSessionIds.add(sessionId);
-      continue;
-    }
-    
-    // Compliance risks: purge failures, retained artifacts
-    if (event.event_type === "PURGE_FAILED") {
-      complianceRiskSessionIds.add(sessionId);
-      continue;
-    }
-    
-    if (event.event_type === "EPHEMERAL_SCAN_RESULT" && (event.remaining_count ?? 0) > 0) {
-      complianceRiskSessionIds.add(sessionId);
-      continue;
-    }
-    
-    // Non-blocking issues
-    if (event.result === "failure" || severity === "WARN" || severity === "HIGH") {
-      issueSessionIds.add(sessionId);
-    }
-  }
-  
-  // Remove blocked from issue count (don't double count)
-  blockedSessionIds.forEach(id => issueSessionIds.delete(id));
-  
-  return {
-    blockedSessionsCount: blockedSessionIds.size,
-    issueSessionsCount: issueSessionIds.size,
-    complianceRiskCount: complianceRiskSessionIds.size,
-  };
-}
-
-// Compute verdict from counts
-function computeVerdict(counts: ActionCounts): VerdictState {
-  const { blockedSessionsCount, issueSessionsCount, complianceRiskCount } = counts;
-  
-  // Red: blocking or compliance risk
-  if (blockedSessionsCount > 0 || complianceRiskCount > 0) {
-    return {
-      level: "red",
-      icon: XOctagon,
-      title: "Service disruption detected — sessions may be delayed",
-      subtitle: "Caseworkers may be blocked or compliance requires attention. Escalation recommended.",
-      className: "text-destructive",
-      bgClassName: "bg-destructive/10 border-destructive/30",
-    };
-  }
-  
-  // Yellow: errors occurred but not blocking and no compliance risk
-  if (issueSessionsCount > 0) {
-    return {
-      level: "yellow",
-      icon: AlertTriangle,
-      title: "Some system errors occurred — no caseworkers blocked",
-      subtitle: "AidMind has been notified. No action needed from supervisors.",
-      className: "text-[hsl(var(--status-warning))]",
-      bgClassName: "bg-[hsl(var(--status-warning))]/10 border-[hsl(var(--status-warning))]/30",
-    };
-  }
-  
-  // Green: all good
-  return {
-    level: "green",
+const VERDICT_DISPLAY: Record<VerdictLevel, VerdictDisplayConfig> = {
+  green: {
     icon: CheckCircle2,
-    title: "All systems operating normally",
-    subtitle: "No blocked sessions. Compliance checks passed.",
     className: "text-[hsl(var(--status-success))]",
     bgClassName: "bg-[hsl(var(--status-success))]/10 border-[hsl(var(--status-success))]/30",
-  };
-}
+  },
+  yellow: {
+    icon: AlertTriangle,
+    className: "text-[hsl(var(--status-warning))]",
+    bgClassName: "bg-[hsl(var(--status-warning))]/10 border-[hsl(var(--status-warning))]/30",
+  },
+  red: {
+    icon: XOctagon,
+    className: "text-destructive",
+    bgClassName: "bg-destructive/10 border-destructive/30",
+  },
+};
 
-// Compute session outcomes with reconciliation
-function computeSessionOutcomes(events: EyeEvent[]): SessionOutcomes {
-  const todayEvents = getTodayEvents(events);
-  
-  // Get all unique session IDs
-  const allSessionIds = new Set(todayEvents.map(e => e.session_id).filter(Boolean) as string[]);
-  
-  // Track outcomes per session (priority: Failed > Completed > Saved > Cancelled > In Progress)
-  const sessionOutcome = new Map<string, "completed" | "saved" | "cancelled" | "failed" | "inProgress">();
-  
-  for (const sessionId of allSessionIds) {
-    const sessionEvents = todayEvents.filter(e => e.session_id === sessionId);
-    
-    // Check for failure state first
-    const hasFailed = sessionEvents.some(e => 
-      e.event_type === "TRANSCRIPTION_FAILED" ||
-      e.event_type === "REDACTION_FAILED" ||
-      e.event_type === "PURGE_FAILED" ||
-      (e.result === "failure" && getEventSeverity(e) === "CRITICAL")
-    );
-    if (hasFailed) {
-      sessionOutcome.set(sessionId, "failed");
-      continue;
-    }
-    
-    // Check for completed (SESSION_CLOSED with no major failures)
-    const isClosed = sessionEvents.some(e => e.event_type === "SESSION_CLOSED");
-    if (isClosed) {
-      sessionOutcome.set(sessionId, "completed");
-      continue;
-    }
-    
-    // Check for saved
-    const isSaved = sessionEvents.some(e => e.event_type === "WIP_BUNDLE_EXPORTED");
-    if (isSaved) {
-      sessionOutcome.set(sessionId, "saved");
-      continue;
-    }
-    
-    // Check for cancelled
-    const isCancelled = sessionEvents.some(e => e.event_type === "SESSION_CANCELLED");
-    if (isCancelled) {
-      sessionOutcome.set(sessionId, "cancelled");
-      continue;
-    }
-    
-    // Otherwise, in progress
-    sessionOutcome.set(sessionId, "inProgress");
-  }
-  
-  // Count outcomes
-  let completed = 0, saved = 0, cancelled = 0, failed = 0, inProgress = 0;
-  for (const outcome of sessionOutcome.values()) {
-    switch (outcome) {
-      case "completed": completed++; break;
-      case "saved": saved++; break;
-      case "cancelled": cancelled++; break;
-      case "failed": failed++; break;
-      case "inProgress": inProgress++; break;
-    }
-  }
-  
-  // Unique operators
-  const activeCaseworkers = new Set(
-    todayEvents.map(e => e.operator_id).filter(Boolean)
-  ).size;
-  
-  return {
-    sessionsToday: allSessionIds.size,
-    completed,
-    saved,
-    cancelled,
-    failed,
-    inProgress,
-    activeCaseworkers,
-  };
-}
-
-// Compute compliance status
-function computeComplianceStatus(events: EyeEvent[]): ComplianceStatus {
-  const todayEvents = getTodayEvents(events);
-  
-  const deletionsVerified = todayEvents.filter(
-    e => e.event_type === "EPHEMERAL_SCAN_RESULT" && e.remaining_count === 0
-  ).length;
-  
-  const retainedArtifacts = todayEvents.filter(
-    e => e.event_type === "EPHEMERAL_SCAN_RESULT" && (e.remaining_count ?? 0) > 0
-  ).length;
-  
-  // For now, simulate LLM and approval compliance as true (mock)
-  const llmApproved = true;
-  const userApprovalRequired = true;
-  
-  return {
-    deletionsVerified,
-    retainedArtifacts,
-    llmApproved,
-    userApprovalRequired,
-  };
-}
-
-// Generate incident summary (PHI-safe)
-function generateIncidentSummary(
-  verdictLevel: VerdictLevel,
-  counts: ActionCounts,
-  outcomes: SessionOutcomes
-): string {
-  const now = new Date().toISOString();
-  const levelLabel = verdictLevel === "green" ? "Normal" : verdictLevel === "yellow" ? "Attention" : "Critical";
-  
-  let summary = `AidMind System Status Report
-Generated: ${now}
-Status Level: ${levelLabel}
-
-Session Counts (Last 24h):
-- Total sessions: ${outcomes.sessionsToday}
-- Completed: ${outcomes.completed}
-- Saved for later: ${outcomes.saved}
-- Cancelled: ${outcomes.cancelled}
-- Failed: ${outcomes.failed}
-- In progress: ${outcomes.inProgress}
-
-Impact Summary:
-- Blocked sessions: ${counts.blockedSessionsCount}
-- Sessions with issues: ${counts.issueSessionsCount}
-- Compliance risks: ${counts.complianceRiskCount}
-
-`;
-
-  if (verdictLevel === "green") {
-    summary += "Recommendation: No action required.\n";
-  } else if (verdictLevel === "yellow") {
-    summary += "Recommendation: Monitor situation. Engineering has been automatically notified.\n";
-  } else {
-    summary += "Recommendation: Escalation recommended. Caseworkers may be blocked or compliance requires attention.\n";
-  }
-
-  summary += "\n---\nNo PHI is included in this report.";
-  
-  return summary;
-}
 
 export function DailyAssurancePanel({ allEvents, issueCount, onNavigateToTab }: DailyAssurancePanelProps) {
   const [isSupportModalOpen, setIsSupportModalOpen] = useState(false);
   
-  const counts = useMemo(() => computeActionCounts(allEvents), [allEvents]);
+  // Use the new verdict module - applies "last24h" time filter internally
+  const relevantEvents = useMemo(() => getRelevantEvents(allEvents, "last24h"), [allEvents]);
+  const counts = useMemo(() => computeActionCounts(relevantEvents), [relevantEvents]);
   const verdict = useMemo(() => computeVerdict(counts), [counts]);
-  const outcomes = useMemo(() => computeSessionOutcomes(allEvents), [allEvents]);
-  const compliance = useMemo(() => computeComplianceStatus(allEvents), [allEvents]);
+  const outcomes = useMemo(() => computeSessionOutcomes(relevantEvents), [relevantEvents]);
+  const compliance = useMemo(() => computeComplianceStatus(relevantEvents), [relevantEvents]);
   
-  const incidentSummary = useMemo(
+  // Generate incident summary using the new module
+  const incidentSummaryResult = useMemo(
     () => generateIncidentSummary(verdict.level, counts, outcomes),
     [verdict.level, counts, outcomes]
   );
   
-  const VerdictIcon = verdict.icon;
+  // Get display config for the current verdict level
+  const verdictDisplay = VERDICT_DISPLAY[verdict.level];
+  const VerdictIcon = verdictDisplay.icon;
   
   const handleCopyIncidentSummary = () => {
-    navigator.clipboard.writeText(incidentSummary);
+    navigator.clipboard.writeText(incidentSummaryResult.formattedText);
     toast.success("Incident summary copied to clipboard");
   };
   
@@ -379,12 +142,12 @@ export function DailyAssurancePanel({ allEvents, issueCount, onNavigateToTab }: 
           {/* A) Top-level Verdict Block */}
           <div className={cn(
             "rounded-lg border p-4",
-            verdict.bgClassName
+            verdictDisplay.bgClassName
           )}>
             <div className="flex items-start gap-3">
-              <VerdictIcon className={cn("h-6 w-6 flex-shrink-0 mt-0.5", verdict.className)} />
+              <VerdictIcon className={cn("h-6 w-6 flex-shrink-0 mt-0.5", verdictDisplay.className)} />
               <div className="flex-1">
-                <h3 className={cn("font-semibold text-base", verdict.className)}>{verdict.title}</h3>
+                <h3 className={cn("font-semibold text-base", verdictDisplay.className)}>{verdict.title}</h3>
                 <p className="text-sm text-foreground/80 mt-0.5">{verdict.subtitle}</p>
                 <p className="text-xs text-muted-foreground mt-2">
                   Based on today's completed and active sessions.
@@ -506,16 +269,60 @@ export function DailyAssurancePanel({ allEvents, issueCount, onNavigateToTab }: 
               <div className="flex items-center gap-3 text-sm">
                 <Brain className={cn(
                   "h-4 w-4",
-                  compliance.llmApproved ? "text-[hsl(var(--status-success))]" : "text-muted-foreground"
+                  compliance.llmComplianceStatus === "passed" ? "text-[hsl(var(--status-success))]" : 
+                  compliance.llmComplianceStatus === "not_instrumented" ? "text-muted-foreground" : "text-destructive"
                 )} />
-                <span>All LLM operations used approved, minimized input</span>
+                <span className="flex items-center gap-1.5">
+                  {compliance.llmComplianceStatus === "passed" ? (
+                    "All LLM operations used approved, minimized input"
+                  ) : compliance.llmComplianceStatus === "not_instrumented" ? (
+                    <>
+                      LLM compliance tracking
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <HelpCircle className="h-3 w-3 text-muted-foreground" />
+                          </TooltipTrigger>
+                          <TooltipContent side="right" className="max-w-xs">
+                            <p className="text-xs">Not yet instrumented. LLM compliance events will appear here when the system emits them.</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      <span className="text-xs text-muted-foreground/60 italic">(DEV)</span>
+                    </>
+                  ) : (
+                    <span className="text-destructive">LLM compliance issue detected</span>
+                  )}
+                </span>
               </div>
               <div className="flex items-center gap-3 text-sm">
                 <UserCheck className={cn(
                   "h-4 w-4",
-                  compliance.userApprovalRequired ? "text-[hsl(var(--status-success))]" : "text-muted-foreground"
+                  compliance.userApprovalStatus === "passed" ? "text-[hsl(var(--status-success))]" : 
+                  compliance.userApprovalStatus === "not_instrumented" ? "text-muted-foreground" : "text-destructive"
                 )} />
-                <span>All sessions required explicit user approval before generation</span>
+                <span className="flex items-center gap-1.5">
+                  {compliance.userApprovalStatus === "passed" ? (
+                    "All sessions required explicit user approval before generation"
+                  ) : compliance.userApprovalStatus === "not_instrumented" ? (
+                    <>
+                      User approval tracking
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <HelpCircle className="h-3 w-3 text-muted-foreground" />
+                          </TooltipTrigger>
+                          <TooltipContent side="right" className="max-w-xs">
+                            <p className="text-xs">Not yet instrumented. User approval events will appear here when the system emits them.</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      <span className="text-xs text-muted-foreground/60 italic">(DEV)</span>
+                    </>
+                  ) : (
+                    <span className="text-destructive">User approval issue detected</span>
+                  )}
+                </span>
               </div>
             </div>
           </div>
@@ -629,7 +436,7 @@ export function DailyAssurancePanel({ allEvents, issueCount, onNavigateToTab }: 
           <div className="space-y-4">
             <Textarea
               className="min-h-[200px] font-mono text-xs"
-              defaultValue={incidentSummary}
+              defaultValue={incidentSummaryResult.formattedText}
             />
             <p className="text-xs text-muted-foreground flex items-center gap-1">
               <Lock className="h-3 w-3" />
@@ -641,7 +448,7 @@ export function DailyAssurancePanel({ allEvents, issueCount, onNavigateToTab }: 
             <Button
               variant="outline"
               onClick={() => {
-                navigator.clipboard.writeText(incidentSummary);
+                navigator.clipboard.writeText(incidentSummaryResult.formattedText);
                 toast.success("Incident summary copied to clipboard");
               }}
               className="gap-2"
