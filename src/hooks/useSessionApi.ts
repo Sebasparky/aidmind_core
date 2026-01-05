@@ -6,6 +6,7 @@ interface SessionData {
   case_label?: string;
   client_label?: string;
   interaction_type?: string;
+  request_id?: string; // Idempotency key
 }
 
 interface Session {
@@ -36,6 +37,7 @@ export function useSessionApi() {
         body: {
           action: "create",
           data,
+          request_id: data.request_id, // Pass idempotency key at top level
         },
       });
 
