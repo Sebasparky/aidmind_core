@@ -600,3 +600,23 @@ export const FUTURE_EVENTS: EyeEventType[] = [
 export function isEventImplemented(eventType: EyeEventType): boolean {
   return IMPLEMENTED_EVENTS.includes(eventType);
 }
+
+// ============================================================
+// HELPER FUNCTIONS (replacing mock-data dependencies)
+// ============================================================
+
+/**
+ * Get the severity for an Eye event.
+ * Uses explicit event.severity if available, otherwise falls back to type-based mapping.
+ */
+export function getEventSeverity(event: EyeEvent): EventSeverity {
+  if (event.severity) return event.severity;
+  return EVENT_SEVERITY_MAP[event.event_type] ?? "INFO";
+}
+
+/**
+ * Get the category for an Eye event based on event type.
+ */
+export function getEventCategory(event: EyeEvent): EventCategory {
+  return EVENT_CATEGORY_MAP[event.event_type] ?? "SESSION";
+}

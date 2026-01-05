@@ -4,19 +4,13 @@
  * A trust, audit, and safety surface for supervisors to view
  * Eye events without any PHI exposure.
  * 
- * Session-first default view with collapsible filters.
+ * Now using REAL Supabase data instead of mock events.
  */
 
 import { useState, useMemo, useCallback } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { 
-  generateMockEyeEvents, 
-  filterEvents, 
-  getPurgeProofEvents,
-  getErrorEvents,
-  EventFilters,
-} from "@/lib/eye/mock-data";
+import { useEyeEvents, filterEvents, getPurgeProofEvents, getErrorEvents, EventFilters } from "@/hooks/useEyeEvents";
 import { EyeEvent } from "@/lib/eye/types";
 import { SupervisorHeader } from "@/components/supervisor/SupervisorHeader";
 import { EventFiltersPanel } from "@/components/supervisor/EventFiltersPanel";
@@ -35,6 +29,8 @@ import {
   ShieldCheck,
   Filter,
   X,
+  RefreshCw,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -46,8 +42,12 @@ export default function Supervisor() {
     return <Navigate to="/dashboard" replace />;
   }
 
-  // Generate mock events
-  const allEvents = useMemo(() => generateMockEyeEvents(), []);
+  // Fetch REAL eye events from Supabase
+  const { events: allEvents, loading, error, refresh, lastRefresh } = useEyeEvents({
+    timeRangeHours: 24,
+    autoRefresh: true,
+    refreshIntervalMs: 30000, // 30 seconds
+  });
   
   // Filter state
   const [filters, setFilters] = useState<EventFilters>({});
@@ -187,12 +187,40 @@ export default function Supervisor() {
                 </TabsList>
               </div>
 
-              {/* Event count */}
-              {hasActiveFilters && (
-                <div className="text-sm text-muted-foreground">
-                  Showing {filteredEvents.length} of {allEvents.length} events
-                </div>
-              )}
+              {/* Status indicators */}
+              <div className="flex items-center gap-3">
+                {loading && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading...
+                  </div>
+                )}
+                
+                {error && (
+                  <div className="flex items-center gap-2 text-sm text-destructive">
+                    <AlertTriangle className="h-4 w-4" />
+                    {error}
+                  </div>
+                )}
+                
+                {!loading && !error && (
+                  <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                    <span>
+                      {allEvents.length} events
+                      {hasActiveFilters && ` (${filteredEvents.length} filtered)`}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={refresh}
+                      className="gap-1 h-8"
+                    >
+                      <RefreshCw className="h-3 w-3" />
+                      Refresh
+                    </Button>
+                  </div>
+                )}
+              </div>
             </div>
 
             <TabsContent value="daily-assurance" className="flex-1 mt-0">

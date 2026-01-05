@@ -5,8 +5,7 @@
  * Implements visual noise reduction for low-severity events.
  */
 
-import { EyeEvent } from "@/lib/eye/types";
-import { getEventCategory, getEventSeverity } from "@/lib/eye/mock-data";
+import { EyeEvent, getEventCategory, getEventSeverity } from "@/lib/eye/types";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";

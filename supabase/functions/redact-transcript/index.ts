@@ -226,6 +226,7 @@ let presidioHealthy: boolean | null = null;
 let presidioHealthCheckedAt: number = 0;
 
 // Log Eye event for audit trail (no PHI stored)
+// Enhanced to include all required metadata fields
 async function logEyeEvent(
   supabase: any,
   sessionId: string | null,
@@ -233,12 +234,21 @@ async function logEyeEvent(
   eventData: Record<string, any> = {}
 ) {
   try {
+    // Merge standard fields into event_data
+    const fullEventData = {
+      result: eventData.result ?? "success",
+      severity: eventData.severity ?? "INFO",
+      actor_type: eventData.actor_type ?? "service",
+      actor_id: eventData.actor_id ?? "redact-transcript",
+      ...eventData,
+    };
+    
     await supabase.from("eye_events").insert({
       session_id: sessionId,
       event_type: eventType,
-      event_data: eventData,
+      event_data: fullEventData,
     });
-    console.log(`[Eye Event] ${eventType}`, JSON.stringify(eventData));
+    console.log(`[Eye Event] ${eventType}`, JSON.stringify(fullEventData));
   } catch (error) {
     console.error("Failed to log Eye event:", error);
   }
@@ -2280,13 +2290,38 @@ serve(async (req) => {
     } else {
       console.log(`[Redact] Starting 3-layer redaction pipeline for session ${session_id}`);
 
+      // Emit TEXT_PROVIDED event (text received for processing)
+      await logEyeEvent(supabase, session_id, "TEXT_PROVIDED", {
+        severity: "INFO",
+        result: "success",
+        text_length: transcript.length,
+      });
+
+      // Emit REDACTION_STARTED event
+      await logEyeEvent(supabase, session_id, "REDACTION_STARTED", {
+        severity: "NOTICE",
+        result: "success",
+      });
+
       await supabase
         .from("sessions")
         .update({ state: "REDACTING" })
         .eq("session_id", session_id);
 
+      const startTime = Date.now();
       result = await runRedactionPipeline(session_id, transcript, openAIApiKey, supabase, {
         redact_agency_refs: redact_agency_refs ?? false,
+      });
+      const latencyMs = Date.now() - startTime;
+
+      // Emit REDACTION_COMPLETED event with counts (no PHI)
+      await logEyeEvent(supabase, session_id, "REDACTION_COMPLETED", {
+        severity: "NOTICE",
+        result: result.verification_result.status === "PASS" ? "success" : "partial",
+        redaction_counts: result.redaction_counts,
+        latency_ms: latencyMs,
+        minimized_text_source: result.minimized_text_source,
+        verification_status: result.verification_result.status,
       });
     }
 

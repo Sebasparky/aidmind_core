@@ -2,16 +2,22 @@
  * Sessions Panel - Session-first default view for Supervisor UI
  * 
  * Shows sessions as the primary organizing unit instead of raw events.
+ * Now works with real Supabase data.
  */
 
 import { useMemo, useState } from "react";
-import { EyeEvent } from "@/lib/eye/types";
-import { getEventSeverity } from "@/lib/eye/mock-data";
+import { EyeEvent, EVENT_SEVERITY_MAP, EventSeverity } from "@/lib/eye/types";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { format, formatDistanceToNow } from "date-fns";
+
+// Get event severity - uses event's severity field or falls back to type mapping
+function getEventSeverity(event: EyeEvent): EventSeverity {
+  if (event.severity) return event.severity;
+  return EVENT_SEVERITY_MAP[event.event_type] ?? "INFO";
+}
 import {
   CheckCircle2,
   XCircle,

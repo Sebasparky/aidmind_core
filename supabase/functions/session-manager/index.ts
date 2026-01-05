@@ -12,6 +12,7 @@ const SESSION_TTL_HOURS = 24;
 interface SessionRequest {
   action: "create" | "update" | "close" | "cancel" | "purge" | "get";
   session_id?: string;
+  operator_id?: string;
   data?: {
     case_id?: string;
     case_label?: string;
@@ -22,6 +23,7 @@ interface SessionRequest {
 }
 
 // Log Eye event for audit trail (no PHI)
+// Uses the event_data jsonb field to store all metadata
 async function logEyeEvent(
   supabase: any,
   sessionId: string | null,
@@ -29,12 +31,21 @@ async function logEyeEvent(
   eventData: Record<string, any> = {}
 ) {
   try {
+    // Merge standard fields into event_data
+    const fullEventData = {
+      result: eventData.result ?? "success",
+      severity: eventData.severity ?? "INFO",
+      actor_type: eventData.actor_type ?? "service",
+      actor_id: eventData.actor_id ?? "session-manager",
+      ...eventData,
+    };
+    
     await supabase.from("eye_events").insert({
       session_id: sessionId,
       event_type: eventType,
-      event_data: eventData,
+      event_data: fullEventData,
     });
-    console.log(`[Eye Event] ${eventType}`, eventData);
+    console.log(`[Eye Event] ${eventType}`, JSON.stringify(fullEventData));
   } catch (error) {
     console.error("Failed to log Eye event:", error);
   }
@@ -43,6 +54,17 @@ async function logEyeEvent(
 // Purge all ephemeral data for a session
 async function purgeSessionData(supabase: any, sessionId: string) {
   console.log(`[Purge] Starting purge for session ${sessionId}`);
+  
+  // Emit PURGE_STARTED
+  await logEyeEvent(supabase, sessionId, "PURGE_STARTED", {
+    severity: "NOTICE",
+    actor_type: "system",
+    actor_id: "session-manager",
+  });
+
+  let purgeSuccess = true;
+  let audioDeletedCount = 0;
+  let artifactsDeletedCount = 0;
 
   // 1. Delete audio files from storage
   const { data: jobs } = await supabase
@@ -58,15 +80,20 @@ async function purgeSessionData(supabase: any, sessionId: string) {
     
     if (storageError) {
       console.error("Failed to delete audio files:", storageError);
+      purgeSuccess = false;
     } else {
+      audioDeletedCount = objectKeys.length;
       console.log(`[Purge] Deleted ${objectKeys.length} audio files`);
-      await logEyeEvent(supabase, sessionId, "AUDIO_FILES_PURGED", {
+      await logEyeEvent(supabase, sessionId, "AUDIO_DELETED", {
         count: objectKeys.length,
+        severity: "NOTICE",
+        actor_type: "system",
+        actor_id: "session-manager",
       });
     }
   }
 
-  // 2. Delete transcription jobs (cascade will handle this with session delete)
+  // 2. Delete transcription jobs
   const { error: jobsError } = await supabase
     .from("transcription_jobs")
     .delete()
@@ -74,6 +101,7 @@ async function purgeSessionData(supabase: any, sessionId: string) {
 
   if (jobsError) {
     console.error("Failed to delete transcription jobs:", jobsError);
+    purgeSuccess = false;
   }
 
   // 3. Delete ephemeral artifacts (transcripts)
@@ -89,15 +117,61 @@ async function purgeSessionData(supabase: any, sessionId: string) {
 
   if (artifactsError) {
     console.error("Failed to delete ephemeral artifacts:", artifactsError);
-  } else if (artifacts) {
+    purgeSuccess = false;
+  } else if (artifacts && artifacts.length > 0) {
+    artifactsDeletedCount = artifacts.length;
     console.log(`[Purge] Deleted ${artifacts.length} ephemeral artifacts`);
-    await logEyeEvent(supabase, sessionId, "EPHEMERAL_ARTIFACTS_PURGED", {
-      count: artifacts.length,
-      types: artifacts.map((a: any) => a.artifact_type),
+    
+    // Emit deletion events for each artifact type
+    const transcriptDeleted = artifacts.some((a: any) => a.artifact_type === "transcript");
+    const minimizedDeleted = artifacts.some((a: any) => a.artifact_type === "minimized_transcript");
+    
+    if (transcriptDeleted) {
+      await logEyeEvent(supabase, sessionId, "TRANSCRIPT_DELETED", {
+        severity: "NOTICE",
+        actor_type: "system",
+        actor_id: "session-manager",
+      });
+    }
+    if (minimizedDeleted) {
+      await logEyeEvent(supabase, sessionId, "MINIMIZED_TRANSCRIPT_DELETED", {
+        severity: "NOTICE",
+        actor_type: "system",
+        actor_id: "session-manager",
+      });
+    }
+  }
+
+  // Emit EPHEMERAL_SCAN_RESULT to indicate all data purged
+  await logEyeEvent(supabase, sessionId, "EPHEMERAL_SCAN_RESULT", {
+    remaining_count: 0,
+    remaining_types: [],
+    severity: "NOTICE",
+    actor_type: "system",
+    actor_id: "session-manager",
+  });
+
+  // Emit PURGE_COMPLETED or PURGE_FAILED
+  if (purgeSuccess) {
+    await logEyeEvent(supabase, sessionId, "PURGE_COMPLETED", {
+      severity: "NOTICE",
+      actor_type: "system",
+      actor_id: "session-manager",
+      audio_deleted: audioDeletedCount,
+      artifacts_deleted: artifactsDeletedCount,
+    });
+  } else {
+    await logEyeEvent(supabase, sessionId, "PURGE_FAILED", {
+      severity: "HIGH",
+      result: "failure",
+      reason_code: "PARTIAL_DELETION",
+      actor_type: "system",
+      actor_id: "session-manager",
     });
   }
 
   console.log(`[Purge] Completed purge for session ${sessionId}`);
+  return purgeSuccess;
 }
 
 serve(async (req) => {
@@ -110,7 +184,7 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { action, session_id, data }: SessionRequest = await req.json();
+    const { action, session_id, operator_id, data }: SessionRequest = await req.json();
 
     console.log(`[SessionManager] Action: ${action}, Session: ${session_id || "new"}`);
 
@@ -145,9 +219,14 @@ serve(async (req) => {
           throw new Error("Failed to create session");
         }
 
-        await logEyeEvent(supabase, newSessionId, "SESSION_CREATED", {
+        // Emit SESSION_STARTED (not SESSION_CREATED for taxonomy compliance)
+        await logEyeEvent(supabase, newSessionId, "SESSION_STARTED", {
           case_id: data.case_id,
           interaction_type: data.interaction_type,
+          operator_id: operator_id,
+          severity: "INFO",
+          actor_type: "user",
+          actor_id: operator_id || "unknown",
         });
 
         return new Response(
@@ -203,9 +282,15 @@ serve(async (req) => {
           throw new Error("Failed to update session");
         }
 
-        await logEyeEvent(supabase, session_id, "SESSION_STATE_UPDATED", {
-          new_state: data?.state,
-        });
+        // Only emit event for significant state changes
+        if (data?.state) {
+          await logEyeEvent(supabase, session_id, "SESSION_HEARTBEAT", {
+            new_state: data.state,
+            severity: "INFO",
+            actor_type: "service",
+            actor_id: "session-manager",
+          });
+        }
 
         return new Response(
           JSON.stringify({ success: true }),
@@ -237,7 +322,11 @@ serve(async (req) => {
           throw new Error("Failed to close session");
         }
 
-        await logEyeEvent(supabase, session_id, "SESSION_CLOSED", {});
+        await logEyeEvent(supabase, session_id, "SESSION_CLOSED", {
+          severity: "NOTICE",
+          actor_type: "system",
+          actor_id: "session-manager",
+        });
 
         return new Response(
           JSON.stringify({ success: true }),
@@ -269,7 +358,11 @@ serve(async (req) => {
           throw new Error("Failed to cancel session");
         }
 
-        await logEyeEvent(supabase, session_id, "SESSION_CANCELLED", {});
+        await logEyeEvent(supabase, session_id, "SESSION_CANCELLED", {
+          severity: "NOTICE",
+          actor_type: "user",
+          actor_id: operator_id || "unknown",
+        });
 
         return new Response(
           JSON.stringify({ success: true }),
