@@ -27,14 +27,13 @@
  * - Escalation implies AidMind involvement, not supervisor action
  */
 
-import { EyeEvent, EyeEventType, EventSeverity } from "./types";
-import { getEventSeverity } from "./mock-data";
+import { EyeEvent, EyeEventType, EventSeverity, EVENT_SEVERITY_MAP } from "./types";
 
 // ============================================================
 // TYPE DEFINITIONS
 // ============================================================
 
-export type VerdictLevel = "green" | "yellow" | "red";
+export type VerdictLevel = "green" | "yellow" | "red" | "neutral";
 
 export type TimeRange = "last24h" | "today" | "last7d" | "last30d";
 
@@ -60,12 +59,12 @@ export interface ComplianceStatus {
   retainedArtifacts: number;
   /** 
    * Derived from actual LLM_CALL events. 
-   * null = not instrumented (no LLM events found)
+   * "not_instrumented" = no LLM events found
    */
   llmComplianceStatus: "passed" | "failed" | "not_instrumented";
   /**
    * Derived from actual NOTE_APPROVED events.
-   * null = not instrumented (no approval events found)
+   * "not_instrumented" = no approval events found
    */
   userApprovalStatus: "passed" | "failed" | "not_instrumented";
 }
@@ -85,6 +84,39 @@ export interface IncidentSummary {
   outcomes: SessionOutcomes;
   recommendation: string;
   formattedText: string;
+}
+
+export interface IncidentSummaryOptions {
+  range?: TimeRange;
+  rangeLabel?: string;
+}
+
+// ============================================================
+// SEVERITY DERIVATION (DETERMINISTIC, NO MOCK-DATA DEPENDENCY)
+// ============================================================
+
+/**
+ * Get the severity for an event.
+ * 
+ * PRIORITY:
+ * 1. If event.severity is explicitly set, use it.
+ * 2. Otherwise, infer from EVENT_SEVERITY_MAP based on event_type.
+ * 3. If event_type is unknown, default to "INFO".
+ */
+export function getEventSeverity(event: EyeEvent): EventSeverity {
+  // Priority 1: Explicit severity
+  if (event.severity) {
+    return event.severity;
+  }
+  
+  // Priority 2: Infer from event type mapping
+  const mappedSeverity = EVENT_SEVERITY_MAP[event.event_type];
+  if (mappedSeverity) {
+    return mappedSeverity;
+  }
+  
+  // Priority 3: Default fallback
+  return "INFO";
 }
 
 // ============================================================
@@ -148,6 +180,24 @@ export function getTimeRangeStart(range: TimeRange): Date {
       return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
     default:
       return new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  }
+}
+
+/**
+ * Get human-readable label for a time range.
+ */
+export function getTimeRangeLabel(range: TimeRange): string {
+  switch (range) {
+    case "today":
+      return "Today";
+    case "last24h":
+      return "Last 24 hours";
+    case "last7d":
+      return "Last 7 days";
+    case "last30d":
+      return "Last 30 days";
+    default:
+      return "Last 24 hours";
   }
 }
 
@@ -236,7 +286,7 @@ export function computeActionCounts(events: EyeEvent[]): ActionCounts {
     // Check for blocked sessions (recovery-aware)
     if (isSessionBlocked(sessionEvents)) {
       blockedSessionIds.add(sessionId);
-      continue; // Blocked sessions don't also count as "issues"
+      // NOTE: Blocked sessions can ALSO have compliance risk (don't skip)
     }
     
     // Check for compliance risks
@@ -294,6 +344,10 @@ export function computeActionCounts(events: EyeEvent[]): ActionCounts {
  * 
  * VERDICT DEFINITIONS:
  * 
+ * NEUTRAL (No activity):
+ * - No events in the selected time range
+ * - Could indicate telemetry outage or genuine inactivity
+ * 
  * GREEN (All good):
  * - No blocked sessions AND no compliance risks
  * - Sessions may have had errors, but they all recovered
@@ -313,8 +367,18 @@ export function computeActionCounts(events: EyeEvent[]): ActionCounts {
  * - Severity is a multiplier, not a workflow state
  * - Only workflow-blocking event types determine blocked status
  */
-export function computeVerdict(counts: ActionCounts): VerdictResult {
+export function computeVerdict(counts: ActionCounts, hasEvents: boolean = true): VerdictResult {
   const { blockedSessionsCount, issueSessionsCount, complianceRiskCount } = counts;
+  
+  // NEUTRAL: No events in time range
+  if (!hasEvents) {
+    return {
+      level: "neutral",
+      title: "No activity in selected window",
+      subtitle: "No sessions recorded in this time range.",
+      counts,
+    };
+  }
   
   // RED: Blocking or compliance risk
   if (blockedSessionsCount > 0 || complianceRiskCount > 0) {
@@ -354,10 +418,15 @@ export function computeVerdict(counts: ActionCounts): VerdictResult {
  * 
  * OUTCOME PRIORITY (highest wins):
  * 1. Failed - session has unresolved blocking failure
- * 2. Completed - SESSION_CLOSED with no major failures
- * 3. Saved - WIP_BUNDLE_EXPORTED
- * 4. Cancelled - SESSION_CANCELLED
+ * 2. Saved - WIP_BUNDLE_EXPORTED (semantically "saved for later", different from "complete")
+ * 3. Cancelled - SESSION_CANCELLED
+ * 4. Completed - SESSION_CLOSED (only if not saved/cancelled)
  * 5. In Progress - none of the above
+ * 
+ * RATIONALE:
+ * - "Saved" wins over "Completed" because WIP_BUNDLE_EXPORTED means the user explicitly
+ *   chose to save for later. Even if SESSION_CLOSED also appears, the intent was "save".
+ * - "Cancelled" wins over "Completed" because cancellation is intentional termination.
  * 
  * GUARANTEE: completed + saved + cancelled + failed + inProgress === sessionsToday
  */
@@ -382,24 +451,24 @@ export function computeSessionOutcomes(events: EyeEvent[]): SessionOutcomes {
       continue;
     }
     
-    // Priority 2: Completed (SESSION_CLOSED)
-    const isClosed = sessionEvents.some(e => e.event_type === "SESSION_CLOSED");
-    if (isClosed) {
-      outcomes.set(sessionId, "completed");
-      continue;
-    }
-    
-    // Priority 3: Saved (WIP_BUNDLE_EXPORTED)
+    // Priority 2: Saved (WIP_BUNDLE_EXPORTED) - wins over Completed
     const isSaved = sessionEvents.some(e => e.event_type === "WIP_BUNDLE_EXPORTED");
     if (isSaved) {
       outcomes.set(sessionId, "saved");
       continue;
     }
     
-    // Priority 4: Cancelled
+    // Priority 3: Cancelled - wins over Completed
     const isCancelled = sessionEvents.some(e => e.event_type === "SESSION_CANCELLED");
     if (isCancelled) {
       outcomes.set(sessionId, "cancelled");
+      continue;
+    }
+    
+    // Priority 4: Completed (SESSION_CLOSED)
+    const isClosed = sessionEvents.some(e => e.event_type === "SESSION_CLOSED");
+    if (isClosed) {
+      outcomes.set(sessionId, "completed");
       continue;
     }
     
@@ -442,24 +511,50 @@ export function computeSessionOutcomes(events: EyeEvent[]): SessionOutcomes {
 /**
  * Compute compliance status from events.
  * 
+ * DEDUPLICATION:
+ * - deletionsVerified: count of unique session_ids with at least one EPHEMERAL_SCAN_RESULT 
+ *   where remaining_count === 0
+ * - retainedArtifacts: count of unique session_ids where the LATEST EPHEMERAL_SCAN_RESULT 
+ *   has remaining_count > 0 (latest scan wins semantics)
+ * 
  * LLM Compliance:
  * - If no LLM_CALL events exist → "not_instrumented"
+ * - If any LLM_CALL_FAILED exists → "failed"
  * - If all LLM_CALL_COMPLETED events have data_retention_mode === "zero_retention" → "passed"
- * - Otherwise → "failed" or "not_instrumented"
+ * - Otherwise → "failed"
  * 
  * User Approval:
  * - If no NOTE_APPROVED events exist → "not_instrumented"
  * - If at least one NOTE_APPROVED exists → "passed"
- * - Otherwise → "not_instrumented"
  */
 export function computeComplianceStatus(events: EyeEvent[]): ComplianceStatus {
-  const deletionsVerified = events.filter(
-    e => e.event_type === "EPHEMERAL_SCAN_RESULT" && e.remaining_count === 0
-  ).length;
+  // Group scan events by session for dedupe
+  const scanEventsBySession = new Map<string, EyeEvent[]>();
+  for (const event of events) {
+    if (event.event_type === "EPHEMERAL_SCAN_RESULT" && event.session_id) {
+      const existing = scanEventsBySession.get(event.session_id) || [];
+      existing.push(event);
+      scanEventsBySession.set(event.session_id, existing);
+    }
+  }
   
-  const retainedArtifacts = events.filter(
-    e => e.event_type === "EPHEMERAL_SCAN_RESULT" && (e.remaining_count ?? 0) > 0
-  ).length;
+  // Count unique sessions with verified deletions (latest scan wins)
+  let deletionsVerified = 0;
+  let retainedArtifacts = 0;
+  
+  for (const [, sessionScans] of scanEventsBySession) {
+    // Sort by timestamp descending to get latest first
+    const sorted = [...sessionScans].sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+    const latestScan = sorted[0];
+    
+    if (latestScan.remaining_count === 0) {
+      deletionsVerified++;
+    } else if ((latestScan.remaining_count ?? 0) > 0) {
+      retainedArtifacts++;
+    }
+  }
   
   // LLM Compliance: Check for LLM events
   const llmEvents = events.filter(
@@ -470,11 +565,23 @@ export function computeComplianceStatus(events: EyeEvent[]): ComplianceStatus {
   
   let llmComplianceStatus: ComplianceStatus["llmComplianceStatus"] = "not_instrumented";
   if (llmEvents.length > 0) {
-    const completedLlmCalls = events.filter(e => e.event_type === "LLM_CALL_COMPLETED");
-    const allZeroRetention = completedLlmCalls.every(
-      e => e.data_retention_mode === "zero_retention"
-    );
-    llmComplianceStatus = allZeroRetention ? "passed" : "failed";
+    // Check for any LLM_CALL_FAILED → immediate failure
+    const hasLlmFailure = llmEvents.some(e => e.event_type === "LLM_CALL_FAILED");
+    if (hasLlmFailure) {
+      llmComplianceStatus = "failed";
+    } else {
+      // Check completed calls for zero_retention compliance
+      const completedLlmCalls = events.filter(e => e.event_type === "LLM_CALL_COMPLETED");
+      if (completedLlmCalls.length === 0) {
+        // LLM started but never completed - still instrumented but no data to check
+        llmComplianceStatus = "not_instrumented";
+      } else {
+        const allZeroRetention = completedLlmCalls.every(
+          e => e.data_retention_mode === "zero_retention"
+        );
+        llmComplianceStatus = allZeroRetention ? "passed" : "failed";
+      }
+    }
   }
   
   // User Approval: Check for NOTE_APPROVED events
@@ -508,17 +615,31 @@ export function computeComplianceStatus(events: EyeEvent[]): ComplianceStatus {
  * - Session counts (no session IDs by default)
  * - Impact summary (counts only)
  * - Recommendation
+ * 
+ * OPTIONS:
+ * - range: TimeRange for dynamic label in header
+ * - rangeLabel: Custom label override
  */
 export function generateIncidentSummary(
   verdictLevel: VerdictLevel,
   counts: ActionCounts,
-  outcomes: SessionOutcomes
+  outcomes: SessionOutcomes,
+  options: IncidentSummaryOptions = {}
 ): IncidentSummary {
   const now = new Date().toISOString();
-  const levelLabel = verdictLevel === "green" ? "Normal" : verdictLevel === "yellow" ? "Attention" : "Critical";
+  
+  const levelLabel = verdictLevel === "green" 
+    ? "Normal" 
+    : verdictLevel === "yellow" 
+      ? "Attention" 
+      : verdictLevel === "neutral"
+        ? "No Activity"
+        : "Critical";
   
   let recommendation: string;
-  if (verdictLevel === "green") {
+  if (verdictLevel === "neutral") {
+    recommendation = "No sessions recorded. Verify telemetry is functioning if unexpected.";
+  } else if (verdictLevel === "green") {
     recommendation = "No action required.";
   } else if (verdictLevel === "yellow") {
     recommendation = "Monitor situation. Engineering has been automatically notified.";
@@ -526,11 +647,14 @@ export function generateIncidentSummary(
     recommendation = "Escalation recommended. Caseworkers may be blocked or compliance requires attention.";
   }
   
+  // Determine time range label
+  const rangeLabel = options.rangeLabel ?? (options.range ? getTimeRangeLabel(options.range) : "Last 24 hours");
+  
   const formattedText = `AidMind System Status Report
 Generated: ${now}
 Status Level: ${levelLabel}
 
-Session Counts (Last 24h):
+Session Counts (${rangeLabel}):
 - Total sessions: ${outcomes.sessionsToday}
 - Completed: ${outcomes.completed}
 - Saved for later: ${outcomes.saved}
@@ -584,6 +708,19 @@ No PHI is included in this report.`;
  *    - Severity alone does NOT determine blocked status
  *    - Only workflow-blocking event types matter
  *    - CRITICAL severity is logged but doesn't auto-escalate to RED
+ * 
+ * 5. Compliance deduplication:
+ *    - deletionsVerified and retainedArtifacts are session-deduped
+ *    - Latest scan wins: if a session has multiple scans, only the latest counts
+ *    - This reflects the final state of the session
+ * 
+ * 6. LLM compliance:
+ *    - Any LLM_CALL_FAILED → compliance "failed"
+ *    - All completed calls must use zero_retention to pass
+ * 
+ * 7. Outcome priority:
+ *    - Failed > Saved > Cancelled > Completed > In Progress
+ *    - "Saved" wins over "Completed" because it reflects user intent
  * 
  * TODOS:
  * - [ ] Add approval gate violation events (INPUT_APPROVED_FOR_GENERATION)
