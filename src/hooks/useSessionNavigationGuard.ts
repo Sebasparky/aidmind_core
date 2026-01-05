@@ -1,5 +1,5 @@
-import { useEffect, useCallback, useRef } from "react";
-import { useNavigate, useBlocker } from "react-router-dom";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 
 interface UseSessionNavigationGuardProps {
   /** Whether the session is in a "dirty" state that should block navigation */
@@ -25,17 +25,20 @@ interface UseSessionNavigationGuardReturn {
   isSaveEnabled: boolean;
   /** Pending navigation path (for after cancel/save completes) */
   pendingPath: string | null;
+  /** Navigate with guard - use this instead of navigate() for internal links */
+  guardedNavigate: (path: string) => void;
 }
 
 /**
  * Hook to guard against accidental navigation away from an active session.
  * 
  * Features:
- * - Blocks internal React Router navigation with a confirmation
+ * - Blocks internal navigation via guardedNavigate with a confirmation
  * - Shows browser beforeunload warning for refresh/tab close
- * - Handles browser back button
+ * - Handles browser back button via popstate
  * 
- * Stable across React StrictMode double renders.
+ * Note: This implementation works with BrowserRouter (non-data router).
+ * For internal navigation blocking, use guardedNavigate() instead of navigate().
  */
 export function useSessionNavigationGuard({
   isDirtySession,
@@ -44,23 +47,17 @@ export function useSessionNavigationGuard({
   saveEnabled = false,
 }: UseSessionNavigationGuardProps): UseSessionNavigationGuardReturn {
   const navigate = useNavigate();
-  const pendingPathRef = useRef<string | null>(null);
+  const location = useLocation();
+  const [showLeaveDialog, setShowLeaveDialog] = useState(false);
+  const [pendingPath, setPendingPath] = useState<string | null>(null);
   const isCancellingRef = useRef(false);
-
-  // Use React Router's blocker for internal navigation
-  const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
-      isDirtySession && 
-      !isCancellingRef.current &&
-      currentLocation.pathname !== nextLocation.pathname
-  );
+  const isHandlingPopstateRef = useRef(false);
 
   // Handle browser refresh/tab close
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (isDirtySession && !isCancellingRef.current) {
         e.preventDefault();
-        // Modern browsers ignore custom messages, but we set it anyway
         e.returnValue = "You have an active session. Changes may be lost.";
         return e.returnValue;
       }
@@ -70,53 +67,71 @@ export function useSessionNavigationGuard({
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [isDirtySession]);
 
-  // Store pending path when blocked
+  // Handle browser back/forward buttons
   useEffect(() => {
-    if (blocker.state === "blocked" && blocker.location) {
-      pendingPathRef.current = blocker.location.pathname;
+    const handlePopstate = () => {
+      if (isDirtySession && !isCancellingRef.current && !isHandlingPopstateRef.current) {
+        isHandlingPopstateRef.current = true;
+        // Push the current location back to prevent navigation
+        window.history.pushState(null, "", location.pathname + location.search);
+        // Show dialog and store that user tried to go back
+        setPendingPath("/dashboard"); // Default to dashboard for back button
+        setShowLeaveDialog(true);
+        isHandlingPopstateRef.current = false;
+      }
+    };
+
+    // Push initial state so we can intercept back button
+    if (isDirtySession) {
+      window.history.pushState(null, "", location.pathname + location.search);
     }
-  }, [blocker.state, blocker.location]);
+
+    window.addEventListener("popstate", handlePopstate);
+    return () => window.removeEventListener("popstate", handlePopstate);
+  }, [isDirtySession, location.pathname, location.search]);
+
+  // Guarded navigate function - use this for internal links
+  const guardedNavigate = useCallback((path: string) => {
+    if (isDirtySession && !isCancellingRef.current) {
+      setPendingPath(path);
+      setShowLeaveDialog(true);
+    } else {
+      navigate(path);
+    }
+  }, [isDirtySession, navigate]);
 
   const handleStay = useCallback(() => {
-    if (blocker.state === "blocked") {
-      blocker.reset();
-    }
-    pendingPathRef.current = null;
-  }, [blocker]);
+    setShowLeaveDialog(false);
+    setPendingPath(null);
+  }, []);
 
   const handleCancelAndLeave = useCallback(async () => {
     isCancellingRef.current = true;
-    const targetPath = pendingPathRef.current || "/dashboard";
+    const targetPath = pendingPath || "/dashboard";
     
     try {
-      // Call the cancel handler
       await onCancel();
-      
-      // Proceed with navigation
-      if (blocker.state === "blocked") {
-        blocker.proceed();
-      } else {
-        navigate(targetPath);
-      }
+      setShowLeaveDialog(false);
+      setPendingPath(null);
+      navigate(targetPath);
     } finally {
       isCancellingRef.current = false;
-      pendingPathRef.current = null;
     }
-  }, [onCancel, blocker, navigate]);
+  }, [onCancel, pendingPath, navigate]);
 
   const handleSaveForLater = useCallback(() => {
     if (onSave) {
       onSave();
-      // Navigation will happen after save completes (handled by the session machine)
     }
   }, [onSave]);
 
   return {
-    showLeaveDialog: blocker.state === "blocked",
+    showLeaveDialog,
     handleStay,
     handleCancelAndLeave,
     handleSaveForLater,
     isSaveEnabled: saveEnabled && !!onSave,
-    pendingPath: pendingPathRef.current,
+    pendingPath,
+    guardedNavigate,
   };
 }
