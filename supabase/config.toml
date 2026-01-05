@@ -8,3 +8,6 @@ verify_jwt = false
 
 [functions.redact-transcript]
 verify_jwt = false
+
+[functions.cleanup-orphan-sessions-dev]
+verify_jwt = false

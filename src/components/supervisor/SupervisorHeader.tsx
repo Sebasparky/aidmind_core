@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { UserSwitcher } from "./UserSwitcher";
+import { OrphanCleanupButton } from "./OrphanCleanupButton";
 
 interface SupervisorHeaderProps {
   user: MockUser | null;
@@ -52,6 +53,9 @@ export function SupervisorHeader({ user }: SupervisorHeaderProps) {
       </div>
 
       <div className="flex items-center gap-4">
+        {/* DEV Cleanup Button */}
+        <OrphanCleanupButton />
+        
         {/* No PHI Indicator */}
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Shield className="h-4 w-4 text-[hsl(var(--status-success))]" />
