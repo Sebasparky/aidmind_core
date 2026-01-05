@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { GuardedLink } from "@/components/navigation/GuardedLink";
 import {
   Calendar,
   Phone,
@@ -124,13 +124,13 @@ export function Sidebar() {
 
           {/* View Full Calendar Link - Quieter */}
           <div className="p-4 pt-0 flex-shrink-0">
-            <Link
+            <GuardedLink
               to="/calendar"
               className="flex items-center justify-between w-full px-4 py-2.5 bg-muted/30 hover:bg-muted/50 rounded-lg text-sm text-muted-foreground hover:text-foreground transition-colors"
             >
               <span>View Full Calendar</span>
               <ChevronRight className="h-4 w-4" />
-            </Link>
+            </GuardedLink>
           </div>
         </div>
       </div>
