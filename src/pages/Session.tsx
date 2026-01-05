@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useSessionMachine, SessionState, TimelineItem, ResumeBundle } from "@/hooks/useSessionMachine";
 import { useSessionNavigationGuard } from "@/hooks/useSessionNavigationGuard";
+import { useNavigationGuard } from "@/contexts/NavigationGuardContext";
 import { useDashboard } from "@/contexts/DashboardContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -194,6 +195,9 @@ export default function Session() {
   const canSaveForLater = state === "DRAFT_READY";
   const isDirtySession = !isTerminalState && data.sessionId !== "";
 
+  // Get the global navigation guard context
+  const { setGuard, clearGuard } = useNavigationGuard();
+
   // Navigation guard for leaving mid-session
   const {
     showLeaveDialog,
@@ -201,6 +205,7 @@ export default function Session() {
     handleCancelAndLeave,
     handleSaveForLater: navGuardSave,
     isSaveEnabled,
+    guardedNavigate,
   } = useSessionNavigationGuard({
     isDirtySession,
     onCancel: async () => {
@@ -214,6 +219,18 @@ export default function Session() {
     onSave: undefined, // Will be set after handleSaveForLater is defined
     saveEnabled: false,
   });
+
+  // Register/unregister the navigation guard globally
+  useEffect(() => {
+    setGuard({
+      active: isDirtySession,
+      guardedNavigate,
+    });
+    
+    return () => {
+      clearGuard();
+    };
+  }, [isDirtySession, guardedNavigate, setGuard, clearGuard]);
 
   const handleFileUpload = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {

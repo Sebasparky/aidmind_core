@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useNavigate } from "react-router-dom";
+import { useNavigationGuard } from "@/contexts/NavigationGuardContext";
 import { useDashboard } from "@/contexts/DashboardContext";
 import { useState, useEffect } from "react";
 import { useDebounce } from "@/hooks/use-debounce";
@@ -48,6 +49,7 @@ const mockUpdates = [
 
 export function Header() {
   const navigate = useNavigate();
+  const { guardActive, guardedNavigate } = useNavigationGuard();
   const { searchQuery, setSearchQuery, clearSearch } = useDashboard();
   const [localSearch, setLocalSearch] = useState(searchQuery);
   const debouncedSearch = useDebounce(localSearch, 200);
@@ -62,9 +64,13 @@ export function Header() {
 
   // Handle logo click - navigate to dashboard and reset UI
   const handleLogoClick = () => {
-    clearSearch();
-    setLocalSearch("");
-    navigate("/dashboard");
+    if (guardActive) {
+      guardedNavigate("/dashboard");
+    } else {
+      clearSearch();
+      setLocalSearch("");
+      navigate("/dashboard");
+    }
   };
 
   const handleClearSearch = () => {
