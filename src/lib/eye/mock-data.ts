@@ -720,6 +720,51 @@ export function generateMockEyeEvents(): EyeEvent[] {
     tags: ["DELETION_PROOF"],
   }));
   
+  // Add LLM compliance events for session 5
+  events.push(createMockEvent("LLM_CALL_STARTED", 0.52, {
+    session_id: session5,
+    case_id: case5,
+    operator_id: operator5,
+    actor_id: "service_llm",
+    actor_type: "service",
+    actor_role: null,
+    resource_type: "job",
+    resource_id: "llm_job_001",
+    model_provider: "anthropic",
+    model_name: "claude-3-haiku",
+    prompt_template_id: "note_generation_v2",
+    tags: ["PHI_TOUCHING"],
+  }));
+  
+  events.push(createMockEvent("LLM_CALL_COMPLETED", 0.51, {
+    session_id: session5,
+    case_id: case5,
+    actor_id: "service_llm",
+    actor_type: "service",
+    actor_role: null,
+    resource_type: "job",
+    resource_id: "llm_job_001",
+    model_provider: "anthropic",
+    model_name: "claude-3-haiku",
+    input_tokens_est: 1200,
+    output_tokens_est: 450,
+    data_retention_mode: "zero_retention",
+    latency_ms: 2800,
+  }));
+  
+  events.push(createMockEvent("NOTE_APPROVED", 0.505, {
+    session_id: session5,
+    case_id: case5,
+    operator_id: operator5,
+    actor_id: "user_001",
+    actor_type: "user",
+    actor_role: "caseworker",
+    resource_type: "note",
+    resource_id: "note_001",
+    severity: "NOTICE",
+    tags: ["COMPLIANCE"],
+  }));
+
   events.push(createMockEvent("PURGE_COMPLETED", 0.45, {
     session_id: session5,
     case_id: case5,
