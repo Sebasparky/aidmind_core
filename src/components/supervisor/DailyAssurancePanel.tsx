@@ -50,6 +50,7 @@ import {
   XCircle,
   PlayCircle,
   HelpCircle,
+  MinusCircle,
 } from "lucide-react";
 
 interface DailyAssurancePanelProps {
@@ -81,6 +82,11 @@ const VERDICT_DISPLAY: Record<VerdictLevel, VerdictDisplayConfig> = {
     className: "text-destructive",
     bgClassName: "bg-destructive/10 border-destructive/30",
   },
+  neutral: {
+    icon: MinusCircle,
+    className: "text-muted-foreground",
+    bgClassName: "bg-muted/30 border-muted-foreground/30",
+  },
 };
 
 
@@ -90,7 +96,7 @@ export function DailyAssurancePanel({ allEvents, issueCount, onNavigateToTab }: 
   // Use the new verdict module - applies "last24h" time filter internally
   const relevantEvents = useMemo(() => getRelevantEvents(allEvents, "last24h"), [allEvents]);
   const counts = useMemo(() => computeActionCounts(relevantEvents), [relevantEvents]);
-  const verdict = useMemo(() => computeVerdict(counts), [counts]);
+  const verdict = useMemo(() => computeVerdict(counts, relevantEvents.length > 0), [counts, relevantEvents.length]);
   const outcomes = useMemo(() => computeSessionOutcomes(relevantEvents), [relevantEvents]);
   const compliance = useMemo(() => computeComplianceStatus(relevantEvents), [relevantEvents]);
   
@@ -337,6 +343,11 @@ export function DailyAssurancePanel({ allEvents, issueCount, onNavigateToTab }: 
               <div className="flex items-center gap-2 text-sm text-[hsl(var(--status-success))]">
                 <CheckCircle2 className="h-4 w-4" />
                 <span>No action required today.</span>
+              </div>
+            ) : verdict.level === "neutral" ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <MinusCircle className="h-4 w-4" />
+                <span>No sessions to review. Verify telemetry if unexpected.</span>
               </div>
             ) : verdict.level === "yellow" ? (
               <div className="space-y-3">
