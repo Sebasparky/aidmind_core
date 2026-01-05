@@ -13,6 +13,7 @@ interface SessionRequest {
   action: "create" | "update" | "close" | "cancel" | "purge" | "get";
   session_id?: string;
   operator_id?: string;
+  request_id?: string; // Idempotency key
   data?: {
     case_id?: string;
     case_label?: string;
@@ -20,6 +21,36 @@ interface SessionRequest {
     interaction_type?: string;
     state?: string;
   };
+}
+
+// Idempotency check: return existing event if already exists with same request_id
+async function checkIdempotency(
+  supabase: any,
+  sessionId: string | null,
+  eventType: string,
+  requestId: string | undefined
+): Promise<boolean> {
+  if (!requestId) return false; // No idempotency without request_id
+  
+  const { data, error } = await supabase
+    .from("eye_events")
+    .select("id")
+    .eq("session_id", sessionId)
+    .eq("event_type", eventType)
+    .eq("event_data->>request_id", requestId)
+    .limit(1);
+  
+  if (error) {
+    console.log(`[Idempotency] Check failed: ${error.message}`);
+    return false;
+  }
+  
+  if (data && data.length > 0) {
+    console.log(`[Idempotency] Duplicate detected: ${eventType} with request_id ${requestId}`);
+    return true;
+  }
+  
+  return false;
 }
 
 // Log Eye event for audit trail (no PHI)
@@ -31,6 +62,15 @@ async function logEyeEvent(
   eventData: Record<string, any> = {}
 ) {
   try {
+    // Check idempotency if request_id is provided
+    if (eventData.request_id) {
+      const isDuplicate = await checkIdempotency(supabase, sessionId, eventType, eventData.request_id);
+      if (isDuplicate) {
+        console.log(`[Eye Event] SKIPPED duplicate: ${eventType}`);
+        return;
+      }
+    }
+    
     // Merge standard fields into event_data
     const fullEventData = {
       result: eventData.result ?? "success",
@@ -184,9 +224,9 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { action, session_id, operator_id, data }: SessionRequest = await req.json();
+    const { action, session_id, operator_id, request_id, data }: SessionRequest = await req.json();
 
-    console.log(`[SessionManager] Action: ${action}, Session: ${session_id || "new"}`);
+    console.log(`[SessionManager] Action: ${action}, Session: ${session_id || "new"}, RequestId: ${request_id || "none"}`);
 
     switch (action) {
       case "create": {
@@ -227,6 +267,7 @@ serve(async (req) => {
           severity: "INFO",
           actor_type: "user",
           actor_id: operator_id || "unknown",
+          request_id: request_id, // Idempotency key
         });
 
         return new Response(

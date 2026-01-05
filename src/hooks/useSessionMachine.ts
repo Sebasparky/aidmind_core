@@ -177,7 +177,7 @@ export function useSessionMachine({
 }: UseSessionMachineProps) {
   const [state, setState] = useState<SessionState>("NEW");
   const [data, setData] = useState<SessionData>({
-    sessionId: crypto.randomUUID(),
+    sessionId: "", // Empty until backend returns real session ID
     caseId,
     caseLabel,
     clientLabel,
@@ -192,6 +192,15 @@ export function useSessionMachine({
   });
 
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Track request_id per action for idempotency
+  const actionRequestIdRef = useRef<string>("");
+  
+  // Generate a new request_id for each action
+  const generateRequestId = useCallback(() => {
+    actionRequestIdRef.current = crypto.randomUUID();
+    return actionRequestIdRef.current;
+  }, []);
   
   // Real transcription hooks
   const transcription = useTranscription({ 
@@ -220,28 +229,35 @@ export function useSessionMachine({
   const startSession = useCallback(async () => {
     if (state !== "NEW") return;
     
-    // Create session in database for real transcription
-    if (useRealTranscription) {
-      try {
-        const session = await sessionApi.createSession({
-          case_id: caseId,
-          case_label: caseLabel,
-          client_label: clientLabel,
-          interaction_type: interactionType,
-        });
-        
-        if (session) {
-          // Update local session ID to match database record
-          setData((prev) => ({ ...prev, sessionId: session.session_id }));
-          console.log("[AidMind Event] SESSION_CREATED", session.session_id);
-        }
-      } catch (error) {
-        console.error("Failed to create session in database:", error);
-        // Continue with local session even if DB creation fails
-      }
-    }
+    const requestId = generateRequestId();
     
-    await simulateAsync(300);
+    // ALWAYS create session in database - backend is source of truth for session ID
+    try {
+      const session = await sessionApi.createSession({
+        case_id: caseId,
+        case_label: caseLabel,
+        client_label: clientLabel,
+        interaction_type: interactionType,
+        request_id: requestId,
+      });
+      
+      if (!session) {
+        throw new Error("Backend returned null session");
+      }
+      
+      // Update local session ID to match database record
+      setData((prev) => ({ ...prev, sessionId: session.session_id }));
+      console.log("[AidMind] Session created with ID:", session.session_id);
+    } catch (error) {
+      console.error("Failed to create session:", error);
+      setData((prev) => ({
+        ...prev,
+        errorMessage: "Failed to create session. Please try again.",
+        previousStateBeforeError: "NEW",
+      }));
+      setState("ERROR");
+      return;
+    }
     
     if (resumeBundle) {
       // Resume from bundle: restore state and go directly to DRAFT_READY
@@ -253,13 +269,11 @@ export function useSessionMachine({
         previousResumeBundleId: resumeBundle.resume_bundle_id,
       }));
       setState("DRAFT_READY");
-      // Log events (internal only)
-      console.log("[AidMind Event] WIP_BUNDLE_IMPORTED");
-      console.log(`[AidMind Event] SESSION_LINKED(${resumeBundle.resume_bundle_id})`);
+      console.log("[AidMind] WIP_BUNDLE_IMPORTED");
     } else {
       setState("READY_FOR_INPUT");
     }
-  }, [state, simulateAsync, resumeBundle, useRealTranscription, sessionApi, caseId, caseLabel, clientLabel, interactionType]);
+  }, [state, generateRequestId, resumeBundle, sessionApi, caseId, caseLabel, clientLabel, interactionType]);
 
   // UPLOAD_AUDIO: READY_FOR_INPUT → AUDIO_UPLOADED
   const uploadAudio = useCallback(
@@ -615,20 +629,22 @@ export function useSessionMachine({
     setState("CLOSING");
   }, []);
 
-  // CANCEL_SESSION: Any state → CLOSING
-  const cancelSession = useCallback(() => {
-    if (state === "VERIFICATION_REVIEW") {
-      console.log("[AidMind Event] REDACTION_REVIEW_EXITED");
+  // CANCEL_SESSION: Any state → directly to PURGED (calls backend to emit terminal event)
+  // Does NOT go through CLOSING to avoid triggering completePurge effect
+  const cancelSession = useCallback(async () => {
+    if (state === "PURGED") return;
+    
+    // Only call backend if we have a valid session ID
+    if (data.sessionId) {
+      try {
+        await sessionApi.cancelSession(data.sessionId);
+        console.log("[AidMind] Session cancelled:", data.sessionId);
+      } catch (error) {
+        console.error("Failed to cancel session in backend:", error);
+        // Continue with local cleanup even if backend fails
+      }
     }
-    console.log("[AidMind Event] SESSION_CANCELLED");
-    console.log("[AidMind Event] PURGE_STARTED");
-    setState("CLOSING");
-  }, [state]);
-
-  // Complete purge: CLOSING → PURGED
-  const completePurge = useCallback(async () => {
-    if (state !== "CLOSING") return;
-    await simulateAsync(1000); // Simulate purge
+    
     cleanup();
     setData((prev) => ({
       ...prev,
@@ -640,7 +656,35 @@ export function useSessionMachine({
       timelines: undefined,
     }));
     setState("PURGED");
-  }, [state, simulateAsync, cleanup]);
+  }, [state, data.sessionId, sessionApi, cleanup]);
+
+  // Complete purge: CLOSING → PURGED (calls backend to emit terminal event)
+  const completePurge = useCallback(async () => {
+    if (state !== "CLOSING") return;
+    
+    // Only call backend if we have a valid session ID and export was completed
+    if (data.sessionId && data.exportCompleted) {
+      try {
+        await sessionApi.closeSession(data.sessionId);
+        console.log("[AidMind] Session closed:", data.sessionId);
+      } catch (error) {
+        console.error("Failed to close session in backend:", error);
+        // Continue with local cleanup even if backend fails
+      }
+    }
+    
+    cleanup();
+    setData((prev) => ({
+      ...prev,
+      audioFile: undefined,
+      textNotes: undefined,
+      transcript: undefined,
+      minimizedTranscript: undefined,
+      generatedDraft: undefined,
+      timelines: undefined,
+    }));
+    setState("PURGED");
+  }, [state, data.sessionId, data.exportCompleted, sessionApi, cleanup]);
 
   // ERROR handling
   const handleError = useCallback(
