@@ -58,7 +58,7 @@ const DENY_REASONS = [
 export default function Session() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { addTask, deleteTask, addRecentNote } = useDashboard();
+  const { addTask, deleteTask } = useDashboard();
   
   const caseId = searchParams.get("caseId") || "1";
   const caseLabel = searchParams.get("caseLabel") || "Housing assistance — intake";
@@ -142,25 +142,10 @@ export default function Session() {
   }, [state, actions]);
 
   // Helper to map interaction type to note format
-  const mapInteractionType = (type: string): "phone-call" | "in-person" | "video-call" | "collateral-contact" | "other" => {
-    const typeMap: Record<string, "phone-call" | "in-person" | "video-call" | "collateral-contact" | "other"> = {
-      phone_call: "phone-call",
-      visit: "in-person",
-      meeting: "in-person",
-      video_call: "video-call",
-      collateral: "collateral-contact",
-    };
-    return typeMap[type] || "other";
-  };
-
   // Navigate to dashboard when purged with appropriate message (color-coded)
   useEffect(() => {
     if (state === "PURGED") {
-      // Determine the note status based on session outcome
-      let noteStatus: "exported" | "saved" | "cancelled";
-      
       if (data.exportCompleted) {
-        noteStatus = "exported";
         // Green / Success styling
         toast({
           title: "✅ Export complete",
@@ -168,10 +153,8 @@ export default function Session() {
           className: "border-green-500 bg-green-50 text-green-900 dark:bg-green-950 dark:text-green-100 dark:border-green-700",
         });
       } else if (data.savedForLater) {
-        noteStatus = "saved";
         // Message already shown by handleSaveForLater (blue styling)
       } else {
-        noteStatus = "cancelled";
         // Red / Destructive styling (cancelled)
         toast({
           title: "❌ Session cancelled",
@@ -180,17 +163,10 @@ export default function Session() {
         });
       }
 
-      // Add the completed note to Recent Notes
-      addRecentNote({
-        sessionId: data.sessionId,
-        title: noteTitle,
-        interactionType: mapInteractionType(data.interactionType),
-        status: noteStatus,
-      });
-
+      // Notes are now automatically updated via realtime subscription in useRecentNotes
       navigate(leaveTargetRef.current || "/dashboard");
     }
-  }, [state, navigate, data.exportCompleted, data.savedForLater, data.sessionId, data.interactionType, noteTitle, addRecentNote]);
+  }, [state, navigate, data.exportCompleted, data.savedForLater]);
 
   // Auto-complete purge when closing
   useEffect(() => {
