@@ -1,27 +1,32 @@
-import React from 'react';
-import { Link, LinkProps } from 'react-router-dom';
-import { useNavigationGuard } from '@/contexts/NavigationGuardContext';
+import React, { forwardRef } from "react";
+import { Link, LinkProps } from "react-router-dom";
+import { useNavigationGuard } from "@/contexts/NavigationGuardContext";
 
-interface GuardedLinkProps extends Omit<LinkProps, 'to'> {
+interface GuardedLinkProps extends Omit<LinkProps, "to"> {
   to: string;
   children: React.ReactNode;
 }
 
-export function GuardedLink({ to, children, onClick, ...props }: GuardedLinkProps) {
-  const { guardActive, guardedNavigate } = useNavigationGuard();
+export const GuardedLink = forwardRef<HTMLAnchorElement, GuardedLinkProps>(
+  ({ to, children, onClick, ...props }, ref) => {
+    const { guardActive, guardedNavigate } = useNavigationGuard();
 
-  const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
-    if (guardActive) {
-      e.preventDefault();
-      guardedNavigate(to);
-    } else if (onClick) {
-      onClick(e);
-    }
-  };
+    const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+      onClick?.(e);
+      if (e.defaultPrevented) return;
 
-  return (
-    <Link to={to} onClick={handleClick} {...props}>
-      {children}
-    </Link>
-  );
-}
+      if (guardActive) {
+        e.preventDefault();
+        guardedNavigate(to);
+      }
+    };
+
+    return (
+      <Link ref={ref} to={to} onClick={handleClick} {...props}>
+        {children}
+      </Link>
+    );
+  }
+);
+
+GuardedLink.displayName = "GuardedLink";

@@ -53,19 +53,39 @@ export function useSessionNavigationGuard({
   const isCancellingRef = useRef(false);
   const isHandlingPopstateRef = useRef(false);
 
-  // Handle browser refresh/tab close
+  // Keep a ref so global event listeners never go stale.
+  const dirtyRef = useRef(isDirtySession);
+  useEffect(() => {
+    dirtyRef.current = isDirtySession;
+  }, [isDirtySession]);
+
+  // Handle browser refresh/tab close (register ONCE; read from refs)
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (isDirtySession && !isCancellingRef.current) {
+      if (dirtyRef.current && !isCancellingRef.current) {
         e.preventDefault();
-        e.returnValue = "You have an active session. Changes may be lost.";
-        return e.returnValue;
+        // IMPORTANT: most browsers require an empty string
+        e.returnValue = "";
+        return "";
       }
     };
 
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [isDirtySession]);
+  }, []);
+
+  // Safari/iOS: pagehide can fire without showing a prompt (bfcache); no dialog allowed, so log only.
+  useEffect(() => {
+    const handlePageHide = () => {
+      if (dirtyRef.current && !isCancellingRef.current) {
+        // Do NOT auto-cancel here.
+        console.warn("[AidMind] Page hidden while session is active (no auto-cancel).");
+      }
+    };
+
+    window.addEventListener("pagehide", handlePageHide);
+    return () => window.removeEventListener("pagehide", handlePageHide);
+  }, []);
 
   // Handle browser back/forward buttons
   useEffect(() => {
