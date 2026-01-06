@@ -41,11 +41,22 @@ export function LeaveSessionDialog({
   isLoading = false,
 }: LeaveSessionDialogProps) {
   return (
-    <AlertDialog open={open} onOpenChange={(isOpen) => !isOpen && onStay()}>
-      <AlertDialogContent className="max-w-md">
-        <AlertDialogHeader>
-          <div className="flex items-center gap-3 mb-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+    <AlertDialog 
+      open={open} 
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onStay();
+      }}
+    >
+      <AlertDialogContent 
+        className="w-[calc(100vw-2rem)] max-w-[520px] sm:max-w-lg max-h-[85vh] overflow-y-auto overflow-x-hidden rounded-2xl"
+        onEscapeKeyDown={(e) => {
+          e.preventDefault();
+          onStay();
+        }}
+      >
+        <AlertDialogHeader className="space-y-2">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
               <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
             </div>
             <AlertDialogTitle className="text-lg">
@@ -60,12 +71,12 @@ export function LeaveSessionDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
 
-        <AlertDialogFooter className="flex-col gap-2 sm:flex-row sm:gap-2">
+        <AlertDialogFooter className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-4">
           {/* Save for Later - secondary action */}
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <div className="w-full sm:w-auto">
+                <span className="inline-flex w-full sm:w-auto">
                   <Button
                     variant="outline"
                     onClick={onSave}
@@ -75,10 +86,10 @@ export function LeaveSessionDialog({
                     <Save className="h-4 w-4" />
                     Save for later
                   </Button>
-                </div>
+                </span>
               </TooltipTrigger>
               {!saveEnabled && (
-                <TooltipContent>
+                <TooltipContent side="top" className="max-w-[200px]">
                   <p>Coming soon</p>
                 </TooltipContent>
               )}
