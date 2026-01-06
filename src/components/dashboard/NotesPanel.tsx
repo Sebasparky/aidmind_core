@@ -107,7 +107,7 @@ export function NotesPanel() {
       <div className="relative mb-4">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
-          type="search"
+          type="text"
           placeholder="Search notes..."
           className="pl-10 pr-10 h-10 bg-card border-border"
           aria-label="Search notes"
