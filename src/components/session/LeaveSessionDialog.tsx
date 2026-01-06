@@ -49,6 +49,7 @@ export function LeaveSessionDialog({
     >
       <AlertDialogContent 
         className="w-[calc(100vw-2rem)] max-w-[520px] sm:max-w-lg max-h-[85vh] overflow-y-auto overflow-x-hidden rounded-2xl"
+        overlayClassName={isLoading ? "animate-pulse" : undefined}
         onEscapeKeyDown={(e) => {
           e.preventDefault();
           onStay();
