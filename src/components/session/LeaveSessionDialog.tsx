@@ -13,7 +13,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { AlertTriangle, Save } from "lucide-react";
+import { AlertTriangle, Loader2, Save } from "lucide-react";
 
 interface LeaveSessionDialogProps {
   open: boolean;
@@ -101,8 +101,9 @@ export function LeaveSessionDialog({
             variant="destructive"
             onClick={onCancel}
             disabled={isLoading}
-            className="w-full sm:w-auto"
+            className="w-full sm:w-auto gap-2"
           >
+            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
             {isLoading ? "Cancelling..." : "Cancel session"}
           </Button>
 
