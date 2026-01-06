@@ -60,11 +60,11 @@ export default function Session() {
   const [searchParams] = useSearchParams();
   const { addTask, deleteTask } = useDashboard();
   
-  const caseId = searchParams.get("caseId") || "1";
-  const caseLabel = searchParams.get("caseLabel") || "Housing assistance — intake";
-  const clientLabel = searchParams.get("clientLabel") || "A. J.";
+  const caseId = searchParams.get("caseId") || crypto.randomUUID().slice(0, 8);
+  const clientLabel = searchParams.get("clientLabel") || "";
   const interactionType = searchParams.get("interactionType") || "phone_call";
-  const noteTitle = searchParams.get("noteTitle") || caseLabel;
+  const noteTitleParam = searchParams.get("noteTitle");
+  const caseLabelParam = searchParams.get("caseLabel");
   const resumeBundleParam = searchParams.get("resumeBundle");
 
   // Parse resume bundle if provided
@@ -78,10 +78,17 @@ export default function Session() {
     }
     return undefined;
   });
+
+  // Derive the actual note title/case label to use
+  // Priority: noteTitle param > caseLabel param > resume bundle > "Untitled note"
+  const effectiveCaseLabel = noteTitleParam?.trim() 
+    || caseLabelParam?.trim() 
+    || resumeBundle?.case_reference.caseLabel 
+    || "Untitled note";
   
   const { state, data, actions } = useSessionMachine({
     caseId: resumeBundle?.case_reference.caseId || caseId,
-    caseLabel: resumeBundle?.case_reference.caseLabel || caseLabel,
+    caseLabel: effectiveCaseLabel,
     clientLabel: resumeBundle?.case_reference.clientLabel || clientLabel,
     interactionType: resumeBundle?.case_reference.interactionType || interactionType,
     resumeBundle,
