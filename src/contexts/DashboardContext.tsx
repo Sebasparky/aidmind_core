@@ -1,5 +1,5 @@
-// Dashboard context for task, notes, and search state management
-import { createContext, useContext, useState, ReactNode, useCallback, useMemo, useEffect } from "react";
+// Dashboard context for task and search state management
+import { createContext, useContext, useState, ReactNode, useCallback, useMemo } from "react";
 import { toast } from "@/hooks/use-toast";
 
 export interface Task {
@@ -15,18 +15,6 @@ export interface Task {
   completedAt?: Date;
 }
 
-export type NoteStatus = "exported" | "saved" | "cancelled";
-export type InteractionType = "phone-call" | "in-person" | "video-call" | "collateral-contact" | "other";
-
-export interface RecentNote {
-  id: string;
-  sessionId: string;
-  title: string;
-  interactionType: InteractionType;
-  status: NoteStatus;
-  updatedAt: Date;
-}
-
 interface DashboardContextType {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
@@ -40,9 +28,6 @@ interface DashboardContextType {
   restoreTask: (taskId: string) => void;
   activeTasks: Task[];
   completedTasks: Task[];
-  // Recent notes
-  recentNotes: RecentNote[];
-  addRecentNote: (note: Omit<RecentNote, "id" | "updatedAt">) => void;
 }
 
 const DashboardContext = createContext<DashboardContextType | undefined>(undefined);
@@ -106,44 +91,9 @@ const initialTasks: Task[] = [
   },
 ];
 
-// LocalStorage key for recent notes
-const RECENT_NOTES_STORAGE_KEY = "aidmind_recent_notes";
-
-// Load recent notes from localStorage
-function loadRecentNotes(): RecentNote[] {
-  try {
-    const stored = localStorage.getItem(RECENT_NOTES_STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      return parsed.map((note: RecentNote & { updatedAt: string }) => ({
-        ...note,
-        updatedAt: new Date(note.updatedAt),
-      }));
-    }
-  } catch (e) {
-    console.error("Failed to load recent notes from localStorage:", e);
-  }
-  return [];
-}
-
-// Save recent notes to localStorage
-function saveRecentNotes(notes: RecentNote[]) {
-  try {
-    localStorage.setItem(RECENT_NOTES_STORAGE_KEY, JSON.stringify(notes));
-  } catch (e) {
-    console.error("Failed to save recent notes to localStorage:", e);
-  }
-}
-
 export function DashboardProvider({ children }: { children: ReactNode }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
-  const [recentNotes, setRecentNotes] = useState<RecentNote[]>(loadRecentNotes);
-
-  // Persist recent notes to localStorage whenever they change
-  useEffect(() => {
-    saveRecentNotes(recentNotes);
-  }, [recentNotes]);
 
   const clearSearch = useCallback(() => {
     setSearchQuery("");
@@ -272,32 +222,6 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // Add a recent note with upsert logic (prevents duplicates by sessionId)
-  const addRecentNote = useCallback((noteData: Omit<RecentNote, "id" | "updatedAt">) => {
-    setRecentNotes((prev) => {
-      // Check if a note with this sessionId already exists
-      const existingIndex = prev.findIndex((n) => n.sessionId === noteData.sessionId);
-      
-      const newNote: RecentNote = {
-        ...noteData,
-        id: crypto.randomUUID(),
-        updatedAt: new Date(),
-      };
-
-      if (existingIndex !== -1) {
-        // Update existing note (upsert)
-        const updated = [...prev];
-        updated[existingIndex] = { ...newNote, id: prev[existingIndex].id };
-        // Move to top (most recent first)
-        const [movedNote] = updated.splice(existingIndex, 1);
-        return [movedNote, ...updated];
-      }
-
-      // Add new note at the top
-      return [newNote, ...prev];
-    });
-  }, []);
-
   const activeTasks = useMemo(
     () => tasks.filter((t) => t.status === "ACTIVE"),
     [tasks]
@@ -326,8 +250,6 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         restoreTask,
         activeTasks,
         completedTasks,
-        recentNotes,
-        addRecentNote,
       }}
     >
       {children}

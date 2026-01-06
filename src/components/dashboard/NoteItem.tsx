@@ -1,8 +1,8 @@
-import { Upload, Save, XCircle } from "lucide-react";
+import { Upload, Save, XCircle, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 
-export type NoteStatus = "exported" | "saved" | "cancelled";
+export type NoteStatus = "exported" | "saved" | "cancelled" | "in_progress";
 
 export interface Note {
   id: string;
@@ -14,13 +14,14 @@ export interface Note {
 
 interface NoteItemProps {
   note: Note;
+  onClick?: () => void;
 }
 
 const statusConfig: Record<NoteStatus, {
   icon: typeof Upload;
   iconClass: string;
   bgClass: string;
-  badgeVariant: "success" | "warning" | "neutral";
+  badgeVariant: "success" | "warning" | "neutral" | "default";
   label: string;
 }> = {
   exported: {
@@ -44,25 +45,46 @@ const statusConfig: Record<NoteStatus, {
     badgeVariant: "neutral",
     label: "Cancelled",
   },
+  in_progress: {
+    icon: Clock,
+    iconClass: "text-primary",
+    bgClass: "bg-primary/10",
+    badgeVariant: "default",
+    label: "In progress",
+  },
 };
 
 const interactionTypeLabels: Record<string, string> = {
   "phone-call": "Phone Call",
+  "phone_call": "Phone Call",
   "in-person": "In-Person",
+  "visit": "In-Person",
   "video-call": "Video Call",
+  "meeting": "Meeting",
   "text-sms": "Text/SMS",
   "collateral-contact": "Collateral Contact",
   "case-conference": "Case Conference",
   "other": "Other",
 };
 
-export function NoteItem({ note }: NoteItemProps) {
-  const config = statusConfig[note.status] || statusConfig.saved;
+export function NoteItem({ note, onClick }: NoteItemProps) {
+  const config = statusConfig[note.status] || statusConfig.in_progress;
   const Icon = config.icon;
-  const interactionLabel = interactionTypeLabels[note.interactionType] || note.interactionType;
+  const interactionLabel = interactionTypeLabels[note.interactionType] || note.interactionType || "Other";
 
   return (
-    <div className="flex items-start gap-3 p-3 hover:bg-secondary/50 rounded-lg transition-colors cursor-pointer">
+    <div 
+      className="flex items-start gap-3 p-3 hover:bg-secondary/50 rounded-lg transition-colors cursor-pointer"
+      onClick={onClick}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick?.();
+        }
+      }}
+    >
       {/* Status icon */}
       <div
         className={cn(
