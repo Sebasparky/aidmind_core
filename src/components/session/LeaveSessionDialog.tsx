@@ -79,7 +79,7 @@ export function LeaveSessionDialog({
               </TooltipTrigger>
               {!saveEnabled && (
                 <TooltipContent>
-                  <p>Save is only available after draft is ready</p>
+                  <p>Coming soon</p>
                 </TooltipContent>
               )}
             </Tooltip>

@@ -107,12 +107,28 @@ export default function Session() {
   // Track created task IDs for undo
   const createdTasksRef = useRef<Map<string, string>>(new Map());
 
-  // Auto-start session on mount
+  // Intended navigation target when the user tries to leave mid-session
+  const leaveTargetRef = useRef<string | null>(null);
+
+  // Prevent duplicate session creation from re-renders (NEW can persist during async createSession)
+  const hasAutoStartedRef = useRef(false);
+  const hasAttemptedStartRef = useRef(false);
+  const startSessionRef = useRef(actions.startSession);
+  const [, bumpAttemptedStart] = useState(0);
+
   useEffect(() => {
-    if (state === "NEW") {
-      actions.startSession();
+    startSessionRef.current = actions.startSession;
+  }, [actions.startSession]);
+
+  // Auto-start session on mount (exactly once per mount)
+  useEffect(() => {
+    if (state === "NEW" && !hasAutoStartedRef.current) {
+      hasAutoStartedRef.current = true;
+      hasAttemptedStartRef.current = true;
+      bumpAttemptedStart((v) => v + 1); // rerender so guards/unload can see attempted start immediately
+      startSessionRef.current();
     }
-  }, [state, actions]);
+  }, [state]);
 
   // Auto-progress through transcription and redaction
   useEffect(() => {
@@ -172,7 +188,7 @@ export default function Session() {
         status: noteStatus,
       });
 
-      navigate("/dashboard");
+      navigate(leaveTargetRef.current || "/dashboard");
     }
   }, [state, navigate, data.exportCompleted, data.savedForLater, data.sessionId, data.interactionType, noteTitle, addRecentNote]);
 
@@ -191,9 +207,12 @@ export default function Session() {
   }, [data.generatedDraft]);
 
   // Determine if session is "dirty" (active and not terminal)
-  const isTerminalState = state === "PURGED" || state === "NEW";
+  // startSession() keeps state at NEW while async createSession runs, so NEW is terminal only
+  // until a start attempt has happened.
+  const isTerminalState = state === "PURGED" || (state === "NEW" && !hasAttemptedStartRef.current);
   const canSaveForLater = state === "DRAFT_READY";
-  const isDirtySession = !isTerminalState && data.sessionId !== "";
+  const isDirtySession =
+    !isTerminalState && (hasAttemptedStartRef.current || data.sessionId !== "");
 
   // Get the global navigation guard context
   const { setGuard, clearGuard } = useNavigationGuard();
@@ -203,8 +222,7 @@ export default function Session() {
     showLeaveDialog,
     handleStay,
     handleCancelAndLeave,
-    handleSaveForLater: navGuardSave,
-    isSaveEnabled,
+    pendingPath,
     guardedNavigate,
   } = useSessionNavigationGuard({
     isDirtySession,
@@ -216,21 +234,41 @@ export default function Session() {
         setIsNavigationCancelling(false);
       }
     },
-    onSave: undefined, // Will be set after handleSaveForLater is defined
+    // Save is handled by Session.tsx (bundle download + purge)
+    onSave: undefined,
     saveEnabled: false,
   });
+
+  useEffect(() => {
+    if (pendingPath) {
+      leaveTargetRef.current = pendingPath;
+    }
+  }, [pendingPath]);
+
+  const handleStayAndClear = useCallback(() => {
+    leaveTargetRef.current = null;
+    handleStay();
+  }, [handleStay]);
+
+  const guardedNavigateWithTarget = useCallback(
+    (path: string) => {
+      leaveTargetRef.current = path;
+      guardedNavigate(path);
+    },
+    [guardedNavigate]
+  );
 
   // Register/unregister the navigation guard globally
   useEffect(() => {
     setGuard({
       active: isDirtySession,
-      guardedNavigate,
+      guardedNavigate: guardedNavigateWithTarget,
     });
-    
+
     return () => {
       clearGuard();
     };
-  }, [isDirtySession, guardedNavigate, setGuard, clearGuard]);
+  }, [isDirtySession, guardedNavigateWithTarget, setGuard, clearGuard]);
 
   const handleFileUpload = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -479,7 +517,7 @@ export default function Session() {
       {/* Leave Session Dialog - using new component with navigation guard */}
       <LeaveSessionDialog
         open={showLeaveDialog}
-        onStay={handleStay}
+        onStay={handleStayAndClear}
         onCancel={handleCancelAndLeave}
         onSave={canSaveForLater ? handleSaveForLater : undefined}
         saveEnabled={canSaveForLater}
