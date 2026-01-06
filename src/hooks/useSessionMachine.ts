@@ -233,6 +233,13 @@ export function useSessionMachine({
     
     // ALWAYS create session in database - backend is source of truth for session ID
     try {
+      console.log("[AidMind] Creating session with:", {
+        case_id: caseId,
+        case_label: caseLabel,
+        client_label: clientLabel,
+        interaction_type: interactionType,
+      });
+      
       const session = await sessionApi.createSession({
         case_id: caseId,
         case_label: caseLabel,
@@ -247,7 +254,10 @@ export function useSessionMachine({
       
       // Update local session ID to match database record
       setData((prev) => ({ ...prev, sessionId: session.session_id }));
-      console.log("[AidMind] Session created with ID:", session.session_id);
+      console.log("[AidMind] Session created:", {
+        session_id: session.session_id,
+        case_label: session.case_label,
+      });
     } catch (error) {
       console.error("Failed to create session:", error);
       setData((prev) => ({
