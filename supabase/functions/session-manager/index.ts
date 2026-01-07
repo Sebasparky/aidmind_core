@@ -8,7 +8,7 @@ const SERVICE_NAME = "session-manager";
 const SESSION_TTL_HOURS = 24;
 
 interface SessionRequest {
-  action: "create" | "update" | "close" | "cancel" | "purge" | "get";
+  action: "create" | "update" | "close" | "cancel" | "purge" | "get" | "export";
   session_id?: string;
   operator_id?: string;
   request_id?: string; // Idempotency key
@@ -18,6 +18,9 @@ interface SessionRequest {
     client_label?: string;
     interaction_type?: string;
     state?: string;
+    // Export-specific
+    destination_type?: string;
+    destination_id?: string;
   };
 }
 
@@ -435,6 +438,161 @@ serve(async (req) => {
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
+      }
+
+      case "export": {
+        // Export stage: EXPORT_STARTED → EXPORT_COMPLETED/EXPORT_FAILED
+        // Validates Eye event infrastructure with a real end-to-end pipeline stage
+        
+        if (!session_id) {
+          return new Response(
+            JSON.stringify({ error: "session_id is required" }),
+            {
+              status: 400,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
+          );
+        }
+
+        if (!request_id) {
+          return new Response(
+            JSON.stringify({ error: "request_id is required for export" }),
+            {
+              status: 400,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
+          );
+        }
+
+        const destinationType = data?.destination_type ?? "system_of_record";
+        const destinationId = data?.destination_id ?? "default";
+
+        console.log(`[Export] Starting export for session ${session_id}`);
+
+        // Emit EXPORT_STARTED
+        await logEyeEvent(supabase, {
+          session_id: session_id,
+          event_type: "EXPORT_STARTED",
+          request: req,
+          serviceName: SERVICE_NAME,
+          payload: {
+            request_id: request_id,
+            operator_id: operator_id,
+            resource_type: "export",
+            resource_id: session_id,
+            destination_type: destinationType,
+            destination_id: destinationId,
+          },
+        });
+
+        try {
+          // Get session to verify it exists and is in a valid state
+          const { data: session, error: sessionError } = await supabase
+            .from("sessions")
+            .select("state, case_id")
+            .eq("session_id", session_id)
+            .maybeSingle();
+
+          if (sessionError || !session) {
+            throw new Error("Session not found");
+          }
+
+          // Verify session is in exportable state
+          if (session.state !== "CLOSED") {
+            // EXPORT_FAILED: Session must be closed before export
+            await logEyeEvent(supabase, {
+              session_id: session_id,
+              event_type: "EXPORT_FAILED",
+              request: req,
+              serviceName: SERVICE_NAME,
+              payload: {
+                request_id: request_id,
+                operator_id: operator_id,
+                resource_type: "export",
+                resource_id: session_id,
+                result: "failure",
+                severity: "WARN",
+                reason_code: "VALIDATION_FAILED",
+                destination_type: destinationType,
+                current_state: session.state,
+              },
+            });
+
+            return new Response(
+              JSON.stringify({
+                success: false,
+                error: "Session must be closed before export",
+              }),
+              {
+                status: 400,
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+              }
+            );
+          }
+
+          // Simulate export operation (placeholder for real export logic)
+          // In production, this would export to the system of record
+          console.log(`[Export] Exporting session ${session_id} to ${destinationType}/${destinationId}`);
+
+          // EXPORT_COMPLETED: Success
+          await logEyeEvent(supabase, {
+            session_id: session_id,
+            event_type: "EXPORT_COMPLETED",
+            request: req,
+            serviceName: SERVICE_NAME,
+            payload: {
+              request_id: request_id,
+              operator_id: operator_id,
+              resource_type: "export",
+              resource_id: session_id,
+              destination_type: destinationType,
+              destination_id: destinationId,
+            },
+          });
+
+          console.log(`[Export] Completed export for session ${session_id}`);
+
+          return new Response(
+            JSON.stringify({
+              success: true,
+              exported_to: { destination_type: destinationType, destination_id: destinationId },
+            }),
+            {
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
+          );
+        } catch (error) {
+          console.error(`[Export] Failed for session ${session_id}:`, error);
+
+          // EXPORT_FAILED
+          await logEyeEvent(supabase, {
+            session_id: session_id,
+            event_type: "EXPORT_FAILED",
+            request: req,
+            serviceName: SERVICE_NAME,
+            payload: {
+              request_id: request_id,
+              operator_id: operator_id,
+              resource_type: "export",
+              resource_id: session_id,
+              result: "failure",
+              severity: "WARN",
+              reason_code: "INTERNAL_ERROR",
+              destination_type: destinationType,
+            },
+          });
+
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error: error instanceof Error ? error.message : "Export failed",
+            }),
+            {
+              status: 500,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
+          );
+        }
       }
 
       default:
