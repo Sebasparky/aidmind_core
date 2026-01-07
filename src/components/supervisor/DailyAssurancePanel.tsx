@@ -213,6 +213,16 @@ export function DailyAssurancePanel({ allEvents, issueCount, onNavigateToTab }: 
                 <PlayCircle className="h-3.5 w-3.5 mx-auto mb-0.5 text-[hsl(var(--status-info))]" />
                 <div className="text-lg font-semibold">{outcomes.inProgress}</div>
                 <div className="text-xs text-muted-foreground">In progress</div>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger>
+                      <HelpCircle className="h-3 w-3 text-muted-foreground/60 mx-auto mt-1" />
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-xs">
+                      <p className="text-xs">Sessions without a terminal outcome recorded (completed, cancelled, or saved).</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </div>
             </div>
             
