@@ -4,13 +4,27 @@
  * Run with: npx vitest run src/lib/eye/contract.test.ts
  * 
  * TEST CASES:
+ * - Taxonomy coverage (category + severity mapping completeness)
  * - Severity precedence (backend-stamped > map > default)
  * - PHI validation (denylist + length)
  * - Idempotency (request_id presence for retryable events)
+ * 
+ * INTENTIONAL FRICTION:
+ * These tests force explicit semantic intent when adding new event types.
+ * A new EyeEventType MUST have:
+ * - A category mapping in EVENT_CATEGORY_MAP
+ * - A severity mapping in EVENT_SEVERITY_MAP (or be explicitly allowlisted)
  */
 
 import { describe, it, expect } from "vitest";
-import { EyeEvent, EVENT_SEVERITY_MAP, getEventSeverity } from "./types";
+import { 
+  EyeEvent, 
+  EyeEventType,
+  EVENT_SEVERITY_MAP, 
+  EVENT_CATEGORY_MAP,
+  ALL_EYE_EVENT_TYPES,
+  getEventSeverity,
+} from "./types";
 
 // ============================================================
 // PHI VALIDATION LOGIC (MIRROR OF EDGE FUNCTION)
@@ -87,6 +101,181 @@ function validateEyeEventData(
 
   return { valid: errors.length === 0, errors };
 }
+
+// ============================================================
+// TAXONOMY COVERAGE TESTS
+// ============================================================
+// These tests enforce that every EyeEventType has explicit mappings.
+// Failing these tests means a new event type was added without proper semantic intent.
+
+/**
+ * Events explicitly allowed to use default severity fallback (INFO).
+ * 
+ * IMPORTANT: This should be kept EMPTY or very small.
+ * Adding events here should be a conscious decision with justification.
+ * 
+ * To add an event to this list:
+ * 1. Explain why it doesn't need an explicit severity
+ * 2. Get team consensus
+ * 3. Add it here with a comment explaining the rationale
+ */
+const ALLOWED_SEVERITY_FALLBACK_EVENTS: EyeEventType[] = [
+  // Intentionally empty - all events should have explicit severity mappings
+];
+
+describe("Taxonomy Coverage - Category Mapping", () => {
+  it("ALL_EYE_EVENT_TYPES list is not empty", () => {
+    expect(ALL_EYE_EVENT_TYPES.length).toBeGreaterThan(0);
+  });
+
+  it("every EyeEventType has a category mapping", () => {
+    const missingCategories: string[] = [];
+    
+    for (const eventType of ALL_EYE_EVENT_TYPES) {
+      if (!(eventType in EVENT_CATEGORY_MAP)) {
+        missingCategories.push(eventType);
+      }
+    }
+    
+    if (missingCategories.length > 0) {
+      throw new Error(
+        `The following EyeEventType(s) are missing from EVENT_CATEGORY_MAP:\n` +
+        missingCategories.map(e => `  - "${e}"`).join("\n") +
+        `\n\nTo fix: Add category mappings in src/lib/eye/types.ts`
+      );
+    }
+    
+    expect(missingCategories).toHaveLength(0);
+  });
+
+  it("EVENT_CATEGORY_MAP has no extra entries not in EyeEventType", () => {
+    const eventTypeSet = new Set(ALL_EYE_EVENT_TYPES as string[]);
+    const extraEntries: string[] = [];
+    
+    for (const key of Object.keys(EVENT_CATEGORY_MAP)) {
+      if (!eventTypeSet.has(key)) {
+        extraEntries.push(key);
+      }
+    }
+    
+    if (extraEntries.length > 0) {
+      throw new Error(
+        `EVENT_CATEGORY_MAP contains entries not in EyeEventType:\n` +
+        extraEntries.map(e => `  - "${e}"`).join("\n") +
+        `\n\nTo fix: Remove these from EVENT_CATEGORY_MAP or add to EyeEventType`
+      );
+    }
+    
+    expect(extraEntries).toHaveLength(0);
+  });
+});
+
+describe("Taxonomy Coverage - Severity Mapping", () => {
+  it("every EyeEventType has a severity mapping or is explicitly allowlisted", () => {
+    const allowlistSet = new Set(ALLOWED_SEVERITY_FALLBACK_EVENTS as string[]);
+    const missingSeverities: string[] = [];
+    
+    for (const eventType of ALL_EYE_EVENT_TYPES) {
+      const hasMapping = eventType in EVENT_SEVERITY_MAP;
+      const isAllowlisted = allowlistSet.has(eventType);
+      
+      if (!hasMapping && !isAllowlisted) {
+        missingSeverities.push(eventType);
+      }
+    }
+    
+    if (missingSeverities.length > 0) {
+      throw new Error(
+        `The following EyeEventType(s) have no severity mapping and are not allowlisted:\n` +
+        missingSeverities.map(e => `  - "${e}"`).join("\n") +
+        `\n\nTo fix either:\n` +
+        `1. Add severity mapping in EVENT_SEVERITY_MAP (src/lib/eye/types.ts)\n` +
+        `2. Add to ALLOWED_SEVERITY_FALLBACK_EVENTS (src/lib/eye/contract.test.ts) with justification`
+      );
+    }
+    
+    expect(missingSeverities).toHaveLength(0);
+  });
+
+  it("EVENT_SEVERITY_MAP has no extra entries not in EyeEventType", () => {
+    const eventTypeSet = new Set(ALL_EYE_EVENT_TYPES as string[]);
+    const extraEntries: string[] = [];
+    
+    for (const key of Object.keys(EVENT_SEVERITY_MAP)) {
+      if (!eventTypeSet.has(key)) {
+        extraEntries.push(key);
+      }
+    }
+    
+    if (extraEntries.length > 0) {
+      throw new Error(
+        `EVENT_SEVERITY_MAP contains entries not in EyeEventType:\n` +
+        extraEntries.map(e => `  - "${e}"`).join("\n") +
+        `\n\nTo fix: Remove these from EVENT_SEVERITY_MAP or add to EyeEventType`
+      );
+    }
+    
+    expect(extraEntries).toHaveLength(0);
+  });
+
+  it("ALLOWED_SEVERITY_FALLBACK_EVENTS contains only valid EyeEventTypes", () => {
+    const eventTypeSet = new Set(ALL_EYE_EVENT_TYPES as string[]);
+    const invalidEntries: string[] = [];
+    
+    for (const eventType of ALLOWED_SEVERITY_FALLBACK_EVENTS) {
+      if (!eventTypeSet.has(eventType)) {
+        invalidEntries.push(eventType);
+      }
+    }
+    
+    if (invalidEntries.length > 0) {
+      throw new Error(
+        `ALLOWED_SEVERITY_FALLBACK_EVENTS contains invalid event types:\n` +
+        invalidEntries.map(e => `  - "${e}"`).join("\n")
+      );
+    }
+    
+    expect(invalidEntries).toHaveLength(0);
+  });
+});
+
+describe("Taxonomy Coverage - ALL_EYE_EVENT_TYPES Sync Check", () => {
+  it("ALL_EYE_EVENT_TYPES has no duplicates", () => {
+    const seen = new Set<string>();
+    const duplicates: string[] = [];
+    
+    for (const eventType of ALL_EYE_EVENT_TYPES) {
+      if (seen.has(eventType)) {
+        duplicates.push(eventType);
+      }
+      seen.add(eventType);
+    }
+    
+    if (duplicates.length > 0) {
+      throw new Error(
+        `ALL_EYE_EVENT_TYPES contains duplicates:\n` +
+        duplicates.map(e => `  - "${e}"`).join("\n")
+      );
+    }
+    
+    expect(duplicates).toHaveLength(0);
+  });
+
+  it("ALL_EYE_EVENT_TYPES count matches EVENT_CATEGORY_MAP count", () => {
+    const listCount = ALL_EYE_EVENT_TYPES.length;
+    const mapCount = Object.keys(EVENT_CATEGORY_MAP).length;
+    
+    if (listCount !== mapCount) {
+      throw new Error(
+        `Mismatch: ALL_EYE_EVENT_TYPES has ${listCount} entries, ` +
+        `EVENT_CATEGORY_MAP has ${mapCount} entries.\n` +
+        `These should be equal. Check for missing or extra entries.`
+      );
+    }
+    
+    expect(listCount).toBe(mapCount);
+  });
+});
 
 // ============================================================
 // SEVERITY PRECEDENCE TESTS

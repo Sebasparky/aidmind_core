@@ -200,6 +200,138 @@ export type EyeEventType =
   | "ALERT_ACKNOWLEDGED"
   | "ALERT_RESOLVED";
 
+/**
+ * Exhaustive list of all EyeEventType values.
+ * 
+ * IMPORTANT: This list MUST be kept in sync with the EyeEventType union above.
+ * Contract tests will fail if a new event type is added to the union but not to this list.
+ * 
+ * To add a new event type:
+ * 1. Add it to the EyeEventType union above
+ * 2. Add it to ALL_EYE_EVENT_TYPES below
+ * 3. Add it to EVENT_CATEGORY_MAP
+ * 4. Add it to EVENT_SEVERITY_MAP (or add to ALLOWED_SEVERITY_FALLBACK_EVENTS in contract tests)
+ * 5. Run tests: npx vitest run src/lib/eye/contract.test.ts
+ */
+export const ALL_EYE_EVENT_TYPES: EyeEventType[] = [
+  // A) Identity & Access
+  "AUTH_LOGIN_SUCCESS",
+  "AUTH_LOGIN_FAILED",
+  "AUTH_LOGOUT",
+  "TOKEN_ISSUED",
+  "TOKEN_REVOKED",
+  "RBAC_ALLOW",
+  "RBAC_DENY",
+  "BREAK_GLASS_REQUESTED",
+  "BREAK_GLASS_GRANTED",
+  "BREAK_GLASS_EXPIRED",
+  "BREAK_GLASS_DENIED",
+
+  // B) Case & Session Lifecycle
+  "CASE_ACCESSED",
+  "CASE_LISTED",
+  "SESSION_STARTED",
+  "SESSION_HEARTBEAT",
+  "SESSION_FINISH_CLICKED",
+  "SESSION_CLOSED",
+  "SESSION_CANCELLED",
+
+  // Save for Later / Resume Draft
+  "WIP_BUNDLE_EXPORTED",
+  "EPHEMERAL_INPUTS_PURGED",
+  "WIP_BUNDLE_IMPORTED",
+  "SESSION_LINKED",
+  "RESUME_REQUIRES_NEW_INPUT",
+
+  // C) Ingest
+  "AUDIO_UPLOAD_URL_ISSUED",
+  "AUDIO_UPLOADED",
+  "AUDIO_UPLOAD_FAILED",
+  "OBJECT_TTL_SET",
+  "OBJECT_TTL_EXPIRED",
+  "OBJECT_ENCRYPTION_VERIFIED",
+
+  // D) Transcription
+  "TRANSCRIPTION_JOB_QUEUED",
+  "TRANSCRIPTION_STARTED",
+  "TRANSCRIPTION_COMPLETED",
+  "TRANSCRIPTION_FAILED",
+
+  // E) Redaction
+  "REDACTION_STARTED",
+  "REDACTION_COMPLETED",
+  "REDACTION_FAILED",
+  "REDACTION_LAYER_COMPLETED",
+  "VERIFICATION_PASSED",
+  "VERIFICATION_FAILED",
+
+  // F) Knowledge Base
+  "KB_QUERY_STARTED",
+  "KB_QUERY_COMPLETED",
+  "KB_QUERY_FAILED",
+  "TEMPLATE_SELECTED",
+  "POLICY_PACK_ATTACHED",
+
+  // G) LLM / RAG
+  "LLM_CALL_STARTED",
+  "LLM_CALL_COMPLETED",
+  "LLM_CALL_FAILED",
+
+  // H) Output Validation
+  "OUTPUT_SCHEMA_VALIDATION_PASSED",
+  "OUTPUT_SCHEMA_VALIDATION_FAILED",
+  "OUTPUT_PHI_LEAK_CHECK_PASSED",
+  "OUTPUT_PHI_LEAK_CHECK_FAILED",
+  "OUTPUT_UNKNOWN_FIELDS_COUNTED",
+
+  // I) Drafting, Editing, Approval
+  "DRAFT_CREATED",
+  "DRAFT_VIEWED",
+  "DRAFT_EDITED",
+  "DRAFT_VERSION_SAVED",
+  "NOTE_APPROVED",
+  "NOTE_APPROVAL_REVOKED",
+  "TIMELINE_DERIVED",
+  "TIMELINES_CONFIRMED",
+
+  // J) Export
+  "EXPORT_STARTED",
+  "EXPORT_COMPLETED",
+  "EXPORT_FAILED",
+  "SYSTEM_OF_RECORD_CONFIRMED",
+
+  // K) Deletion, Purge
+  "PURGE_STARTED",
+  "PURGE_COMPLETED",
+  "PURGE_FAILED",
+  "AUDIO_DELETED",
+  "TRANSCRIPT_DELETED",
+  "MINIMIZED_TRANSCRIPT_DELETED",
+  "DRAFT_DELETED",
+  "EXPORT_ARTIFACT_DELETED",
+  "EPHEMERAL_SCAN_STARTED",
+  "EPHEMERAL_SCAN_COMPLETED",
+  "EPHEMERAL_SCAN_RESULT",
+  "EPHEMERAL_REMEDIATION_STARTED",
+  "EPHEMERAL_REMEDIATION_COMPLETED",
+
+  // L) Config & Security
+  "CONFIG_CHANGED",
+  "RETENTION_POLICY_UPDATED",
+  "KEY_ROTATION_COMPLETED",
+  "ENCRYPTION_POLICY_ENFORCED",
+
+  // M) Anomalies & Alerts
+  "ANOMALY_ACCESS_TIME",
+  "ANOMALY_ACCESS_VOLUME",
+  "ANOMALY_FAILED_LOGINS_SPIKE",
+  "ANOMALY_BREAK_GLASS_USAGE",
+  "ANOMALY_EXPORT_SPIKE",
+  "ALERT_RAISED",
+  "ALERT_ACKNOWLEDGED",
+  "ALERT_RESOLVED",
+];
+
 // ============================================================
 // GLOBAL EVENT SCHEMA
 // ============================================================
