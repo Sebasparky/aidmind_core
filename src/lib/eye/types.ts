@@ -591,8 +591,12 @@ export const EVENT_SEVERITY_MAP: Record<EyeEventType, EventSeverity> = {
   KB_QUERY_FAILED: "WARN",
   TEMPLATE_SELECTED: "INFO",
   POLICY_PACK_ATTACHED: "INFO",
+  // LLM events: Compliance-focused instrumentation
+  // STARTED: INFO (informational, no action needed)
+  // COMPLETED: NOTICE (compliance-relevant, confirms data_retention_mode)
+  // FAILED: WARN (degradation, counts as compliance failure per policy)
   LLM_CALL_STARTED: "INFO",
-  LLM_CALL_COMPLETED: "INFO",
+  LLM_CALL_COMPLETED: "NOTICE",
   LLM_CALL_FAILED: "WARN",
 
   // Validation (Future)
@@ -695,6 +699,16 @@ export const IMPLEMENTED_EVENTS: EyeEventType[] = [
   "EPHEMERAL_SCAN_RESULT",
   "PURGE_COMPLETED",
   "PURGE_FAILED",
+  
+  // LLM (compliance-focused instrumentation)
+  "LLM_CALL_STARTED",
+  "LLM_CALL_COMPLETED",
+  "LLM_CALL_FAILED",
+  
+  // Export
+  "EXPORT_STARTED",
+  "EXPORT_COMPLETED",
+  "EXPORT_FAILED",
 ];
 
 // Events that are scaffolded but not yet emitting
@@ -705,11 +719,6 @@ export const FUTURE_EVENTS: EyeEventType[] = [
   "KB_QUERY_FAILED",
   "TEMPLATE_SELECTED",
   "POLICY_PACK_ATTACHED",
-
-  // LLM
-  "LLM_CALL_STARTED",
-  "LLM_CALL_COMPLETED",
-  "LLM_CALL_FAILED",
 
   // Validation
   "OUTPUT_SCHEMA_VALIDATION_PASSED",
@@ -722,10 +731,6 @@ export const FUTURE_EVENTS: EyeEventType[] = [
   "NOTE_APPROVED",
   "TIMELINE_DERIVED",
   "TIMELINES_CONFIRMED",
-
-  // Export
-  "EXPORT_STARTED",
-  "EXPORT_COMPLETED",
 ];
 
 // Check if an event type is currently implemented

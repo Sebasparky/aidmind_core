@@ -1180,3 +1180,268 @@ describe("Export Stage - Semantic Guardrails", () => {
     expect(counts.blockedSessionsCount).toBe(0);
   });
 });
+
+// ============================================================
+// LLM COMPLIANCE - EXPLICIT SEMANTIC TESTS
+// ============================================================
+// These tests lock in the compliance semantics for LLM instrumentation.
+// They ensure future changes don't accidentally alter data handling guarantees.
+
+describe("LLM Compliance - Semantic Contracts", () => {
+  /**
+   * CONTRACT: llmComplianceStatus = "passed" when ALL completed calls use zero_retention
+   * 
+   * This is the happy path. Regulated buyers need to prove that no LLM
+   * touched user data in a non-zero-retention way.
+   */
+  it("llmComplianceStatus = passed when all completed calls use zero_retention", () => {
+    const events: EyeEvent[] = [
+      createEvent("LLM_CALL_STARTED", "sess_1", { model_provider: "openai", model_name: "gpt-4o-mini" }),
+      createEvent("LLM_CALL_COMPLETED", "sess_1", { 
+        data_retention_mode: "zero_retention",
+        model_provider: "openai",
+        model_name: "gpt-4o-mini",
+        input_tokens_est: 100,
+        output_tokens_est: 200,
+        latency_ms: 1500,
+      }),
+      createEvent("LLM_CALL_STARTED", "sess_2", { model_provider: "anthropic", model_name: "claude-3" }),
+      createEvent("LLM_CALL_COMPLETED", "sess_2", { 
+        data_retention_mode: "zero_retention",
+        model_provider: "anthropic",
+        model_name: "claude-3",
+      }),
+    ];
+
+    const compliance = computeComplianceStatus(events);
+
+    expect(compliance.llmComplianceStatus).toBe("passed");
+  });
+
+  /**
+   * CONTRACT: llmComplianceStatus = "failed" when ANY completed call uses non-zero retention
+   * 
+   * Even one non-zero-retention call fails the whole window.
+   */
+  it("llmComplianceStatus = failed when any completed call uses standard retention", () => {
+    const events: EyeEvent[] = [
+      createEvent("LLM_CALL_STARTED", "sess_1"),
+      createEvent("LLM_CALL_COMPLETED", "sess_1", { data_retention_mode: "zero_retention" }),
+      createEvent("LLM_CALL_STARTED", "sess_2"),
+      createEvent("LLM_CALL_COMPLETED", "sess_2", { data_retention_mode: "standard" }), // VIOLATION
+    ];
+
+    const compliance = computeComplianceStatus(events);
+
+    expect(compliance.llmComplianceStatus).toBe("failed");
+  });
+
+  /**
+   * CONTRACT: llmComplianceStatus = "failed" when ANY completed call uses self_hosted retention
+   * 
+   * self_hosted is NOT zero_retention, so it fails compliance.
+   */
+  it("llmComplianceStatus = failed when any completed call uses self_hosted retention", () => {
+    const events: EyeEvent[] = [
+      createEvent("LLM_CALL_STARTED", "sess_1"),
+      createEvent("LLM_CALL_COMPLETED", "sess_1", { data_retention_mode: "self_hosted" }),
+    ];
+
+    const compliance = computeComplianceStatus(events);
+
+    expect(compliance.llmComplianceStatus).toBe("failed");
+  });
+
+  /**
+   * CONTRACT: llmComplianceStatus = "failed" when LLM_CALL_FAILED occurs
+   * 
+   * POLICY DECISION (documented here):
+   * LLM failures count as compliance failures because:
+   * 1. We cannot verify data handling if the call failed
+   * 2. Failed calls may have already sent data to the provider
+   * 3. Conservative approach is appropriate for regulated environments
+   * 
+   * If this policy changes, update this test and the docstring.
+   */
+  it("llmComplianceStatus = failed when LLM_CALL_FAILED occurs", () => {
+    const events: EyeEvent[] = [
+      createEvent("LLM_CALL_STARTED", "sess_1", { model_provider: "openai" }),
+      createEvent("LLM_CALL_FAILED", "sess_1", { 
+        result: "failure",
+        reason_code: "PROVIDER_ERROR",
+        model_provider: "openai",
+      }),
+    ];
+
+    const compliance = computeComplianceStatus(events);
+
+    expect(compliance.llmComplianceStatus).toBe("failed");
+  });
+
+  /**
+   * CONTRACT: llmComplianceStatus = "failed" when any LLM call fails (even if others succeed)
+   * 
+   * One failure poisons the whole window.
+   */
+  it("llmComplianceStatus = failed when any LLM call fails even if others succeed with zero_retention", () => {
+    const events: EyeEvent[] = [
+      // Successful call with zero_retention
+      createEvent("LLM_CALL_STARTED", "sess_1"),
+      createEvent("LLM_CALL_COMPLETED", "sess_1", { data_retention_mode: "zero_retention" }),
+      // Failed call
+      createEvent("LLM_CALL_STARTED", "sess_2"),
+      createEvent("LLM_CALL_FAILED", "sess_2", { result: "failure" }),
+    ];
+
+    const compliance = computeComplianceStatus(events);
+
+    expect(compliance.llmComplianceStatus).toBe("failed");
+  });
+
+  /**
+   * CONTRACT: llmComplianceStatus = "not_instrumented" when no LLM events exist
+   * 
+   * Absence of LLM events means the feature isn't instrumented yet,
+   * not that compliance passed or failed.
+   */
+  it("llmComplianceStatus = not_instrumented when no LLM events exist", () => {
+    const events: EyeEvent[] = [
+      createEvent("SESSION_STARTED", "sess_1"),
+      createEvent("TRANSCRIPTION_COMPLETED", "sess_1"),
+      createEvent("REDACTION_COMPLETED", "sess_1"),
+      createEvent("SESSION_CLOSED", "sess_1"),
+    ];
+
+    const compliance = computeComplianceStatus(events);
+
+    expect(compliance.llmComplianceStatus).toBe("not_instrumented");
+  });
+
+  /**
+   * CONTRACT: llmComplianceStatus = "not_instrumented" when LLM_CALL_STARTED exists but no completion
+   * 
+   * Started but never completed means we have no data to evaluate.
+   */
+  it("llmComplianceStatus = not_instrumented when LLM_CALL_STARTED exists but no LLM_CALL_COMPLETED", () => {
+    const events: EyeEvent[] = [
+      createEvent("LLM_CALL_STARTED", "sess_1", { model_provider: "openai" }),
+      // No LLM_CALL_COMPLETED or LLM_CALL_FAILED
+    ];
+
+    const compliance = computeComplianceStatus(events);
+
+    // This is "not_instrumented" because there's no completed call to check
+    // (and no failure either - that would be "failed")
+    expect(compliance.llmComplianceStatus).toBe("not_instrumented");
+  });
+
+  /**
+   * CONTRACT: llmComplianceStatus = "failed" when data_retention_mode is missing
+   * 
+   * Missing retention mode is treated as non-compliant.
+   * This prevents accidental compliance pass due to missing data.
+   */
+  it("llmComplianceStatus = failed when data_retention_mode is missing from completed call", () => {
+    const events: EyeEvent[] = [
+      createEvent("LLM_CALL_STARTED", "sess_1"),
+      createEvent("LLM_CALL_COMPLETED", "sess_1"), // No data_retention_mode
+    ];
+
+    const compliance = computeComplianceStatus(events);
+
+    expect(compliance.llmComplianceStatus).toBe("failed");
+  });
+});
+
+// ============================================================
+// LLM COMPLIANCE - VERDICT INTEGRATION
+// ============================================================
+// These tests ensure LLM compliance failures integrate correctly with verdict logic.
+
+describe("LLM Compliance - Verdict Integration", () => {
+  /**
+   * LLM compliance failure alone should NOT cause RED verdict
+   * 
+   * LLM compliance is informational in the compliance status,
+   * not a blocking or compliance risk event by itself.
+   * RED requires explicit compliance risk events (PURGE_FAILED, etc.)
+   */
+  it("LLM compliance failure alone does NOT cause RED verdict", () => {
+    const events: EyeEvent[] = [
+      createEvent("SESSION_STARTED", "sess_1"),
+      createEvent("LLM_CALL_STARTED", "sess_1"),
+      createEvent("LLM_CALL_COMPLETED", "sess_1", { data_retention_mode: "standard" }), // Compliance failure
+      createEvent("SESSION_CLOSED", "sess_1"),
+    ];
+
+    const counts = computeActionCounts(events);
+    const verdict = computeVerdict(counts, true);
+
+    // LLM compliance failure is tracked but doesn't trigger RED
+    expect(verdict.level).toBe("green"); // No blocking, no compliance RISK events
+    expect(counts.complianceRiskCount).toBe(0);
+    
+    // But compliance status shows the failure
+    const compliance = computeComplianceStatus(events);
+    expect(compliance.llmComplianceStatus).toBe("failed");
+  });
+
+  /**
+   * LLM_CALL_FAILED should contribute to issueSessionsCount (YELLOW) not blockedSessionsCount (RED)
+   * 
+   * LLM failures are degradations, not service disruptions.
+   */
+  it("LLM_CALL_FAILED contributes to issueSessionsCount not blockedSessionsCount", () => {
+    const events: EyeEvent[] = [
+      createEvent("SESSION_STARTED", "sess_1"),
+      createEvent("LLM_CALL_STARTED", "sess_1"),
+      createEvent("LLM_CALL_FAILED", "sess_1", { result: "failure", severity: "WARN" }),
+      createEvent("SESSION_CLOSED", "sess_1"),
+    ];
+
+    const counts = computeActionCounts(events);
+    const verdict = computeVerdict(counts, true);
+
+    expect(counts.blockedSessionsCount).toBe(0);
+    expect(counts.issueSessionsCount).toBe(1);
+    expect(verdict.level).toBe("yellow");
+  });
+
+  /**
+   * Multiple LLM calls in same session = 1 issue session (not N)
+   */
+  it("Multiple LLM failures in same session = 1 issue session", () => {
+    const events: EyeEvent[] = [
+      createEvent("SESSION_STARTED", "sess_1"),
+      createEvent("LLM_CALL_STARTED", "sess_1"),
+      createEvent("LLM_CALL_FAILED", "sess_1", { result: "failure" }),
+      createEvent("LLM_CALL_STARTED", "sess_1"),
+      createEvent("LLM_CALL_FAILED", "sess_1", { result: "failure" }),
+      createEvent("SESSION_CLOSED", "sess_1"),
+    ];
+
+    const counts = computeActionCounts(events);
+
+    expect(counts.issueSessionsCount).toBe(1); // Not 2
+  });
+
+  /**
+   * LLM compliance + purge failure = RED (due to purge, not LLM)
+   */
+  it("LLM compliance failure + PURGE_FAILED = RED verdict (due to purge)", () => {
+    const events: EyeEvent[] = [
+      createEvent("SESSION_STARTED", "sess_1"),
+      createEvent("LLM_CALL_COMPLETED", "sess_1", { data_retention_mode: "standard" }),
+      createEvent("PURGE_FAILED", "sess_1", { result: "failure" }),
+      createEvent("SESSION_CLOSED", "sess_1"),
+    ];
+
+    const counts = computeActionCounts(events);
+    const verdict = computeVerdict(counts, true);
+    const compliance = computeComplianceStatus(events);
+
+    expect(verdict.level).toBe("red");
+    expect(counts.complianceRiskCount).toBe(1); // From PURGE_FAILED
+    expect(compliance.llmComplianceStatus).toBe("failed"); // Also failed
+  });
+});

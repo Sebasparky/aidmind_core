@@ -268,6 +268,14 @@ const EVENT_SEVERITY_MAP: Record<string, EventSeverity> = {
   EXPORT_STARTED: "NOTICE",
   EXPORT_COMPLETED: "NOTICE",
   EXPORT_FAILED: "WARN",
+  
+  // LLM (Compliance-focused instrumentation)
+  // STARTED: INFO (informational, no action needed)
+  // COMPLETED: NOTICE (compliance-relevant, confirms data_retention_mode)
+  // FAILED: WARN (degradation, counts as compliance failure per policy)
+  LLM_CALL_STARTED: "INFO",
+  LLM_CALL_COMPLETED: "NOTICE",
+  LLM_CALL_FAILED: "WARN",
 };
 
 /**
