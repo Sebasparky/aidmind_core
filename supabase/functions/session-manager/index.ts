@@ -1,10 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { logEyeEvent, corsHeaders } from "../_shared/eye.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+const SERVICE_NAME = "session-manager";
 
 // TTL configurations
 const SESSION_TTL_HOURS = 24;
@@ -23,83 +21,23 @@ interface SessionRequest {
   };
 }
 
-// Idempotency check: return existing event if already exists with same request_id
-async function checkIdempotency(
-  supabase: any,
-  sessionId: string | null,
-  eventType: string,
-  requestId: string | undefined
-): Promise<boolean> {
-  if (!requestId) return false; // No idempotency without request_id
-  
-  const { data, error } = await supabase
-    .from("eye_events")
-    .select("id")
-    .eq("session_id", sessionId)
-    .eq("event_type", eventType)
-    .eq("event_data->>request_id", requestId)
-    .limit(1);
-  
-  if (error) {
-    console.log(`[Idempotency] Check failed: ${error.message}`);
-    return false;
-  }
-  
-  if (data && data.length > 0) {
-    console.log(`[Idempotency] Duplicate detected: ${eventType} with request_id ${requestId}`);
-    return true;
-  }
-  
-  return false;
-}
-
-// Log Eye event for audit trail (no PHI)
-// Uses the event_data jsonb field to store all metadata
-async function logEyeEvent(
-  supabase: any,
-  sessionId: string | null,
-  eventType: string,
-  eventData: Record<string, any> = {}
-) {
-  try {
-    // Check idempotency if request_id is provided
-    if (eventData.request_id) {
-      const isDuplicate = await checkIdempotency(supabase, sessionId, eventType, eventData.request_id);
-      if (isDuplicate) {
-        console.log(`[Eye Event] SKIPPED duplicate: ${eventType}`);
-        return;
-      }
-    }
-    
-    // Merge standard fields into event_data
-    const fullEventData = {
-      result: eventData.result ?? "success",
-      severity: eventData.severity ?? "INFO",
-      actor_type: eventData.actor_type ?? "service",
-      actor_id: eventData.actor_id ?? "session-manager",
-      ...eventData,
-    };
-    
-    await supabase.from("eye_events").insert({
-      session_id: sessionId,
-      event_type: eventType,
-      event_data: fullEventData,
-    });
-    console.log(`[Eye Event] ${eventType}`, JSON.stringify(fullEventData));
-  } catch (error) {
-    console.error("Failed to log Eye event:", error);
-  }
-}
-
 // Purge all ephemeral data for a session
-async function purgeSessionData(supabase: any, sessionId: string) {
+async function purgeSessionData(
+  supabase: any,
+  sessionId: string,
+  req: Request
+) {
   console.log(`[Purge] Starting purge for session ${sessionId}`);
-  
+
   // Emit PURGE_STARTED
-  await logEyeEvent(supabase, sessionId, "PURGE_STARTED", {
-    severity: "NOTICE",
-    actor_type: "system",
-    actor_id: "session-manager",
+  await logEyeEvent(supabase, {
+    session_id: sessionId,
+    event_type: "PURGE_STARTED",
+    request: req,
+    serviceName: SERVICE_NAME,
+    payload: {
+      severity: "NOTICE",
+    },
   });
 
   let purgeSuccess = true;
@@ -117,18 +55,22 @@ async function purgeSessionData(supabase: any, sessionId: string) {
     const { error: storageError } = await supabase.storage
       .from("audio-uploads")
       .remove(objectKeys);
-    
+
     if (storageError) {
       console.error("Failed to delete audio files:", storageError);
       purgeSuccess = false;
     } else {
       audioDeletedCount = objectKeys.length;
       console.log(`[Purge] Deleted ${objectKeys.length} audio files`);
-      await logEyeEvent(supabase, sessionId, "AUDIO_DELETED", {
-        count: objectKeys.length,
-        severity: "NOTICE",
-        actor_type: "system",
-        actor_id: "session-manager",
+      await logEyeEvent(supabase, {
+        session_id: sessionId,
+        event_type: "AUDIO_DELETED",
+        request: req,
+        serviceName: SERVICE_NAME,
+        payload: {
+          count: objectKeys.length,
+          severity: "NOTICE",
+        },
       });
     }
   }
@@ -161,52 +103,76 @@ async function purgeSessionData(supabase: any, sessionId: string) {
   } else if (artifacts && artifacts.length > 0) {
     artifactsDeletedCount = artifacts.length;
     console.log(`[Purge] Deleted ${artifacts.length} ephemeral artifacts`);
-    
+
     // Emit deletion events for each artifact type
-    const transcriptDeleted = artifacts.some((a: any) => a.artifact_type === "transcript");
-    const minimizedDeleted = artifacts.some((a: any) => a.artifact_type === "minimized_transcript");
-    
+    const transcriptDeleted = artifacts.some(
+      (a: any) => a.artifact_type === "transcript"
+    );
+    const minimizedDeleted = artifacts.some(
+      (a: any) => a.artifact_type === "minimized_transcript"
+    );
+
     if (transcriptDeleted) {
-      await logEyeEvent(supabase, sessionId, "TRANSCRIPT_DELETED", {
-        severity: "NOTICE",
-        actor_type: "system",
-        actor_id: "session-manager",
+      await logEyeEvent(supabase, {
+        session_id: sessionId,
+        event_type: "TRANSCRIPT_DELETED",
+        request: req,
+        serviceName: SERVICE_NAME,
+        payload: {
+          severity: "NOTICE",
+        },
       });
     }
     if (minimizedDeleted) {
-      await logEyeEvent(supabase, sessionId, "MINIMIZED_TRANSCRIPT_DELETED", {
-        severity: "NOTICE",
-        actor_type: "system",
-        actor_id: "session-manager",
+      await logEyeEvent(supabase, {
+        session_id: sessionId,
+        event_type: "MINIMIZED_TRANSCRIPT_DELETED",
+        request: req,
+        serviceName: SERVICE_NAME,
+        payload: {
+          severity: "NOTICE",
+        },
       });
     }
   }
 
   // Emit EPHEMERAL_SCAN_RESULT to indicate all data purged
-  await logEyeEvent(supabase, sessionId, "EPHEMERAL_SCAN_RESULT", {
-    remaining_count: 0,
-    remaining_types: [],
-    severity: "NOTICE",
-    actor_type: "system",
-    actor_id: "session-manager",
+  await logEyeEvent(supabase, {
+    session_id: sessionId,
+    event_type: "EPHEMERAL_SCAN_RESULT",
+    request: req,
+    serviceName: SERVICE_NAME,
+    payload: {
+      remaining_count: 0,
+      remaining_types: [],
+      severity: "NOTICE",
+    },
   });
 
   // Emit PURGE_COMPLETED or PURGE_FAILED
   if (purgeSuccess) {
-    await logEyeEvent(supabase, sessionId, "PURGE_COMPLETED", {
-      severity: "NOTICE",
-      actor_type: "system",
-      actor_id: "session-manager",
-      audio_deleted: audioDeletedCount,
-      artifacts_deleted: artifactsDeletedCount,
+    await logEyeEvent(supabase, {
+      session_id: sessionId,
+      event_type: "PURGE_COMPLETED",
+      request: req,
+      serviceName: SERVICE_NAME,
+      payload: {
+        severity: "NOTICE",
+        audio_deleted: audioDeletedCount,
+        artifacts_deleted: artifactsDeletedCount,
+      },
     });
   } else {
-    await logEyeEvent(supabase, sessionId, "PURGE_FAILED", {
-      severity: "HIGH",
-      result: "failure",
-      reason_code: "PARTIAL_DELETION",
-      actor_type: "system",
-      actor_id: "session-manager",
+    await logEyeEvent(supabase, {
+      session_id: sessionId,
+      event_type: "PURGE_FAILED",
+      request: req,
+      serviceName: SERVICE_NAME,
+      payload: {
+        severity: "HIGH",
+        result: "failure",
+        reason_code: "PARTIAL_DELETION",
+      },
     });
   }
 
@@ -224,21 +190,36 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { action, session_id, operator_id, request_id, data }: SessionRequest = await req.json();
+    const {
+      action,
+      session_id,
+      operator_id,
+      request_id,
+      data,
+    }: SessionRequest = await req.json();
 
-    console.log(`[SessionManager] Action: ${action}, Session: ${session_id || "new"}, RequestId: ${request_id || "none"}`);
+    console.log(
+      `[SessionManager] Action: ${action}, Session: ${session_id || "new"}, RequestId: ${request_id || "none"}`
+    );
 
     switch (action) {
       case "create": {
         if (!data?.case_id) {
           return new Response(
-            JSON.stringify({ error: "case_id is required for session creation" }),
-            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            JSON.stringify({
+              error: "case_id is required for session creation",
+            }),
+            {
+              status: 400,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
           );
         }
 
         const newSessionId = crypto.randomUUID();
-        const ttlExpiresAt = new Date(Date.now() + SESSION_TTL_HOURS * 60 * 60 * 1000).toISOString();
+        const ttlExpiresAt = new Date(
+          Date.now() + SESSION_TTL_HOURS * 60 * 60 * 1000
+        ).toISOString();
 
         const { data: session, error } = await supabase
           .from("sessions")
@@ -259,28 +240,33 @@ serve(async (req) => {
           throw new Error("Failed to create session");
         }
 
-        // Emit SESSION_STARTED (not SESSION_CREATED for taxonomy compliance)
-        await logEyeEvent(supabase, newSessionId, "SESSION_STARTED", {
-          case_id: data.case_id,
-          interaction_type: data.interaction_type,
-          operator_id: operator_id,
-          severity: "INFO",
-          actor_type: "user",
-          actor_id: operator_id || "unknown",
-          request_id: request_id, // Idempotency key
+        // Emit SESSION_STARTED with canonical stamping
+        await logEyeEvent(supabase, {
+          session_id: newSessionId,
+          event_type: "SESSION_STARTED",
+          request: req,
+          serviceName: SERVICE_NAME,
+          payload: {
+            case_id: data.case_id,
+            interaction_type: data.interaction_type,
+            operator_id: operator_id,
+            request_id: request_id,
+          },
         });
 
-        return new Response(
-          JSON.stringify({ success: true, session }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ success: true, session }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
 
       case "get": {
         if (!session_id) {
           return new Response(
             JSON.stringify({ error: "session_id is required" }),
-            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            {
+              status: 400,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
           );
         }
 
@@ -302,7 +288,9 @@ serve(async (req) => {
 
         return new Response(
           JSON.stringify({ success: true, session, artifacts }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          }
         );
       }
 
@@ -310,7 +298,10 @@ serve(async (req) => {
         if (!session_id) {
           return new Response(
             JSON.stringify({ error: "session_id is required" }),
-            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            {
+              status: 400,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
           );
         }
 
@@ -325,30 +316,35 @@ serve(async (req) => {
 
         // Only emit event for significant state changes
         if (data?.state) {
-          await logEyeEvent(supabase, session_id, "SESSION_HEARTBEAT", {
-            new_state: data.state,
-            severity: "INFO",
-            actor_type: "service",
-            actor_id: "session-manager",
+          await logEyeEvent(supabase, {
+            session_id: session_id,
+            event_type: "SESSION_HEARTBEAT",
+            request: req,
+            serviceName: SERVICE_NAME,
+            payload: {
+              new_state: data.state,
+            },
           });
         }
 
-        return new Response(
-          JSON.stringify({ success: true }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
 
       case "close": {
         if (!session_id) {
           return new Response(
             JSON.stringify({ error: "session_id is required" }),
-            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            {
+              status: 400,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
           );
         }
 
         // Purge ephemeral data
-        await purgeSessionData(supabase, session_id);
+        await purgeSessionData(supabase, session_id, req);
 
         // Update session state - CLOSED is the terminal state
         const { error } = await supabase
@@ -363,28 +359,35 @@ serve(async (req) => {
           throw new Error("Failed to close session");
         }
 
-        await logEyeEvent(supabase, session_id, "SESSION_CLOSED", {
-          severity: "NOTICE",
-          actor_type: "system",
-          actor_id: "session-manager",
+        await logEyeEvent(supabase, {
+          session_id: session_id,
+          event_type: "SESSION_CLOSED",
+          request: req,
+          serviceName: SERVICE_NAME,
+          payload: {
+            severity: "NOTICE",
+            request_id: request_id,
+          },
         });
 
-        return new Response(
-          JSON.stringify({ success: true }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
 
       case "cancel": {
         if (!session_id) {
           return new Response(
             JSON.stringify({ error: "session_id is required" }),
-            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            {
+              status: 400,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
           );
         }
 
         // Purge ephemeral data
-        await purgeSessionData(supabase, session_id);
+        await purgeSessionData(supabase, session_id, req);
 
         // Update session state - CANCELLED is the terminal state
         const { error } = await supabase
@@ -399,45 +402,57 @@ serve(async (req) => {
           throw new Error("Failed to cancel session");
         }
 
-        await logEyeEvent(supabase, session_id, "SESSION_CANCELLED", {
-          severity: "NOTICE",
-          actor_type: "user",
-          actor_id: operator_id || "unknown",
+        await logEyeEvent(supabase, {
+          session_id: session_id,
+          event_type: "SESSION_CANCELLED",
+          request: req,
+          serviceName: SERVICE_NAME,
+          payload: {
+            severity: "NOTICE",
+            operator_id: operator_id,
+            request_id: request_id,
+          },
         });
 
-        return new Response(
-          JSON.stringify({ success: true }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
 
       case "purge": {
         if (!session_id) {
           return new Response(
             JSON.stringify({ error: "session_id is required" }),
-            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            {
+              status: 400,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
           );
         }
 
-        await purgeSessionData(supabase, session_id);
+        await purgeSessionData(supabase, session_id, req);
 
-        return new Response(
-          JSON.stringify({ success: true }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ success: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
 
       default:
-        return new Response(
-          JSON.stringify({ error: "Invalid action" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ error: "Invalid action" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
     }
   } catch (error) {
     console.error("Session manager error:", error);
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      JSON.stringify({
+        error: error instanceof Error ? error.message : "Unknown error",
+      }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
     );
   }
 });
