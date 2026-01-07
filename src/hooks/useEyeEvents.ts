@@ -16,11 +16,12 @@ interface RawEyeEvent {
 }
 
 // Transform raw DB event to full EyeEvent shape
+// Backend-stamped values take precedence; fallbacks are for legacy events
 function transformEvent(raw: RawEyeEvent): EyeEvent {
   const eventType = raw.event_type as EyeEventType;
   const eventData = raw.event_data || {};
   
-  // Get severity from event_data or fall back to default mapping
+  // Severity: prefer backend-stamped, then map, then default
   const severity: EventSeverity = 
     eventData.severity || 
     EVENT_SEVERITY_MAP[eventType] || 
@@ -29,12 +30,13 @@ function transformEvent(raw: RawEyeEvent): EyeEvent {
   return {
     event_id: raw.id,
     event_type: eventType,
+    // Backend-stamped fields (with legacy fallbacks)
     event_version: eventData.event_version ?? 1,
     timestamp: raw.created_at,
-    tenant_id: eventData.tenant_id ?? "default",
-    environment: eventData.environment ?? "dev",
+    tenant_id: eventData.tenant_id ?? "default", // legacy fallback
+    environment: eventData.environment ?? "dev", // legacy fallback
     actor_type: eventData.actor_type ?? "service",
-    actor_id: eventData.actor_id ?? "unknown",
+    actor_id: eventData.actor_id ?? "unknown", // legacy fallback
     actor_role: eventData.actor_role ?? null,
     session_id: raw.session_id,
     case_id: eventData.case_id ?? null,
@@ -42,10 +44,11 @@ function transformEvent(raw: RawEyeEvent): EyeEvent {
     resource_id: eventData.resource_id ?? raw.session_id ?? raw.id,
     result: eventData.result ?? "success",
     reason_code: eventData.reason_code ?? null,
-    request_id: eventData.request_id ?? `req_${raw.id.slice(0, 8)}`,
+    request_id: eventData.request_id ?? null, // Now nullable, not auto-generated
     severity,
     // Optional fields from event_data
     operator_id: eventData.operator_id,
+    service_name: eventData.service_name,
     redaction_counts: eventData.redaction_counts,
     latency_ms: eventData.latency_ms,
     remaining_count: eventData.remaining_count,
