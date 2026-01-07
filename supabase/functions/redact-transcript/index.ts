@@ -1,11 +1,9 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { logEyeEvent as sharedLogEyeEvent, corsHeaders } from "../_shared/eye.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+const SERVICE_NAME = "redact-transcript";
 
 const MINIMIZED_TRANSCRIPT_TTL_SECONDS = 30 * 60; // 30 minutes
 
@@ -225,33 +223,19 @@ interface RedactionResult {
 let presidioHealthy: boolean | null = null;
 let presidioHealthCheckedAt: number = 0;
 
-// Log Eye event for audit trail (no PHI stored)
-// Enhanced to include all required metadata fields
+// Wrapper for shared logEyeEvent to maintain backward compatibility
 async function logEyeEvent(
   supabase: any,
   sessionId: string | null,
   eventType: string,
   eventData: Record<string, any> = {}
 ) {
-  try {
-    // Merge standard fields into event_data
-    const fullEventData = {
-      result: eventData.result ?? "success",
-      severity: eventData.severity ?? "INFO",
-      actor_type: eventData.actor_type ?? "service",
-      actor_id: eventData.actor_id ?? "redact-transcript",
-      ...eventData,
-    };
-    
-    await supabase.from("eye_events").insert({
-      session_id: sessionId,
-      event_type: eventType,
-      event_data: fullEventData,
-    });
-    console.log(`[Eye Event] ${eventType}`, JSON.stringify(fullEventData));
-  } catch (error) {
-    console.error("Failed to log Eye event:", error);
-  }
+  await sharedLogEyeEvent(supabase, {
+    session_id: sessionId,
+    event_type: eventType,
+    serviceName: SERVICE_NAME,
+    payload: eventData,
+  });
 }
 
 // ============================================================
