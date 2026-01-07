@@ -902,3 +902,281 @@ describe("Time Range Labels", () => {
     expect(getTimeRangeLabel("last30d")).toBe("Last 30 days");
   });
 });
+
+// ============================================================
+// EXPORT STAGE VERDICT TESTS
+// ============================================================
+// These tests lock in the supervisor-level semantics for Export events.
+// Export is a terminal operational step, NOT a system health signal.
+// EXPORT_FAILED is a degradation (YELLOW), not a blocking failure (RED).
+
+describe("Export Stage - Verdict Semantics", () => {
+  /**
+   * TEST 1: Export success does NOT affect verdict by itself
+   * 
+   * A successful export is a normal terminal operation.
+   * It should not elevate severity or change session outcomes.
+   */
+  it("EXPORT_COMPLETED does not affect verdict - remains GREEN", () => {
+    const events: EyeEvent[] = [
+      createTimestampedEvent("SESSION_STARTED", "sess_1", 60),
+      createTimestampedEvent("REDACTION_COMPLETED", "sess_1", 50),
+      createTimestampedEvent("EXPORT_COMPLETED", "sess_1", 40),
+      createTimestampedEvent("SESSION_CLOSED", "sess_1", 30),
+    ];
+
+    const counts = computeActionCounts(events);
+    const verdict = computeVerdict(counts, true);
+
+    expect(verdict.level).toBe("green");
+    expect(counts.blockedSessionsCount).toBe(0);
+    expect(counts.issueSessionsCount).toBe(0);
+    expect(counts.complianceRiskCount).toBe(0);
+  });
+
+  /**
+   * TEST 2: EXPORT_FAILED is NOT a blocking failure
+   * 
+   * Export failures are operational degradations, not service disruptions.
+   * The session completed its core work (transcription, redaction).
+   * A failed export doesn't prevent the caseworker from working.
+   */
+  it("EXPORT_FAILED is not blocking - results in YELLOW, not RED", () => {
+    const events: EyeEvent[] = [
+      createTimestampedEvent("SESSION_STARTED", "sess_1", 60),
+      createTimestampedEvent("REDACTION_COMPLETED", "sess_1", 50),
+      createTimestampedEvent("EXPORT_FAILED", "sess_1", 40, {
+        result: "failure",
+        severity: "WARN",
+        reason_code: "INTERNAL_ERROR",
+      }),
+      // No recovery event - but that's fine, export isn't a blocking failure
+    ];
+
+    const counts = computeActionCounts(events);
+    const verdict = computeVerdict(counts, true);
+
+    // EXPORT_FAILED should NOT mark session as blocked
+    expect(counts.blockedSessionsCount).toBe(0);
+    
+    // Should count as an issue session (WARN severity)
+    expect(counts.issueSessionsCount).toBe(1);
+    
+    // Verdict should be YELLOW, not RED
+    expect(verdict.level).toBe("yellow");
+  });
+
+  /**
+   * TEST 3: EXPORT_FAILED + compliance risk escalates to RED
+   * 
+   * If export fails AND there's a compliance violation (e.g., PURGE_FAILED),
+   * the verdict should be RED. But this is due to compliance risk,
+   * NOT due to the export failure itself.
+   */
+  it("EXPORT_FAILED + PURGE_FAILED escalates to RED via compliance risk", () => {
+    const events: EyeEvent[] = [
+      createTimestampedEvent("SESSION_STARTED", "sess_1", 60),
+      createTimestampedEvent("REDACTION_COMPLETED", "sess_1", 50),
+      createTimestampedEvent("EXPORT_FAILED", "sess_1", 40, {
+        result: "failure",
+        severity: "WARN",
+      }),
+      createTimestampedEvent("PURGE_FAILED", "sess_1", 30, {
+        result: "failure",
+        severity: "HIGH",
+      }),
+    ];
+
+    const counts = computeActionCounts(events);
+    const verdict = computeVerdict(counts, true);
+
+    // Compliance risk should be detected
+    expect(counts.complianceRiskCount).toBe(1);
+    
+    // Verdict is RED due to compliance risk
+    expect(verdict.level).toBe("red");
+  });
+
+  it("EXPORT_FAILED + retained artifacts escalates to RED via compliance risk", () => {
+    const events: EyeEvent[] = [
+      createTimestampedEvent("SESSION_STARTED", "sess_1", 60),
+      createTimestampedEvent("REDACTION_COMPLETED", "sess_1", 50),
+      createTimestampedEvent("EXPORT_FAILED", "sess_1", 40, {
+        result: "failure",
+        severity: "WARN",
+      }),
+      createTimestampedEvent("EPHEMERAL_SCAN_RESULT", "sess_1", 30, {
+        remaining_count: 2,
+      }),
+    ];
+
+    const counts = computeActionCounts(events);
+    const verdict = computeVerdict(counts, true);
+
+    expect(counts.complianceRiskCount).toBe(1);
+    expect(verdict.level).toBe("red");
+  });
+});
+
+// ============================================================
+// EXPORT STAGE - SESSION OUTCOME TESTS
+// ============================================================
+// Export events should NOT override session outcome determination.
+// SESSION_CLOSED is the source of truth for "completed".
+
+describe("Export Stage - Session Outcomes", () => {
+  /**
+   * TEST 4A: EXPORT_COMPLETED + SESSION_CLOSED → completed
+   * 
+   * Export success doesn't change the outcome - SESSION_CLOSED does.
+   */
+  it("EXPORT_COMPLETED + SESSION_CLOSED results in 'completed' outcome", () => {
+    const events: EyeEvent[] = [
+      createTimestampedEvent("SESSION_STARTED", "sess_1", 60),
+      createTimestampedEvent("REDACTION_COMPLETED", "sess_1", 50),
+      createTimestampedEvent("EXPORT_COMPLETED", "sess_1", 40),
+      createTimestampedEvent("SESSION_CLOSED", "sess_1", 30),
+    ];
+
+    const outcomes = computeSessionOutcomes(events);
+
+    expect(outcomes.completed).toBe(1);
+    expect(outcomes.failed).toBe(0);
+    expect(outcomes.sessionsToday).toBe(1);
+  });
+
+  /**
+   * TEST 4B: EXPORT_FAILED + SESSION_CLOSED → completed (with issues)
+   * 
+   * Even if export fails, the session is still "completed" because
+   * SESSION_CLOSED was emitted. The failure is tracked separately
+   * as an issue, not an outcome change.
+   */
+  it("EXPORT_FAILED + SESSION_CLOSED results in 'completed' outcome (not failed)", () => {
+    const events: EyeEvent[] = [
+      createTimestampedEvent("SESSION_STARTED", "sess_1", 60),
+      createTimestampedEvent("REDACTION_COMPLETED", "sess_1", 50),
+      createTimestampedEvent("EXPORT_FAILED", "sess_1", 40, {
+        result: "failure",
+        severity: "WARN",
+      }),
+      createTimestampedEvent("SESSION_CLOSED", "sess_1", 30),
+    ];
+
+    const outcomes = computeSessionOutcomes(events);
+    const counts = computeActionCounts(events);
+
+    // Outcome should be completed (SESSION_CLOSED wins)
+    expect(outcomes.completed).toBe(1);
+    expect(outcomes.failed).toBe(0);
+    
+    // But it should be counted as a session with issues
+    expect(counts.issueSessionsCount).toBe(1);
+    expect(counts.blockedSessionsCount).toBe(0);
+  });
+
+  /**
+   * Verify export events don't interfere with priority order:
+   * Failed > Saved > Cancelled > Completed > InProgress
+   */
+  it("Export events don't change outcome priority order", () => {
+    // Saved session with export
+    const savedEvents: EyeEvent[] = [
+      createTimestampedEvent("SESSION_STARTED", "sess_1", 60),
+      createTimestampedEvent("EXPORT_STARTED", "sess_1", 50),
+      createTimestampedEvent("WIP_BUNDLE_EXPORTED", "sess_1", 40),
+      createTimestampedEvent("SESSION_CLOSED", "sess_1", 30),
+    ];
+
+    const savedOutcomes = computeSessionOutcomes(savedEvents);
+    
+    // WIP_BUNDLE_EXPORTED should win over SESSION_CLOSED
+    expect(savedOutcomes.saved).toBe(1);
+    expect(savedOutcomes.completed).toBe(0);
+  });
+
+  /**
+   * EXPORT_STARTED without completion = session still in progress (if no close)
+   */
+  it("EXPORT_STARTED alone doesn't affect outcome - session is inProgress", () => {
+    const events: EyeEvent[] = [
+      createTimestampedEvent("SESSION_STARTED", "sess_1", 60),
+      createTimestampedEvent("REDACTION_COMPLETED", "sess_1", 50),
+      createTimestampedEvent("EXPORT_STARTED", "sess_1", 40),
+      // No EXPORT_COMPLETED or SESSION_CLOSED
+    ];
+
+    const outcomes = computeSessionOutcomes(events);
+
+    expect(outcomes.inProgress).toBe(1);
+    expect(outcomes.completed).toBe(0);
+    expect(outcomes.failed).toBe(0);
+  });
+});
+
+// ============================================================
+// EXPORT STAGE - GUARDRAILS
+// ============================================================
+// These tests ensure future changes don't accidentally alter semantics.
+
+describe("Export Stage - Semantic Guardrails", () => {
+  /**
+   * GUARDRAIL: EXPORT_FAILED must NOT be in BLOCKING_FAILURE_EVENTS
+   * 
+   * This is a contract test. If someone adds EXPORT_FAILED to the
+   * blocking list, this test will fail as a warning.
+   */
+  it("EXPORT_FAILED without recovery does NOT block session", () => {
+    // This is the key semantic: export failures are degradations, not blocks
+    const events: EyeEvent[] = [
+      createTimestampedEvent("SESSION_STARTED", "sess_1", 60),
+      createTimestampedEvent("EXPORT_FAILED", "sess_1", 40, {
+        result: "failure",
+      }),
+      // Deliberately no recovery - if this causes blockedSessionsCount > 0,
+      // someone added EXPORT_FAILED to BLOCKING_FAILURE_EVENTS
+    ];
+
+    const counts = computeActionCounts(events);
+
+    expect(counts.blockedSessionsCount).toBe(0);
+  });
+
+  /**
+   * GUARDRAIL: Multiple export failures in one session = 1 issue session
+   * 
+   * We count sessions with issues, not individual failures.
+   */
+  it("Multiple EXPORT_FAILED in one session = 1 issue session", () => {
+    const events: EyeEvent[] = [
+      createTimestampedEvent("SESSION_STARTED", "sess_1", 60),
+      createTimestampedEvent("EXPORT_FAILED", "sess_1", 50, { result: "failure" }),
+      createTimestampedEvent("EXPORT_FAILED", "sess_1", 40, { result: "failure" }),
+      createTimestampedEvent("EXPORT_FAILED", "sess_1", 30, { result: "failure" }),
+    ];
+
+    const counts = computeActionCounts(events);
+
+    expect(counts.issueSessionsCount).toBe(1); // Not 3
+  });
+
+  /**
+   * GUARDRAIL: Export events across multiple sessions counted correctly
+   */
+  it("Export failures across sessions counted independently", () => {
+    const events: EyeEvent[] = [
+      // Session 1: Export failed
+      createTimestampedEvent("SESSION_STARTED", "sess_1", 60),
+      createTimestampedEvent("EXPORT_FAILED", "sess_1", 50, { result: "failure" }),
+      // Session 2: Export succeeded
+      createTimestampedEvent("SESSION_STARTED", "sess_2", 60),
+      createTimestampedEvent("EXPORT_COMPLETED", "sess_2", 50),
+      createTimestampedEvent("SESSION_CLOSED", "sess_2", 40),
+    ];
+
+    const counts = computeActionCounts(events);
+
+    expect(counts.issueSessionsCount).toBe(1); // Only sess_1
+    expect(counts.blockedSessionsCount).toBe(0);
+  });
+});
