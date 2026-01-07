@@ -350,11 +350,11 @@ serve(async (req) => {
         // Purge ephemeral data
         await purgeSessionData(supabase, session_id);
 
-        // Update session state
+        // Update session state - CLOSED is the terminal state
         const { error } = await supabase
           .from("sessions")
           .update({
-            state: "PURGED",
+            state: "CLOSED",
             closed_at: new Date().toISOString(),
           })
           .eq("session_id", session_id);
@@ -386,11 +386,11 @@ serve(async (req) => {
         // Purge ephemeral data
         await purgeSessionData(supabase, session_id);
 
-        // Update session state
+        // Update session state - CANCELLED is the terminal state
         const { error } = await supabase
           .from("sessions")
           .update({
-            state: "PURGED",
+            state: "CANCELLED",
             cancelled_at: new Date().toISOString(),
           })
           .eq("session_id", session_id);

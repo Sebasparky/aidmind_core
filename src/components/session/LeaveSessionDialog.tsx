@@ -71,50 +71,55 @@ export function LeaveSessionDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
 
-        <AlertDialogFooter className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-4">
-          {/* Save for Later - secondary action */}
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex w-full sm:w-auto">
-                  <Button
-                    variant="outline"
-                    onClick={onSave}
-                    disabled={!saveEnabled || isLoading}
-                    className="w-full gap-2"
-                  >
-                    <Save className="h-4 w-4" />
-                    Save for later
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              {!saveEnabled && (
-                <TooltipContent side="top" className="max-w-[200px]">
-                  <p>Coming soon</p>
-                </TooltipContent>
-              )}
-            </Tooltip>
-          </TooltipProvider>
+        <AlertDialogFooter className="flex flex-col gap-2 pt-4 sm:flex-row sm:justify-between">
+          {/* Left side: Save for Later */}
+          <div className="order-last sm:order-first">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex w-full sm:w-auto">
+                    <Button
+                      variant="outline"
+                      onClick={onSave}
+                      disabled={!saveEnabled || isLoading}
+                      className="w-full gap-2"
+                    >
+                      <Save className="h-4 w-4" />
+                      Save for later
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                {!saveEnabled && (
+                  <TooltipContent side="top" className="max-w-[200px]">
+                    <p>Coming soon</p>
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            </TooltipProvider>
+          </div>
 
-          {/* Cancel session - destructive */}
-          <Button
-            variant="destructive"
-            onClick={onCancel}
-            disabled={isLoading}
-            className="w-full sm:w-auto gap-2"
-          >
-            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
-            {isLoading ? "Cancelling..." : "Cancel session"}
-          </Button>
+          {/* Right side: Cancel + Return grouped */}
+          <div className="flex flex-col gap-2 sm:flex-row sm:gap-2">
+            {/* Cancel session - destructive */}
+            <Button
+              variant="destructive"
+              onClick={onCancel}
+              disabled={isLoading}
+              className="w-full sm:w-auto gap-2"
+            >
+              {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+              {isLoading ? "Cancelling..." : "Cancel session"}
+            </Button>
 
-          {/* Return to session - primary */}
-          <Button
-            onClick={onStay}
-            disabled={isLoading}
-            className="w-full sm:w-auto"
-          >
-            Return to session
-          </Button>
+            {/* Return to session - primary */}
+            <Button
+              onClick={onStay}
+              disabled={isLoading}
+              className="w-full sm:w-auto"
+            >
+              Return to session
+            </Button>
+          </div>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

@@ -38,13 +38,18 @@ interface SessionsPanelProps {
   onSessionSelect?: (sessionId: string) => void;
 }
 
+// Configurable threshold for "abandoned" detection (in minutes)
+const ABANDONED_THRESHOLD_MINUTES = 30;
+
 interface SessionSummary {
   sessionId: string;
   caseId: string | null;
   operatorId: string | null;
   startTime: Date;
   endTime: Date | null;
+  lastEventTime: Date;
   status: "clean" | "issues" | "failed" | "active" | "saved" | "resumed";
+  isAbandoned: boolean;
   totalEvents: number;
   errorCount: number;
   warningCount: number;
@@ -74,6 +79,7 @@ function calculateSessionSummary(sessionId: string, events: EyeEvent[]): Session
   );
   
   const startEvent = sortedEvents[0];
+  const lastEvent = sortedEvents[sortedEvents.length - 1];
   const endEvent = sortedEvents.find(
     (e) => e.event_type === "SESSION_CLOSED" || e.event_type === "SESSION_CANCELLED"
   );
@@ -130,13 +136,21 @@ function calculateSessionSummary(sessionId: string, events: EyeEvent[]): Session
     status = "resumed"; // Active resumed session
   }
   
+  // Compute last event time and abandoned status (client-side derived)
+  const lastEventTime = new Date(lastEvent?.timestamp ?? Date.now());
+  const hasTerminalEvent = !!endEvent || !!wipExported;
+  const minutesSinceLastEvent = (Date.now() - lastEventTime.getTime()) / (1000 * 60);
+  const isAbandoned = !hasTerminalEvent && minutesSinceLastEvent >= ABANDONED_THRESHOLD_MINUTES;
+  
   return {
     sessionId,
     caseId: startEvent?.case_id ?? null,
     operatorId,
     startTime: new Date(startEvent?.timestamp ?? Date.now()),
     endTime: endEvent ? new Date(endEvent.timestamp) : null,
+    lastEventTime,
     status,
+    isAbandoned,
     totalEvents: events.length,
     errorCount,
     warningCount,
@@ -148,7 +162,7 @@ function calculateSessionSummary(sessionId: string, events: EyeEvent[]): Session
 }
 
 const STATUS_STYLES: Record<SessionSummary["status"], { icon: typeof CheckCircle2; className: string; label: string }> = {
-  clean: { icon: CheckCircle2, className: "text-[hsl(var(--status-success))]", label: "Clean" },
+  clean: { icon: CheckCircle2, className: "text-[hsl(var(--status-success))]", label: "Completed" },
   issues: { icon: AlertTriangle, className: "text-[hsl(var(--status-warning))]", label: "Issues" },
   failed: { icon: XCircle, className: "text-destructive", label: "Failed" },
   active: { icon: Activity, className: "text-[hsl(var(--status-info))]", label: "Active" },
@@ -334,6 +348,14 @@ export function SessionsPanel({ events, onEventClick, selectedEventId, onSession
                       >
                         {STATUS_STYLES[session.status].label}
                       </Badge>
+                      {session.isAbandoned && (
+                        <Badge 
+                          variant="outline" 
+                          className="text-xs flex-shrink-0 bg-muted/60 text-muted-foreground border-muted-foreground/30"
+                        >
+                          Abandoned
+                        </Badge>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 text-xs text-muted-foreground">
                       {session.operatorId && (
@@ -361,6 +383,22 @@ export function SessionsPanel({ events, onEventClick, selectedEventId, onSession
                           <span className="flex items-center gap-1 text-[10px]">
                             <Link2 className="h-3 w-3" />
                             linked
+                          </span>
+                        </>
+                      )}
+                      {session.isAbandoned && (
+                        <>
+                          <span>•</span>
+                          <span className="text-[10px] italic">
+                            No activity for {formatDistanceToNow(session.lastEventTime)}
+                          </span>
+                        </>
+                      )}
+                      {session.status === "active" && !session.isAbandoned && (
+                        <>
+                          <span>•</span>
+                          <span className="text-[10px] italic text-muted-foreground/70">
+                            No terminal outcome
                           </span>
                         </>
                       )}
