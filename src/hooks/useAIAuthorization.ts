@@ -1,10 +1,17 @@
 /**
- * Hook to manage AI Usage Authorization state
+ * Hook to manage Generative AI Authorization state
+ * 
+ * SCOPE: This hook manages authorization for GENERATIVE AI only (chat/completions).
+ * It does NOT apply to:
+ * - Transcription (Whisper) - non-generative audio-to-text processing
+ * - Redaction (Presidio) - rule-based PHI removal
+ * 
+ * These non-generative steps operate independently and do not require supervisor approval.
  * 
  * This hook provides:
  * - Current authorization status (approved/missing/revoked)
  * - Approval/revocation actions for supervisors
- * - Integration with Eye events
+ * - Integration with Eye events (AI_USAGE_APPROVED_BY_SUPERVISOR, etc.)
  */
 
 import { useState, useEffect, useCallback } from "react";

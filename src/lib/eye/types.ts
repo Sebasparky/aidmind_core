@@ -146,6 +146,21 @@ export type EyeEventType =
   | "TRANSCRIPTION_STARTED"
   | "TRANSCRIPTION_COMPLETED"
   | "TRANSCRIPTION_FAILED"
+  /**
+   * TRANSCRIPTION_PROVIDER_USED: Observability event for audit visibility.
+   * 
+   * Emitted once per transcription job to record which AI provider processed data.
+   * This is NOT a generative AI event and does NOT require supervisor approval.
+   * 
+   * Metadata (PHI-safe only):
+   * - provider: "openai"
+   * - model: "whisper-1" | "gpt-4o-transcribe" | etc.
+   * - data_retention_mode: "zero_retention"
+   * - request_id
+   * 
+   * Never includes: audio, transcript text, filenames, object keys
+   */
+  | "TRANSCRIPTION_PROVIDER_USED"
 
   // E) Redaction & Minimization
   | "REDACTION_STARTED"
@@ -221,7 +236,12 @@ export type EyeEventType =
   | "ALERT_ACKNOWLEDGED"
   | "ALERT_RESOLVED"
 
-  // N) Governance & Authorization
+  // N) Governance & Authorization (Generative AI Only)
+  /**
+   * These governance events apply ONLY to generative AI (chat/completions).
+   * They do NOT apply to transcription (Whisper) or redaction (Presidio),
+   * which are non-generative processing steps.
+   */
   | "AI_USAGE_APPROVAL_REQUESTED"
   | "AI_USAGE_APPROVED_BY_SUPERVISOR"
   | "AI_USAGE_APPROVAL_REVOKED"
@@ -293,6 +313,7 @@ export const ALL_EYE_EVENT_TYPES: EyeEventType[] = [
   "TRANSCRIPTION_STARTED",
   "TRANSCRIPTION_COMPLETED",
   "TRANSCRIPTION_FAILED",
+  "TRANSCRIPTION_PROVIDER_USED",
 
   // E) Redaction
   "REDACTION_STARTED",
@@ -508,6 +529,7 @@ export const EVENT_CATEGORY_MAP: Record<EyeEventType, EventCategory> = {
   TRANSCRIPTION_STARTED: "TRANSCRIPTION",
   TRANSCRIPTION_COMPLETED: "TRANSCRIPTION",
   TRANSCRIPTION_FAILED: "TRANSCRIPTION",
+  TRANSCRIPTION_PROVIDER_USED: "TRANSCRIPTION",
 
   // Redaction
   REDACTION_STARTED: "REDACTION",
@@ -647,6 +669,7 @@ export const EVENT_SEVERITY_MAP: Record<EyeEventType, EventSeverity> = {
   TRANSCRIPTION_STARTED: "INFO",
   TRANSCRIPTION_COMPLETED: "NOTICE",
   TRANSCRIPTION_FAILED: "WARN",
+  TRANSCRIPTION_PROVIDER_USED: "INFO",
 
   // Redaction
   REDACTION_STARTED: "INFO",
@@ -770,6 +793,7 @@ export const IMPLEMENTED_EVENTS: EyeEventType[] = [
   "TRANSCRIPTION_STARTED",
   "TRANSCRIPTION_COMPLETED",
   "TRANSCRIPTION_FAILED",
+  "TRANSCRIPTION_PROVIDER_USED",
 
   // Redaction
   "REDACTION_STARTED",
