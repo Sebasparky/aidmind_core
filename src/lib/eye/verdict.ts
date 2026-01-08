@@ -74,6 +74,13 @@ export interface ComplianceStatus {
    * "not_instrumented" = no approval events found
    */
   userApprovalStatus: "passed" | "failed" | "not_instrumented";
+  /**
+   * AI usage authorization status.
+   * "approved" = AI_USAGE_APPROVED_BY_SUPERVISOR exists without subsequent revocation
+   * "missing" = no authorization events found
+   * "revoked" = AI_USAGE_APPROVAL_REVOKED is the latest authorization event
+   */
+  aiAuthorizationStatus: "approved" | "missing" | "revoked";
 }
 
 export interface VerdictResult {
@@ -157,9 +164,11 @@ const RECOVERY_EVENTS: EyeEventType[] = [
 /**
  * Event types that indicate compliance risk.
  * NOTE: SESSION_ABANDONED is NOT a compliance risk - it triggers immediate purge.
+ * NOTE: AI_USAGE_BLOCKED_NO_APPROVAL is a policy violation, not a compliance risk
  */
 const COMPLIANCE_RISK_EVENTS: EyeEventType[] = [
   "PURGE_FAILED",
+  "AI_USAGE_APPROVAL_REVOKED", // Policy-sensitive: revocation is a compliance concern
 ];
 
 /**
@@ -627,12 +636,30 @@ export function computeComplianceStatus(events: EyeEvent[]): ComplianceStatus {
   if (approvalEvents.length > 0) {
     userApprovalStatus = "passed";
   }
+
+  // AI Authorization: Check for approval/revocation events
+  const aiApprovalEvents = events.filter(
+    e => e.event_type === "AI_USAGE_APPROVED_BY_SUPERVISOR" ||
+         e.event_type === "AI_USAGE_APPROVAL_REVOKED"
+  );
+  
+  let aiAuthorizationStatus: ComplianceStatus["aiAuthorizationStatus"] = "missing";
+  if (aiApprovalEvents.length > 0) {
+    // Sort by timestamp descending to get latest
+    const sorted = [...aiApprovalEvents].sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+    aiAuthorizationStatus = sorted[0].event_type === "AI_USAGE_APPROVED_BY_SUPERVISOR"
+      ? "approved"
+      : "revoked";
+  }
   
   return {
     deletionsVerified,
     retainedArtifacts,
     llmComplianceStatus,
     userApprovalStatus,
+    aiAuthorizationStatus,
   };
 }
 

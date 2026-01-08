@@ -71,7 +71,8 @@ export type EventCategory =
   | "EXPORT"
   | "PURGE"
   | "CONFIG"
-  | "ANOMALY";
+  | "ANOMALY"
+  | "GOVERNANCE";
 
 // Tags for event classification
 export type EventTag =
@@ -218,7 +219,22 @@ export type EyeEventType =
   | "ANOMALY_EXPORT_SPIKE"
   | "ALERT_RAISED"
   | "ALERT_ACKNOWLEDGED"
-  | "ALERT_RESOLVED";
+  | "ALERT_RESOLVED"
+
+  // N) Governance & Authorization
+  | "AI_USAGE_APPROVAL_REQUESTED"
+  | "AI_USAGE_APPROVED_BY_SUPERVISOR"
+  | "AI_USAGE_APPROVAL_REVOKED"
+  | "AI_USAGE_BLOCKED_NO_APPROVAL"
+
+  // O) Auditor Access
+  | "AUDITOR_ACCESS_GRANTED"
+  | "AUDITOR_ACCESS_EXPIRED"
+  | "AUDITOR_ACCESS_REVOKED"
+
+  // P) Compliance Export
+  | "COMPLIANCE_EXPORT_GENERATED"
+  | "COMPLIANCE_EXPORT_DOWNLOADED";
 
 /**
  * Exhaustive list of all EyeEventType values.
@@ -351,6 +367,21 @@ export const ALL_EYE_EVENT_TYPES: EyeEventType[] = [
   "ALERT_RAISED",
   "ALERT_ACKNOWLEDGED",
   "ALERT_RESOLVED",
+
+  // N) Governance & Authorization
+  "AI_USAGE_APPROVAL_REQUESTED",
+  "AI_USAGE_APPROVED_BY_SUPERVISOR",
+  "AI_USAGE_APPROVAL_REVOKED",
+  "AI_USAGE_BLOCKED_NO_APPROVAL",
+
+  // O) Auditor Access
+  "AUDITOR_ACCESS_GRANTED",
+  "AUDITOR_ACCESS_EXPIRED",
+  "AUDITOR_ACCESS_REVOKED",
+
+  // P) Compliance Export
+  "COMPLIANCE_EXPORT_GENERATED",
+  "COMPLIANCE_EXPORT_DOWNLOADED",
 ];
 
 // ============================================================
@@ -549,6 +580,21 @@ export const EVENT_CATEGORY_MAP: Record<EyeEventType, EventCategory> = {
   ALERT_RAISED: "ANOMALY",
   ALERT_ACKNOWLEDGED: "ANOMALY",
   ALERT_RESOLVED: "ANOMALY",
+
+  // Governance & Authorization
+  AI_USAGE_APPROVAL_REQUESTED: "GOVERNANCE",
+  AI_USAGE_APPROVED_BY_SUPERVISOR: "GOVERNANCE",
+  AI_USAGE_APPROVAL_REVOKED: "GOVERNANCE",
+  AI_USAGE_BLOCKED_NO_APPROVAL: "GOVERNANCE",
+
+  // Auditor Access
+  AUDITOR_ACCESS_GRANTED: "GOVERNANCE",
+  AUDITOR_ACCESS_EXPIRED: "GOVERNANCE",
+  AUDITOR_ACCESS_REVOKED: "GOVERNANCE",
+
+  // Compliance Export
+  COMPLIANCE_EXPORT_GENERATED: "EXPORT",
+  COMPLIANCE_EXPORT_DOWNLOADED: "EXPORT",
 };
 
 // ============================================================
@@ -677,6 +723,21 @@ export const EVENT_SEVERITY_MAP: Record<EyeEventType, EventSeverity> = {
   ALERT_RAISED: "HIGH",
   ALERT_ACKNOWLEDGED: "INFO",
   ALERT_RESOLVED: "INFO",
+
+  // Governance & Authorization
+  AI_USAGE_APPROVAL_REQUESTED: "INFO",
+  AI_USAGE_APPROVED_BY_SUPERVISOR: "NOTICE",
+  AI_USAGE_APPROVAL_REVOKED: "HIGH",
+  AI_USAGE_BLOCKED_NO_APPROVAL: "HIGH",
+
+  // Auditor Access
+  AUDITOR_ACCESS_GRANTED: "NOTICE",
+  AUDITOR_ACCESS_EXPIRED: "NOTICE",
+  AUDITOR_ACCESS_REVOKED: "NOTICE",
+
+  // Compliance Export
+  COMPLIANCE_EXPORT_GENERATED: "NOTICE",
+  COMPLIANCE_EXPORT_DOWNLOADED: "INFO",
 };
 
 // ============================================================
@@ -736,6 +797,21 @@ export const IMPLEMENTED_EVENTS: EyeEventType[] = [
   "EXPORT_STARTED",
   "EXPORT_COMPLETED",
   "EXPORT_FAILED",
+
+  // Governance & Authorization
+  "AI_USAGE_APPROVAL_REQUESTED",
+  "AI_USAGE_APPROVED_BY_SUPERVISOR",
+  "AI_USAGE_APPROVAL_REVOKED",
+  "AI_USAGE_BLOCKED_NO_APPROVAL",
+
+  // Auditor Access
+  "AUDITOR_ACCESS_GRANTED",
+  "AUDITOR_ACCESS_EXPIRED",
+  "AUDITOR_ACCESS_REVOKED",
+
+  // Compliance Export
+  "COMPLIANCE_EXPORT_GENERATED",
+  "COMPLIANCE_EXPORT_DOWNLOADED",
 ];
 
 // Events that are scaffolded but not yet emitting
