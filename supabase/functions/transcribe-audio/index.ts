@@ -209,6 +209,15 @@ serve(async (req) => {
     const transcriptText = await openAIResponse.text();
     console.log(`[Transcribe] Transcription complete, length: ${transcriptText.length} chars`);
 
+    // Emit TRANSCRIPTION_PROVIDER_USED for audit visibility (PHI-safe metadata only)
+    // This is observational only - does NOT require approval and does NOT block transcription
+    await logEyeEvent(supabase, session_id, "TRANSCRIPTION_PROVIDER_USED", {
+      provider: "openai",
+      model,
+      data_retention_mode: "zero_retention",
+      request_id: jobData.id,
+    });
+
     // Store transcript as ephemeral artifact
     const transcriptTtl = new Date(Date.now() + TRANSCRIPT_TTL_SECONDS * 1000).toISOString();
     const { error: artifactError } = await supabase.from("ephemeral_artifacts").insert({

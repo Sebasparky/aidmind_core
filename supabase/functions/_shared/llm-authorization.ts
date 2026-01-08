@@ -1,7 +1,17 @@
 /**
- * LLM Authorization Guard
+ * LLM Authorization Guard (Generative AI Only)
  * 
- * Enforces AI usage approval before any LLM call.
+ * SCOPE: This guard applies ONLY to GENERATIVE AI (chat/completions via LLM gateway).
+ * It does NOT apply to:
+ * - Transcription (Whisper API) - non-generative audio-to-text
+ * - Redaction (Presidio) - rule-based PHI removal
+ * 
+ * These non-generative processing steps are intentionally excluded because:
+ * 1. They do not generate novel content or reasoning
+ * 2. They use deterministic or specialized models (not chat models)
+ * 3. They are safety/compliance controls, not AI-assisted workflows
+ * 
+ * Enforces supervisor approval before any generative LLM call.
  * If no AI_USAGE_APPROVED_BY_SUPERVISOR event exists in scope,
  * the call is blocked and AI_USAGE_BLOCKED_NO_APPROVAL is emitted.
  */

@@ -1,8 +1,13 @@
 /**
  * Governance Feature Tests
  * 
- * Tests for AI Authorization, Auditor Access, and Compliance Export.
+ * Tests for Generative AI Authorization, Auditor Access, and Compliance Export.
  * Run with: npx vitest run src/lib/eye/governance.test.ts
+ * 
+ * SCOPE CLARITY:
+ * - Authorization gates apply ONLY to generative AI (chat/completions)
+ * - Transcription (Whisper) and redaction (Presidio) are NON-generative
+ * - Non-generative steps do NOT require supervisor approval
  */
 
 import { describe, it, expect } from "vitest";
@@ -62,10 +67,98 @@ describe("Governance Event Taxonomy", () => {
 });
 
 // ============================================================
-// AI AUTHORIZATION STATUS TESTS
+// TRANSCRIPTION PROVIDER VISIBILITY EVENT TESTS
 // ============================================================
 
-describe("AI Authorization Status in Verdict", () => {
+describe("TRANSCRIPTION_PROVIDER_USED Event", () => {
+  it("exists in ALL_EYE_EVENT_TYPES", () => {
+    expect(ALL_EYE_EVENT_TYPES).toContain("TRANSCRIPTION_PROVIDER_USED");
+  });
+
+  it("has category TRANSCRIPTION (not GOVERNANCE)", () => {
+    expect(EVENT_CATEGORY_MAP["TRANSCRIPTION_PROVIDER_USED"]).toBe("TRANSCRIPTION");
+  });
+
+  it("has severity INFO (observational, non-blocking)", () => {
+    expect(EVENT_SEVERITY_MAP["TRANSCRIPTION_PROVIDER_USED"]).toBe("INFO");
+  });
+
+  it("is separate from governance events (does not require approval)", () => {
+    // Governance events are in GOVERNANCE category
+    // TRANSCRIPTION_PROVIDER_USED must NOT be in GOVERNANCE category
+    const governanceCategory = EVENT_CATEGORY_MAP["AI_USAGE_APPROVED_BY_SUPERVISOR"];
+    const transcriptionProviderCategory = EVENT_CATEGORY_MAP["TRANSCRIPTION_PROVIDER_USED"];
+    
+    expect(governanceCategory).toBe("GOVERNANCE");
+    expect(transcriptionProviderCategory).not.toBe("GOVERNANCE");
+    expect(transcriptionProviderCategory).toBe("TRANSCRIPTION");
+  });
+});
+
+// ============================================================
+// SCOPE CLARITY TESTS
+// ============================================================
+
+describe("Generative AI Scope Clarity", () => {
+  it("authorization events are categorized as GOVERNANCE", () => {
+    const authEvents = [
+      "AI_USAGE_APPROVAL_REQUESTED",
+      "AI_USAGE_APPROVED_BY_SUPERVISOR",
+      "AI_USAGE_APPROVAL_REVOKED",
+      "AI_USAGE_BLOCKED_NO_APPROVAL",
+    ];
+    
+    for (const eventType of authEvents) {
+      expect(EVENT_CATEGORY_MAP[eventType as keyof typeof EVENT_CATEGORY_MAP]).toBe("GOVERNANCE");
+    }
+  });
+
+  it("transcription events are NOT categorized as GOVERNANCE", () => {
+    const transcriptionEvents = [
+      "TRANSCRIPTION_JOB_QUEUED",
+      "TRANSCRIPTION_STARTED",
+      "TRANSCRIPTION_COMPLETED",
+      "TRANSCRIPTION_FAILED",
+      "TRANSCRIPTION_PROVIDER_USED",
+    ];
+    
+    for (const eventType of transcriptionEvents) {
+      expect(EVENT_CATEGORY_MAP[eventType as keyof typeof EVENT_CATEGORY_MAP]).toBe("TRANSCRIPTION");
+      expect(EVENT_CATEGORY_MAP[eventType as keyof typeof EVENT_CATEGORY_MAP]).not.toBe("GOVERNANCE");
+    }
+  });
+
+  it("redaction events are NOT categorized as GOVERNANCE", () => {
+    const redactionEvents = [
+      "REDACTION_STARTED",
+      "REDACTION_COMPLETED",
+      "REDACTION_FAILED",
+    ];
+    
+    for (const eventType of redactionEvents) {
+      expect(EVENT_CATEGORY_MAP[eventType as keyof typeof EVENT_CATEGORY_MAP]).toBe("REDACTION");
+      expect(EVENT_CATEGORY_MAP[eventType as keyof typeof EVENT_CATEGORY_MAP]).not.toBe("GOVERNANCE");
+    }
+  });
+
+  it("LLM (generative) events are in GENERATION category", () => {
+    const llmEvents = [
+      "LLM_CALL_STARTED",
+      "LLM_CALL_COMPLETED",
+      "LLM_CALL_FAILED",
+    ];
+    
+    for (const eventType of llmEvents) {
+      expect(EVENT_CATEGORY_MAP[eventType as keyof typeof EVENT_CATEGORY_MAP]).toBe("GENERATION");
+    }
+  });
+});
+
+// ============================================================
+// GENERATIVE AI AUTHORIZATION STATUS TESTS
+// ============================================================
+
+describe("Generative AI Authorization Status in Verdict", () => {
   it("returns 'missing' when no authorization events exist", () => {
     const events: any[] = [];
     const status = computeComplianceStatus(events);
