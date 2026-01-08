@@ -52,7 +52,8 @@ export type ReasonCode =
   | "UNAUTHORIZED"
   | "INTERNAL_ERROR"
   | "RETRY_EXHAUSTED"
-  | "CANCELLED";
+  | "CANCELLED"
+  | "INACTIVITY_TIMEOUT";  // Observational: no activity signals for configured safety window
 
 // Event categories for filtering
 export type EventCategory =
@@ -104,6 +105,22 @@ export type EyeEventType =
   | "SESSION_FINISH_CLICKED"
   | "SESSION_CLOSED"
   | "SESSION_CANCELLED"
+  /**
+   * SESSION_ABANDONED: Observational, non-blaming terminal event.
+   * 
+   * Emitted when no activity signals are received for the configured safety window.
+   * This is NOT user intent — it is a system-observed timeout.
+   * 
+   * Design rationale:
+   * - Timeout is data-risk driven, not UX-driven
+   * - Purging happens immediately upon detection
+   * - No PHI is retained without liveness signals
+   * - User intent is NEVER claimed or inferred
+   * 
+   * Always includes: confidence: "system_observed", reason_code: "INACTIVITY_TIMEOUT"
+   * Never includes: actor_type: "user"
+   */
+  | "SESSION_ABANDONED"
 
   // Save for Later / Resume Draft
   | "WIP_BUNDLE_EXPORTED"
@@ -235,6 +252,7 @@ export const ALL_EYE_EVENT_TYPES: EyeEventType[] = [
   "SESSION_FINISH_CLICKED",
   "SESSION_CLOSED",
   "SESSION_CANCELLED",
+  "SESSION_ABANDONED",
 
   // Save for Later / Resume Draft
   "WIP_BUNDLE_EXPORTED",
@@ -434,6 +452,7 @@ export const EVENT_CATEGORY_MAP: Record<EyeEventType, EventCategory> = {
   SESSION_FINISH_CLICKED: "SESSION",
   SESSION_CLOSED: "SESSION",
   SESSION_CANCELLED: "SESSION",
+  SESSION_ABANDONED: "SESSION",
   
   // Save for Later / Resume
   WIP_BUNDLE_EXPORTED: "SESSION",
@@ -555,6 +574,9 @@ export const EVENT_SEVERITY_MAP: Record<EyeEventType, EventSeverity> = {
   SESSION_FINISH_CLICKED: "NOTICE",
   SESSION_CLOSED: "NOTICE",
   SESSION_CANCELLED: "NOTICE",
+  // SESSION_ABANDONED: NOTICE (informational safety outcome, not a failure)
+  // This is observational — no user intent is claimed
+  SESSION_ABANDONED: "NOTICE",
   
   // Save for Later / Resume
   WIP_BUNDLE_EXPORTED: "NOTICE",
@@ -662,9 +684,11 @@ export const EVENT_SEVERITY_MAP: Record<EyeEventType, EventSeverity> = {
 export const IMPLEMENTED_EVENTS: EyeEventType[] = [
   // Session lifecycle
   "SESSION_STARTED",
+  "SESSION_HEARTBEAT",
   "SESSION_FINISH_CLICKED",
   "SESSION_CLOSED",
   "SESSION_CANCELLED",
+  "SESSION_ABANDONED",  // Observational safety event
   
   // Save for Later / Resume
   "WIP_BUNDLE_EXPORTED",

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useSessionMachine, SessionState, TimelineItem, ResumeBundle } from "@/hooks/useSessionMachine";
 import { useSessionNavigationGuard } from "@/hooks/useSessionNavigationGuard";
+import { useSessionHeartbeat } from "@/hooks/useSessionHeartbeat";
 import { useNavigationGuard } from "@/contexts/NavigationGuardContext";
 import { useDashboard } from "@/contexts/DashboardContext";
 import { Button } from "@/components/ui/button";
@@ -196,6 +197,13 @@ export default function Session() {
   const canSaveForLater = state === "DRAFT_READY";
   const isDirtySession =
     !isTerminalState && (hasAttemptedStartRef.current || data.sessionId !== "");
+
+  // Session heartbeat: emit liveness signals every 30s
+  // Heartbeats are used to detect abandonment (no activity = auto-purge)
+  useSessionHeartbeat({
+    sessionId: data.sessionId || null,
+    isActive: !isTerminalState && !!data.sessionId,
+  });
 
   // Get the global navigation guard context
   const { setGuard, clearGuard } = useNavigationGuard();

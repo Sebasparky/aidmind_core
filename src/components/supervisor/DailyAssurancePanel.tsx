@@ -188,7 +188,7 @@ export function DailyAssurancePanel({ allEvents, issueCount, onNavigateToTab }: 
             </div>
             
             {/* Outcome breakdown grid */}
-            <div className="grid grid-cols-5 gap-2">
+            <div className="grid grid-cols-6 gap-2">
               <div className="bg-muted/30 rounded-lg p-2 text-center">
                 <CheckCircle2 className="h-3.5 w-3.5 mx-auto mb-0.5 text-[hsl(var(--status-success))]" />
                 <div className="text-lg font-semibold">{outcomes.completed}</div>
@@ -204,6 +204,20 @@ export function DailyAssurancePanel({ allEvents, issueCount, onNavigateToTab }: 
                 <div className="text-lg font-semibold">{outcomes.cancelled}</div>
                 <div className="text-xs text-muted-foreground">Cancelled</div>
               </div>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="bg-muted/30 rounded-lg p-2 text-center cursor-help">
+                      <MinusCircle className="h-3.5 w-3.5 mx-auto mb-0.5 text-muted-foreground" />
+                      <div className="text-lg font-semibold">{outcomes.abandoned}</div>
+                      <div className="text-xs text-muted-foreground">Abandoned</div>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs">
+                    <p className="text-xs">No activity signals were received for the configured safety window. Sensitive artifacts were automatically deleted.</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
               <div className="bg-muted/30 rounded-lg p-2 text-center">
                 <AlertTriangle className="h-3.5 w-3.5 mx-auto mb-0.5 text-destructive" />
                 <div className="text-lg font-semibold">{outcomes.failed}</div>
@@ -213,22 +227,12 @@ export function DailyAssurancePanel({ allEvents, issueCount, onNavigateToTab }: 
                 <PlayCircle className="h-3.5 w-3.5 mx-auto mb-0.5 text-[hsl(var(--status-info))]" />
                 <div className="text-lg font-semibold">{outcomes.inProgress}</div>
                 <div className="text-xs text-muted-foreground">In progress</div>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger>
-                      <HelpCircle className="h-3 w-3 text-muted-foreground/60 mx-auto mt-1" />
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" className="max-w-xs">
-                      <p className="text-xs">Sessions without a terminal outcome recorded (completed, cancelled, or saved).</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
               </div>
             </div>
             
             {/* Reconciliation line */}
             <p className="text-xs text-muted-foreground mt-2 text-center">
-              Total = Completed + Saved + Cancelled + Failed + In progress
+              Total = Completed + Saved + Cancelled + Abandoned + Failed + In progress
             </p>
             
             {/* Active caseworkers (separate metric) */}

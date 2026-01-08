@@ -236,6 +236,9 @@ const EVENT_SEVERITY_MAP: Record<string, EventSeverity> = {
   SESSION_FINISH_CLICKED: "NOTICE",
   SESSION_CLOSED: "NOTICE",
   SESSION_CANCELLED: "NOTICE",
+  // SESSION_ABANDONED: NOTICE (informational safety outcome, not failure)
+  // Observational event — no user intent is claimed
+  SESSION_ABANDONED: "NOTICE",
   WIP_BUNDLE_EXPORTED: "NOTICE",
   
   // Ingest
@@ -277,6 +280,26 @@ const EVENT_SEVERITY_MAP: Record<string, EventSeverity> = {
   LLM_CALL_COMPLETED: "NOTICE",
   LLM_CALL_FAILED: "WARN",
 };
+
+// ============================================================
+// SESSION INACTIVITY CONFIGURATION
+// ============================================================
+
+/**
+ * Maximum time we will retain sensitive artifacts without observed activity.
+ * 
+ * This value represents:
+ * - "Maximum time we will retain sensitive artifacts without liveness signals"
+ * - This is a data-risk threshold, NOT a UX timeout
+ * - After this period without heartbeat, session is marked as ABANDONED
+ * - All ephemeral artifacts are immediately purged
+ * 
+ * Design rationale:
+ * - 30 minutes aligns with regulated-system norms (healthcare, gov, fintech)
+ * - Provides reasonable buffer for network interruptions
+ * - Ensures PHI is not retained indefinitely without activity
+ */
+export const SESSION_INACTIVITY_TIMEOUT_MINUTES = 30;
 
 /**
  * Get default severity for an event type.
