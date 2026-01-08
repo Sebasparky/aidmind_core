@@ -19,6 +19,8 @@ import { SessionsPanel } from "@/components/supervisor/SessionsPanel";
 import { IssuesPanel } from "@/components/supervisor/IssuesPanel";
 import { EventDetailDrawer } from "@/components/supervisor/EventDetailDrawer";
 import { PurgeProofPanel } from "@/components/supervisor/PurgeProofPanel";
+import { AIAuthorizationPanel } from "@/components/supervisor/AIAuthorizationPanel";
+import { ComplianceExportPanel } from "@/components/supervisor/ComplianceExportPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,6 +29,7 @@ import {
   LayoutList, 
   AlertTriangle, 
   ShieldCheck,
+  Settings2,
   Filter,
   X,
   RefreshCw,
@@ -180,9 +183,13 @@ export default function Supervisor() {
                       </Badge>
                     )}
                   </TabsTrigger>
-                  <TabsTrigger value="deletion-proof" className="gap-2">
+                <TabsTrigger value="deletion-proof" className="gap-2">
                     <ShieldCheck className="h-4 w-4" />
                     Data Deletion Proof
+                  </TabsTrigger>
+                  <TabsTrigger value="governance" className="gap-2">
+                    <Settings2 className="h-4 w-4" />
+                    Governance
                   </TabsTrigger>
                 </TabsList>
               </div>
@@ -255,6 +262,13 @@ export default function Supervisor() {
                 allEvents={allEvents}
                 onEventClick={setSelectedEvent}
               />
+            </TabsContent>
+
+            <TabsContent value="governance" className="flex-1 mt-0">
+              <div className="grid gap-6 md:grid-cols-2">
+                <AIAuthorizationPanel />
+                <ComplianceExportPanel />
+              </div>
             </TabsContent>
           </Tabs>
         </main>
