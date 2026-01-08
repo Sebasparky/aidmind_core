@@ -1,6 +1,13 @@
 /**
  * Cleanup Orphan Sessions (Dev) / Detect Abandoned Sessions
  * 
+ * ⚠️ DEV/DEMO ONLY: This function is currently triggered MANUALLY via HTTP request.
+ * For production, this MUST be scheduled as a cron job (every 5-10 minutes).
+ * 
+ * TODO (PRODUCTION): Add Supabase pg_cron or external scheduler to invoke this
+ * function automatically. Without scheduling, abandoned sessions will not be
+ * detected until the next manual invocation.
+ * 
  * This function implements safety-first abandoned session detection:
  * 1. Detects inactivity via loss of heartbeat (not intent)
  * 2. Automatically purges sensitive artifacts
@@ -254,18 +261,70 @@ Deno.serve(async (req) => {
       const now = new Date().toISOString();
       const requestId = `abandon_${sessionId}_${Date.now()}`;
 
-      // 1. Purge ephemeral artifacts immediately
-      const { error: purgeError } = await supabase
+      // 1. Emit PURGE_STARTED with reason_code for audit trail
+      await logEyeEvent(supabase, {
+        session_id: sessionId,
+        event_type: "PURGE_STARTED",
+        request: req,
+        serviceName: SERVICE_NAME,
+        payload: {
+          result: "success",
+          severity: "INFO",
+          reason_code: "INACTIVITY_TIMEOUT",
+          actor_type: "system",
+          actor_id: SERVICE_NAME,
+          confidence: "system_observed",
+          request_id: requestId,
+        },
+      });
+
+      // 2. Purge ephemeral artifacts immediately
+      const { error: purgeError, count: purgedCount } = await supabase
         .from("ephemeral_artifacts")
         .delete()
         .eq("session_id", sessionId);
 
       if (purgeError) {
         console.error(`[${SERVICE_NAME}] Failed to purge artifacts for ${sessionId}:`, purgeError);
+        // Emit PURGE_FAILED
+        await logEyeEvent(supabase, {
+          session_id: sessionId,
+          event_type: "PURGE_FAILED",
+          request: req,
+          serviceName: SERVICE_NAME,
+          payload: {
+            result: "failure",
+            severity: "HIGH",
+            reason_code: "INACTIVITY_TIMEOUT",
+            actor_type: "system",
+            actor_id: SERVICE_NAME,
+            error_message: purgeError.message,
+            request_id: requestId,
+          },
+        });
         // Continue anyway - we still want to mark as abandoned
+      } else {
+        // Emit PURGE_COMPLETED with reason_code for audit differentiation
+        await logEyeEvent(supabase, {
+          session_id: sessionId,
+          event_type: "PURGE_COMPLETED",
+          request: req,
+          serviceName: SERVICE_NAME,
+          payload: {
+            result: "success",
+            severity: "NOTICE",
+            reason_code: "INACTIVITY_TIMEOUT",
+            actor_type: "system",
+            actor_id: SERVICE_NAME,
+            confidence: "system_observed",
+            purged_artifacts_count: purgedCount ?? 0,
+            request_id: requestId,
+          },
+        });
       }
+      insertedEvents++;
 
-      // 2. Update session row - ABANDONED state, set closed_at
+      // 3. Update session row - ABANDONED state, set closed_at
       const { error: updateError } = await supabase
         .from("sessions")
         .update({
@@ -280,7 +339,7 @@ Deno.serve(async (req) => {
       }
       updatedSessions++;
 
-      // 3. Emit SESSION_ABANDONED event with observational semantics
+      // 4. Emit SESSION_ABANDONED event with observational semantics
       // CRITICAL: Never use actor_type: "user" - this is system-observed, not user intent
       await logEyeEvent(supabase, {
         session_id: sessionId,
