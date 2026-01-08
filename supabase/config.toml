@@ -11,3 +11,6 @@ verify_jwt = false
 
 [functions.cleanup-orphan-sessions-dev]
 verify_jwt = false
+
+[functions.llm-gateway]
+verify_jwt = false

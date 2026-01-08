@@ -10,6 +10,7 @@ import Index from "./pages/Index";
 import Calendar from "./pages/Calendar";
 import Session from "./pages/Session";
 import Supervisor from "./pages/Supervisor";
+import Auditor from "./pages/Auditor";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -29,6 +30,7 @@ const App = () => (
                 <Route path="/calendar" element={<Calendar />} />
                 <Route path="/session" element={<Session />} />
                 <Route path="/supervisor" element={<Supervisor />} />
+                <Route path="/auditor" element={<Auditor />} />
                 {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
                 <Route path="*" element={<NotFound />} />
               </Routes>
