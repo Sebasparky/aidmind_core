@@ -321,6 +321,23 @@ Deno.serve(async (req) => {
             request_id: requestId,
           },
         });
+        
+        // Emit EPHEMERAL_SCAN_RESULT for deletion proof consistency
+        await logEyeEvent(supabase, {
+          session_id: sessionId,
+          event_type: "EPHEMERAL_SCAN_RESULT",
+          request: req,
+          serviceName: SERVICE_NAME,
+          payload: {
+            remaining_count: 0,  // Purge succeeded, no remaining artifacts
+            remaining_types: [],
+            severity: "NOTICE",
+            reason_code: "INACTIVITY_TIMEOUT",
+            actor_type: "system",
+            actor_id: SERVICE_NAME,
+            request_id: requestId,
+          },
+        });
       }
       insertedEvents++;
 

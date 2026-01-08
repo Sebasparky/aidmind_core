@@ -24,15 +24,25 @@ interface SessionRequest {
   };
 }
 
+// Purge options for unified reason code tracking
+interface PurgeOptions {
+  purgeReasonCode: string;  // USER_CANCELLED | USER_COMPLETED | INACTIVITY_TIMEOUT | TTL_EXPIRED
+  operator_id?: string;
+  request_id?: string;
+  actor_type?: "user" | "system";
+}
+
 // Purge all ephemeral data for a session
 async function purgeSessionData(
   supabase: any,
   sessionId: string,
-  req: Request
+  req: Request,
+  opts: PurgeOptions
 ) {
-  console.log(`[Purge] Starting purge for session ${sessionId}`);
+  const { purgeReasonCode, operator_id, request_id, actor_type = "user" } = opts;
+  console.log(`[Purge] Starting purge for session ${sessionId}, reason: ${purgeReasonCode}`);
 
-  // Emit PURGE_STARTED
+  // Emit PURGE_STARTED with reason_code
   await logEyeEvent(supabase, {
     session_id: sessionId,
     event_type: "PURGE_STARTED",
@@ -40,6 +50,10 @@ async function purgeSessionData(
     serviceName: SERVICE_NAME,
     payload: {
       severity: "NOTICE",
+      reason_code: purgeReasonCode,
+      actor_type,
+      operator_id,
+      request_id,
     },
   });
 
@@ -73,6 +87,8 @@ async function purgeSessionData(
         payload: {
           count: objectKeys.length,
           severity: "NOTICE",
+          reason_code: purgeReasonCode,
+          request_id,
         },
       });
     }
@@ -123,6 +139,8 @@ async function purgeSessionData(
         serviceName: SERVICE_NAME,
         payload: {
           severity: "NOTICE",
+          reason_code: purgeReasonCode,
+          request_id,
         },
       });
     }
@@ -134,12 +152,14 @@ async function purgeSessionData(
         serviceName: SERVICE_NAME,
         payload: {
           severity: "NOTICE",
+          reason_code: purgeReasonCode,
+          request_id,
         },
       });
     }
   }
 
-  // Emit EPHEMERAL_SCAN_RESULT to indicate all data purged
+  // Emit EPHEMERAL_SCAN_RESULT to indicate all data purged (deletion proof)
   await logEyeEvent(supabase, {
     session_id: sessionId,
     event_type: "EPHEMERAL_SCAN_RESULT",
@@ -149,6 +169,8 @@ async function purgeSessionData(
       remaining_count: 0,
       remaining_types: [],
       severity: "NOTICE",
+      reason_code: purgeReasonCode,
+      request_id,
     },
   });
 
@@ -161,8 +183,12 @@ async function purgeSessionData(
       serviceName: SERVICE_NAME,
       payload: {
         severity: "NOTICE",
+        reason_code: purgeReasonCode,
         audio_deleted: audioDeletedCount,
         artifacts_deleted: artifactsDeletedCount,
+        actor_type,
+        operator_id,
+        request_id,
       },
     });
   } else {
@@ -174,12 +200,16 @@ async function purgeSessionData(
       payload: {
         severity: "HIGH",
         result: "failure",
-        reason_code: "PARTIAL_DELETION",
+        reason_code: purgeReasonCode,
+        failure_reason_code: "PARTIAL_DELETION",
+        actor_type,
+        operator_id,
+        request_id,
       },
     });
   }
 
-  console.log(`[Purge] Completed purge for session ${sessionId}`);
+  console.log(`[Purge] Completed purge for session ${sessionId}, reason: ${purgeReasonCode}`);
   return purgeSuccess;
 }
 
@@ -346,8 +376,13 @@ serve(async (req) => {
           );
         }
 
-        // Purge ephemeral data
-        await purgeSessionData(supabase, session_id, req);
+        // Purge ephemeral data with USER_COMPLETED reason
+        await purgeSessionData(supabase, session_id, req, {
+          purgeReasonCode: "USER_COMPLETED",
+          operator_id,
+          request_id,
+          actor_type: "user",
+        });
 
         // Update session state - CLOSED is the terminal state
         const { error } = await supabase
@@ -369,7 +404,9 @@ serve(async (req) => {
           serviceName: SERVICE_NAME,
           payload: {
             severity: "NOTICE",
-            request_id: request_id,
+            reason_code: "USER_COMPLETED",
+            operator_id,
+            request_id,
           },
         });
 
@@ -389,8 +426,13 @@ serve(async (req) => {
           );
         }
 
-        // Purge ephemeral data
-        await purgeSessionData(supabase, session_id, req);
+        // Purge ephemeral data with USER_CANCELLED reason
+        await purgeSessionData(supabase, session_id, req, {
+          purgeReasonCode: "USER_CANCELLED",
+          operator_id,
+          request_id,
+          actor_type: "user",
+        });
 
         // Update session state - CANCELLED is the terminal state
         const { error } = await supabase
@@ -412,8 +454,9 @@ serve(async (req) => {
           serviceName: SERVICE_NAME,
           payload: {
             severity: "NOTICE",
-            operator_id: operator_id,
-            request_id: request_id,
+            reason_code: "USER_CANCELLED",
+            operator_id,
+            request_id,
           },
         });
 
@@ -433,7 +476,13 @@ serve(async (req) => {
           );
         }
 
-        await purgeSessionData(supabase, session_id, req);
+        // Standalone purge (e.g., manual cleanup) - defaults to USER_REQUESTED
+        await purgeSessionData(supabase, session_id, req, {
+          purgeReasonCode: "USER_REQUESTED",
+          operator_id,
+          request_id,
+          actor_type: operator_id ? "user" : "system",
+        });
 
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },

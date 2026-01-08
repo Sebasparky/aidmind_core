@@ -100,6 +100,7 @@ const ALLOWLIST_LONG_KEYS = new Set([
   "bundle_id",
   "request_id",
   "reason_code",
+  "failure_reason_code",  // Secondary reason for failures (e.g., PARTIAL_DELETION)
   "service_name",
   "session_id",
   "resource_id",

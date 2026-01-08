@@ -41,7 +41,9 @@ export type EventSeverity = "INFO" | "NOTICE" | "WARN" | "HIGH" | "CRITICAL";
 // Reason codes for various event types
 export type ReasonCode =
   | "USER_REQUESTED"
-  | "TTL_EXPIRED"
+  | "USER_CANCELLED"      // User explicitly cancelled session
+  | "USER_COMPLETED"      // User explicitly completed/closed session
+  | "TTL_EXPIRED"         // System TTL expiration
   | "RBAC_DENY"
   | "PROVIDER_ERROR"
   | "VALIDATION_FAILED"
@@ -53,7 +55,8 @@ export type ReasonCode =
   | "INTERNAL_ERROR"
   | "RETRY_EXHAUSTED"
   | "CANCELLED"
-  | "INACTIVITY_TIMEOUT";  // Observational: no activity signals for configured safety window
+  | "INACTIVITY_TIMEOUT"  // Observational: no activity signals for configured safety window
+  | "PARTIAL_DELETION";   // Failure detail: some but not all artifacts deleted
 
 // Event categories for filtering
 export type EventCategory =
