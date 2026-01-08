@@ -1,21 +1,37 @@
-import { createClient } from "npm:@supabase/supabase-js@2";
+/**
+ * Cleanup Orphan Sessions (Dev) / Detect Abandoned Sessions
+ * 
+ * This function implements safety-first abandoned session detection:
+ * 1. Detects inactivity via loss of heartbeat (not intent)
+ * 2. Automatically purges sensitive artifacts
+ * 3. Marks sessions with observational, non-blaming status
+ * 4. Uses neutral, compliance-grade language
+ * 
+ * DESIGN PRINCIPLES:
+ * - Abandonment is OBSERVATIONAL, not intent-based
+ * - Timeout is data-risk driven: "Maximum time we retain artifacts without activity"
+ * - Purging happens immediately upon detection
+ * - User intent is NEVER claimed or inferred
+ * - Aligns with regulated-system norms (healthcare, gov, fintech)
+ */
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+import { createClient } from "npm:@supabase/supabase-js@2";
+import { logEyeEvent, SESSION_INACTIVITY_TIMEOUT_MINUTES, corsHeaders } from "../_shared/eye.ts";
+
+const SERVICE_NAME = "cleanup-orphan-sessions-dev";
 
 interface CleanupRequest {
   dryRun?: boolean;
   daysBack?: number;
-  maxEventCount?: number; // Sessions with this many or fewer events are considered orphans
-  inactiveMinutes?: number; // Sessions with no events in this many minutes are considered abandoned
+  maxEventCount?: number;  // Sessions with this many or fewer events are considered orphans
+  inactiveMinutes?: number;  // Override for SESSION_INACTIVITY_TIMEOUT_MINUTES
 }
 
 interface CleanupResponse {
   matchedSessions: number;
   updatedSessions: number;
   insertedEvents: number;
+  abandonedSessions: number;  // Sessions marked as ABANDONED (distinct from dev cleanup)
   sessionIds: string[];
   dryRun: boolean;
   criteria: {
@@ -24,6 +40,16 @@ interface CleanupResponse {
     inactiveMinutes: number;
   };
 }
+
+/**
+ * Terminal event types that indicate a session has ended normally
+ */
+const TERMINAL_EVENT_TYPES = [
+  "SESSION_CLOSED",
+  "SESSION_CANCELLED",
+  "SESSION_ABANDONED",
+  "WIP_BUNDLE_EXPORTED",
+];
 
 Deno.serve(async (req) => {
   // Handle CORS preflight
@@ -54,10 +80,11 @@ Deno.serve(async (req) => {
       // Empty body is fine, use defaults
     }
 
-    const dryRun = body.dryRun ?? true; // Default to dry run for safety
+    const dryRun = body.dryRun ?? true;  // Default to dry run for safety
     const daysBack = body.daysBack ?? 7;
-    const maxEventCount = body.maxEventCount ?? 3; // Sessions with 3 or fewer events
-    const inactiveMinutes = body.inactiveMinutes ?? 30; // No events in 30 minutes
+    const maxEventCount = body.maxEventCount ?? 3;  // Sessions with 3 or fewer events
+    // Use configured timeout or default from shared config
+    const inactiveMinutes = body.inactiveMinutes ?? SESSION_INACTIVITY_TIMEOUT_MINUTES;
 
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysBack);
@@ -65,7 +92,7 @@ Deno.serve(async (req) => {
     const inactiveCutoff = new Date();
     inactiveCutoff.setMinutes(inactiveCutoff.getMinutes() - inactiveMinutes);
 
-    console.log(`[cleanup-orphan-sessions-dev] Starting cleanup with params:`, {
+    console.log(`[${SERVICE_NAME}] Starting cleanup with params:`, {
       dryRun,
       daysBack,
       maxEventCount,
@@ -84,11 +111,11 @@ Deno.serve(async (req) => {
       .order("created_at", { ascending: false });
 
     if (sessionsError) {
-      console.error("[cleanup-orphan-sessions-dev] Error fetching sessions:", sessionsError);
+      console.error(`[${SERVICE_NAME}] Error fetching sessions:`, sessionsError);
       throw sessionsError;
     }
 
-    console.log(`[cleanup-orphan-sessions-dev] Found ${openSessions?.length || 0} open sessions`);
+    console.log(`[${SERVICE_NAME}] Found ${openSessions?.length || 0} open sessions`);
 
     if (!openSessions || openSessions.length === 0) {
       return new Response(
@@ -96,6 +123,7 @@ Deno.serve(async (req) => {
           matchedSessions: 0,
           updatedSessions: 0,
           insertedEvents: 0,
+          abandonedSessions: 0,
           sessionIds: [],
           dryRun,
           criteria: { daysBack, maxEventCount, inactiveMinutes },
@@ -106,18 +134,19 @@ Deno.serve(async (req) => {
 
     // Step 2: For each open session, check if it has terminal events or is abandoned
     const orphanSessionIds: string[] = [];
+    const abandonedSessionIds: string[] = [];
 
     for (const session of openSessions) {
       // Check for terminal events
       const { data: terminalEvents, error: terminalError } = await supabase
         .from("eye_events")
-        .select("id")
+        .select("id, event_type")
         .eq("session_id", session.session_id)
-        .in("event_type", ["SESSION_CLOSED", "SESSION_CANCELLED", "WIP_BUNDLE_EXPORTED"])
+        .in("event_type", TERMINAL_EVENT_TYPES)
         .limit(1);
 
       if (terminalError) {
-        console.error(`[cleanup-orphan-sessions-dev] Error checking terminal events for ${session.session_id}:`, terminalError);
+        console.error(`[${SERVICE_NAME}] Error checking terminal events for ${session.session_id}:`, terminalError);
         continue;
       }
 
@@ -133,7 +162,7 @@ Deno.serve(async (req) => {
         .eq("session_id", session.session_id);
 
       if (countError) {
-        console.error(`[cleanup-orphan-sessions-dev] Error counting events for ${session.session_id}:`, countError);
+        console.error(`[${SERVICE_NAME}] Error counting events for ${session.session_id}:`, countError);
         continue;
       }
 
@@ -147,7 +176,7 @@ Deno.serve(async (req) => {
         .single();
 
       if (latestError && latestError.code !== "PGRST116") {
-        console.error(`[cleanup-orphan-sessions-dev] Error getting latest event for ${session.session_id}:`, latestError);
+        console.error(`[${SERVICE_NAME}] Error getting latest event for ${session.session_id}:`, latestError);
         continue;
       }
 
@@ -155,31 +184,44 @@ Deno.serve(async (req) => {
         ? new Date(latestEvent.created_at)
         : new Date(session.created_at);
 
-      // Session is orphan if:
-      // 1. Has very few events (maxEventCount or fewer), OR
-      // 2. Has been inactive for too long (no events in inactiveMinutes)
-      const hasLowEventCount = (eventCount || 0) <= maxEventCount;
+      // Session is abandoned if inactive for too long (no heartbeat)
+      // This is the primary abandonment detection mechanism
       const isInactive = lastEventTime < inactiveCutoff;
+      
+      // Session is an orphan if it has very few events (dev cleanup heuristic)
+      const hasLowEventCount = (eventCount || 0) <= maxEventCount;
 
-      if (hasLowEventCount || isInactive) {
-        orphanSessionIds.push(session.session_id);
-        console.log(`[cleanup-orphan-sessions-dev] Orphan session found: ${session.session_id}`, {
+      if (isInactive) {
+        // Inactivity-based abandonment: this is the safety-first path
+        abandonedSessionIds.push(session.session_id);
+        console.log(`[${SERVICE_NAME}] Abandoned session detected: ${session.session_id}`, {
           eventCount,
           lastEventTime: lastEventTime.toISOString(),
-          hasLowEventCount,
-          isInactive,
+          minutesSinceLastEvent: (Date.now() - lastEventTime.getTime()) / (1000 * 60),
+          reason: "INACTIVITY_TIMEOUT",
+        });
+      } else if (hasLowEventCount) {
+        // Low event count: dev cleanup heuristic (separate from abandonment)
+        orphanSessionIds.push(session.session_id);
+        console.log(`[${SERVICE_NAME}] Orphan session found: ${session.session_id}`, {
+          eventCount,
+          lastEventTime: lastEventTime.toISOString(),
+          reason: "LOW_EVENT_COUNT",
         });
       }
     }
 
-    console.log(`[cleanup-orphan-sessions-dev] Identified ${orphanSessionIds.length} orphan sessions`);
+    console.log(`[${SERVICE_NAME}] Identified ${abandonedSessionIds.length} abandoned + ${orphanSessionIds.length} orphan sessions`);
 
-    if (orphanSessionIds.length === 0) {
+    const allSessionsToCleanup = [...abandonedSessionIds, ...orphanSessionIds];
+
+    if (allSessionsToCleanup.length === 0) {
       return new Response(
         JSON.stringify({
           matchedSessions: 0,
           updatedSessions: 0,
           insertedEvents: 0,
+          abandonedSessions: 0,
           sessionIds: [],
           dryRun,
           criteria: { daysBack, maxEventCount, inactiveMinutes },
@@ -192,10 +234,11 @@ Deno.serve(async (req) => {
     if (dryRun) {
       return new Response(
         JSON.stringify({
-          matchedSessions: orphanSessionIds.length,
+          matchedSessions: allSessionsToCleanup.length,
           updatedSessions: 0,
           insertedEvents: 0,
-          sessionIds: orphanSessionIds,
+          abandonedSessions: abandonedSessionIds.length,
+          sessionIds: allSessionsToCleanup,
           dryRun: true,
           criteria: { daysBack, maxEventCount, inactiveMinutes },
         } as CleanupResponse),
@@ -203,11 +246,69 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Step 3: Soft cleanup - update sessions and insert terminal events
+    // Step 3: Process abandoned sessions (safety-first path)
     let updatedSessions = 0;
     let insertedEvents = 0;
 
+    for (const sessionId of abandonedSessionIds) {
+      const now = new Date().toISOString();
+      const requestId = `abandon_${sessionId}_${Date.now()}`;
+
+      // 1. Purge ephemeral artifacts immediately
+      const { error: purgeError } = await supabase
+        .from("ephemeral_artifacts")
+        .delete()
+        .eq("session_id", sessionId);
+
+      if (purgeError) {
+        console.error(`[${SERVICE_NAME}] Failed to purge artifacts for ${sessionId}:`, purgeError);
+        // Continue anyway - we still want to mark as abandoned
+      }
+
+      // 2. Update session row - ABANDONED state, set closed_at
+      const { error: updateError } = await supabase
+        .from("sessions")
+        .update({
+          closed_at: now,
+          state: "ABANDONED",
+        })
+        .eq("session_id", sessionId);
+
+      if (updateError) {
+        console.error(`[${SERVICE_NAME}] Failed to update session ${sessionId}:`, updateError);
+        continue;
+      }
+      updatedSessions++;
+
+      // 3. Emit SESSION_ABANDONED event with observational semantics
+      // CRITICAL: Never use actor_type: "user" - this is system-observed, not user intent
+      await logEyeEvent(supabase, {
+        session_id: sessionId,
+        event_type: "SESSION_ABANDONED",
+        request: req,
+        serviceName: SERVICE_NAME,
+        payload: {
+          result: "success",
+          severity: "NOTICE",
+          reason_code: "INACTIVITY_TIMEOUT",
+          // Actor is SYSTEM, not user - abandonment is observational
+          actor_type: "system",
+          actor_id: SERVICE_NAME,
+          // Observational confidence: we observed no activity, we don't claim intent
+          confidence: "system_observed",
+          request_id: requestId,
+          // Note: No PHI is included
+        },
+      });
+
+      insertedEvents++;
+      console.log(`[${SERVICE_NAME}] Abandoned session processed: ${sessionId}`);
+    }
+
+    // Step 4: Process orphan sessions (dev cleanup path - mark as cancelled)
     for (const sessionId of orphanSessionIds) {
+      const requestId = `orphan_${sessionId}_${Date.now()}`;
+
       // Update session row
       const { error: updateError } = await supabase
         .from("sessions")
@@ -218,12 +319,12 @@ Deno.serve(async (req) => {
         .eq("session_id", sessionId);
 
       if (updateError) {
-        console.error(`[cleanup-orphan-sessions-dev] Failed to update session ${sessionId}:`, updateError);
+        console.error(`[${SERVICE_NAME}] Failed to update session ${sessionId}:`, updateError);
         continue;
       }
       updatedSessions++;
 
-      // Insert backfill Eye event
+      // Insert backfill Eye event (dev cleanup, not abandonment)
       const { error: eventError } = await supabase
         .from("eye_events")
         .insert({
@@ -234,36 +335,38 @@ Deno.serve(async (req) => {
             severity: "NOTICE",
             reason_code: "DEV_CLEANUP_ORPHAN",
             actor_type: "system",
-            actor_id: "cleanup-orphan-sessions-dev",
+            actor_id: SERVICE_NAME,
+            request_id: requestId,
             tags: ["DEV_CLEANUP"],
           },
         });
 
       if (eventError) {
-        console.error(`[cleanup-orphan-sessions-dev] Failed to insert event for ${sessionId}:`, eventError);
+        console.error(`[${SERVICE_NAME}] Failed to insert event for ${sessionId}:`, eventError);
         continue;
       }
       insertedEvents++;
 
-      console.log(`[cleanup-orphan-sessions-dev] Cleaned up session: ${sessionId}`);
+      console.log(`[${SERVICE_NAME}] Orphan session cleaned up: ${sessionId}`);
     }
 
     const response: CleanupResponse = {
-      matchedSessions: orphanSessionIds.length,
+      matchedSessions: allSessionsToCleanup.length,
       updatedSessions,
       insertedEvents,
-      sessionIds: orphanSessionIds,
+      abandonedSessions: abandonedSessionIds.length,
+      sessionIds: allSessionsToCleanup,
       dryRun: false,
       criteria: { daysBack, maxEventCount, inactiveMinutes },
     };
 
-    console.log(`[cleanup-orphan-sessions-dev] Cleanup complete:`, response);
+    console.log(`[${SERVICE_NAME}] Cleanup complete:`, response);
 
     return new Response(JSON.stringify(response), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error: unknown) {
-    console.error("[cleanup-orphan-sessions-dev] Error:", error);
+    console.error(`[${SERVICE_NAME}] Error:`, error);
     const message = error instanceof Error ? error.message : "Unknown error";
     return new Response(
       JSON.stringify({ error: message }),

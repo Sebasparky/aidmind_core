@@ -49,6 +49,13 @@ export interface SessionOutcomes {
   completed: number;
   saved: number;
   cancelled: number;
+  /**
+   * Abandoned: Sessions that ended due to inactivity timeout.
+   * This is an observational outcome, not a failure.
+   * Abandoned sessions are NOT counted as failures or blocked.
+   * They are informational safety outcomes.
+   */
+  abandoned: number;
   failed: number;
   inProgress: number;
   activeCaseworkers: number;
@@ -144,13 +151,26 @@ const RECOVERY_EVENTS: EyeEventType[] = [
   "SESSION_CLOSED",
   "WIP_BUNDLE_EXPORTED", // Saved for later = session can continue
   "SESSION_CANCELLED",   // Intentional end = not blocked
+  "SESSION_ABANDONED",   // System-observed inactivity = terminal (not blocked, just ended)
 ];
 
 /**
  * Event types that indicate compliance risk.
+ * NOTE: SESSION_ABANDONED is NOT a compliance risk - it triggers immediate purge.
  */
 const COMPLIANCE_RISK_EVENTS: EyeEventType[] = [
   "PURGE_FAILED",
+];
+
+/**
+ * Terminal session event types.
+ * These indicate the session has ended (for any reason).
+ */
+const TERMINAL_SESSION_EVENTS: EyeEventType[] = [
+  "SESSION_CLOSED",
+  "SESSION_CANCELLED",
+  "SESSION_ABANDONED",
+  "WIP_BUNDLE_EXPORTED",
 ];
 
 // ============================================================
@@ -420,15 +440,19 @@ export function computeVerdict(counts: ActionCounts, hasEvents: boolean = true):
  * 1. Failed - session has unresolved blocking failure
  * 2. Saved - WIP_BUNDLE_EXPORTED (semantically "saved for later", different from "complete")
  * 3. Cancelled - SESSION_CANCELLED
- * 4. Completed - SESSION_CLOSED (only if not saved/cancelled)
- * 5. In Progress - none of the above
+ * 4. Abandoned - SESSION_ABANDONED (inactivity timeout, observational, not failure)
+ * 5. Completed - SESSION_CLOSED (only if not saved/cancelled/abandoned)
+ * 6. In Progress - none of the above
  * 
  * RATIONALE:
  * - "Saved" wins over "Completed" because WIP_BUNDLE_EXPORTED means the user explicitly
  *   chose to save for later. Even if SESSION_CLOSED also appears, the intent was "save".
  * - "Cancelled" wins over "Completed" because cancellation is intentional termination.
+ * - "Abandoned" is OBSERVATIONAL: no user intent is claimed. It represents:
+ *   "No activity signals were received for the configured safety window."
+ *   It is NOT a failure. It is an informational safety outcome.
  * 
- * GUARANTEE: completed + saved + cancelled + failed + inProgress === sessionsToday
+ * GUARANTEE: completed + saved + cancelled + abandoned + failed + inProgress === sessionsToday
  */
 export function computeSessionOutcomes(events: EyeEvent[]): SessionOutcomes {
   // Group events by session
@@ -441,7 +465,7 @@ export function computeSessionOutcomes(events: EyeEvent[]): SessionOutcomes {
   }
   
   // Determine outcome for each session
-  type Outcome = "completed" | "saved" | "cancelled" | "failed" | "inProgress";
+  type Outcome = "completed" | "saved" | "cancelled" | "abandoned" | "failed" | "inProgress";
   const outcomes = new Map<string, Outcome>();
   
   for (const [sessionId, sessionEvents] of eventsBySession) {
@@ -458,31 +482,40 @@ export function computeSessionOutcomes(events: EyeEvent[]): SessionOutcomes {
       continue;
     }
     
-    // Priority 3: Cancelled - wins over Completed
+    // Priority 3: Cancelled - wins over Completed and Abandoned
     const isCancelled = sessionEvents.some(e => e.event_type === "SESSION_CANCELLED");
     if (isCancelled) {
       outcomes.set(sessionId, "cancelled");
       continue;
     }
     
-    // Priority 4: Completed (SESSION_CLOSED)
+    // Priority 4: Abandoned (inactivity timeout) - observational, not failure
+    // This is a terminal state but NOT a failure
+    const isAbandoned = sessionEvents.some(e => e.event_type === "SESSION_ABANDONED");
+    if (isAbandoned) {
+      outcomes.set(sessionId, "abandoned");
+      continue;
+    }
+    
+    // Priority 5: Completed (SESSION_CLOSED)
     const isClosed = sessionEvents.some(e => e.event_type === "SESSION_CLOSED");
     if (isClosed) {
       outcomes.set(sessionId, "completed");
       continue;
     }
     
-    // Priority 5: In Progress
+    // Priority 6: In Progress
     outcomes.set(sessionId, "inProgress");
   }
   
   // Count outcomes
-  let completed = 0, saved = 0, cancelled = 0, failed = 0, inProgress = 0;
+  let completed = 0, saved = 0, cancelled = 0, abandoned = 0, failed = 0, inProgress = 0;
   for (const outcome of outcomes.values()) {
     switch (outcome) {
       case "completed": completed++; break;
       case "saved": saved++; break;
       case "cancelled": cancelled++; break;
+      case "abandoned": abandoned++; break;
       case "failed": failed++; break;
       case "inProgress": inProgress++; break;
     }
@@ -498,6 +531,7 @@ export function computeSessionOutcomes(events: EyeEvent[]): SessionOutcomes {
     completed,
     saved,
     cancelled,
+    abandoned,
     failed,
     inProgress,
     activeCaseworkers,
@@ -659,6 +693,7 @@ Session Counts (${rangeLabel}):
 - Completed: ${outcomes.completed}
 - Saved for later: ${outcomes.saved}
 - Cancelled: ${outcomes.cancelled}
+- Abandoned (inactivity): ${outcomes.abandoned}
 - Failed: ${outcomes.failed}
 - In progress: ${outcomes.inProgress}
 
