@@ -30,8 +30,12 @@ interface CleanupResult {
 }
 
 /**
- * DEV-only button to cleanup orphan sessions.
- * Shows in Supervisor UI header area.
+ * ⚠️ DEV/DEMO ONLY: Manual trigger for orphan/abandoned session cleanup.
+ * 
+ * In production, this cleanup MUST be scheduled (cron) to run automatically
+ * every 5-10 minutes. This button exists only for development testing.
+ * 
+ * TODO (PRODUCTION): Replace with scheduled pg_cron job or external scheduler.
  */
 export function OrphanCleanupButton() {
   const [open, setOpen] = useState(false);

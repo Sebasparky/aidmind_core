@@ -18,8 +18,17 @@
 import { useEffect, useRef, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
-// Heartbeat interval in milliseconds (30 seconds)
-const HEARTBEAT_INTERVAL_MS = 30 * 1000;
+/**
+ * Heartbeat interval: 2 minutes (120 seconds)
+ * 
+ * RATIONALE (noise reduction):
+ * - 30-second heartbeats create ~120 events/hour per session
+ * - With 20 concurrent users, this is ~2,400 events/hour
+ * - 2-minute intervals reduce this to ~600 events/hour (75% reduction)
+ * - Still provides reliable inactivity detection within the 30-minute timeout window
+ * - ~15 heartbeats expected before inactivity threshold is reached
+ */
+const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000;
 
 interface UseSessionHeartbeatOptions {
   sessionId: string | null;
