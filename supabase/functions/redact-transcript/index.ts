@@ -2226,14 +2226,14 @@ serve(async (req) => {
   // Run env var sanity check at function start
   logEnvVarSanityCheck();
   
-  // Handle CORS preflight
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
-
   // MANDATORY security check - no exceptions, no overrides
   const securityResponse = await enforceTransportSecurity(req);
   if (securityResponse) return securityResponse;
+
+  // Handle CORS preflight (after security check)
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: buildCorsSecurityHeaders(req) });
+  }
 
   try {
     const openAIApiKey = Deno.env.get("aidmind-key");
@@ -2250,7 +2250,7 @@ serve(async (req) => {
     if (!session_id) {
       return new Response(
         JSON.stringify({ error: "session_id is required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 400, headers: buildCorsSecurityHeaders(req) }
       );
     }
 
@@ -2266,7 +2266,7 @@ serve(async (req) => {
       if (!artifact) {
         return new Response(
           JSON.stringify({ error: "No transcript found for session" }),
-          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          { status: 404, headers: buildCorsSecurityHeaders(req) }
         );
       }
       transcript = artifact.content;
@@ -2361,13 +2361,13 @@ serve(async (req) => {
         redaction: result.redaction,
         minimized_text_source: result.minimized_text_source,
       }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { headers: buildCorsSecurityHeaders(req) }
     );
   } catch (error) {
     console.error("Redaction error:", error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: buildCorsSecurityHeaders(req) }
     );
   }
 });
