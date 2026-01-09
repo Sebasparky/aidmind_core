@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { logEyeEvent, corsHeaders } from "../_shared/eye.ts";
+import { logEyeEvent } from "../_shared/eye.ts";
+import { corsSecurityHeaders as corsHeaders, isSecureRequest, createInsecureRequestResponse } from "../_shared/security-headers.ts";
 
 const SERVICE_NAME = "session-manager";
 
@@ -214,8 +215,14 @@ async function purgeSessionData(
 }
 
 serve(async (req) => {
+  // CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
+  }
+
+  // Reject insecure requests (API endpoints)
+  if (!isSecureRequest(req)) {
+    return createInsecureRequestResponse();
   }
 
   try {

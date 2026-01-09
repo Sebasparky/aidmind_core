@@ -476,11 +476,8 @@ export async function logEyeEvent(
 }
 
 // ============================================================
-// CORS HEADERS (SHARED)
+// CORS HEADERS (SHARED) - DEPRECATED, use security-headers.ts
 // ============================================================
 
-export const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-};
+// Re-export from security-headers for backwards compatibility
+export { corsSecurityHeaders as corsHeaders } from "./security-headers.ts";

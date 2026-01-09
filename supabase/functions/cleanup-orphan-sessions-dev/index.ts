@@ -23,7 +23,8 @@
  */
 
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { logEyeEvent, SESSION_INACTIVITY_TIMEOUT_MINUTES, corsHeaders } from "../_shared/eye.ts";
+import { logEyeEvent, SESSION_INACTIVITY_TIMEOUT_MINUTES } from "../_shared/eye.ts";
+import { corsSecurityHeaders as corsHeaders, isSecureRequest, createInsecureRequestResponse } from "../_shared/security-headers.ts";
 
 const SERVICE_NAME = "cleanup-orphan-sessions-dev";
 
@@ -62,6 +63,11 @@ Deno.serve(async (req) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
+  }
+
+  // Reject insecure requests (API endpoints)
+  if (!isSecureRequest(req)) {
+    return createInsecureRequestResponse();
   }
 
   // Only allow in development environment

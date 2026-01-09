@@ -1,7 +1,8 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { logEyeEvent as sharedLogEyeEvent, corsHeaders } from "../_shared/eye.ts";
+import { logEyeEvent as sharedLogEyeEvent } from "../_shared/eye.ts";
+import { corsSecurityHeaders as corsHeaders, isSecureRequest, createInsecureRequestResponse } from "../_shared/security-headers.ts";
 
 const SERVICE_NAME = "redact-transcript";
 
@@ -2225,8 +2226,14 @@ serve(async (req) => {
   // Run env var sanity check at function start
   logEnvVarSanityCheck();
   
+  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
+  }
+
+  // Reject insecure requests (API endpoints)
+  if (!isSecureRequest(req)) {
+    return createInsecureRequestResponse();
   }
 
   try {
