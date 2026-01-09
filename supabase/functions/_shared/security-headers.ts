@@ -736,11 +736,12 @@ function getAllowedOrigins(): string[] {
  *   to prevent example.com.evil.com from matching *.example.com
  * 
  * @param origin - The Origin header value from the request
- * @returns The validated origin if allowed, or "null" if not
+ * @returns The validated origin if allowed, or undefined if disallowed
+ *          (Never returns "null" - disallowed origins get undefined)
  */
-function validateOrigin(origin: string | null): string {
+function validateOrigin(origin: string | null): string | undefined {
   if (!origin) {
-    return "null";
+    return undefined;
   }
   
   const normalizedOrigin = origin.trim().toLowerCase();
@@ -755,12 +756,12 @@ function validateOrigin(origin: string | null): string {
     originUrl = new URL(normalizedOrigin);
   } catch {
     console.warn("[SECURITY] CORS: Invalid origin URL rejected:", normalizedOrigin);
-    return "null";
+    return undefined;
   }
   
   if (originUrl.protocol !== "https:" && !isDev) {
     console.warn("[SECURITY] CORS: Rejecting non-HTTPS origin in production:", normalizedOrigin);
-    return "null";
+    return undefined;
   }
   
   const allowedOrigins = getAllowedOrigins();
@@ -771,7 +772,7 @@ function validateOrigin(origin: string | null): string {
       return origin; // Allow any origin in development for testing
     }
     console.warn("[SECURITY] CORS: No ALLOWED_ORIGINS configured, rejecting origin:", normalizedOrigin);
-    return "null";
+    return undefined;
   }
   
   // Check if origin is in allowlist (exact match)
@@ -814,7 +815,7 @@ function validateOrigin(origin: string | null): string {
   }
   
   console.warn("[SECURITY] CORS: Origin not in allowlist:", normalizedOrigin);
-  return "null";
+  return undefined;
 }
 
 /**
@@ -822,7 +823,7 @@ function validateOrigin(origin: string | null): string {
  * 
  * CRITICAL: This function computes CORS headers based on the request's Origin.
  * - If Origin is in allowlist → set Access-Control-Allow-Origin to that origin
- * - If Origin is NOT in allowlist → set Access-Control-Allow-Origin to "null"
+ * - If Origin is NOT in allowlist → omit Access-Control-Allow-Origin entirely
  * - Access-Control-Allow-Credentials is NOT set (cookies not needed cross-origin)
  * 
  * @param req - The incoming request
@@ -832,8 +833,7 @@ export function buildCorsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get("origin");
   const validatedOrigin = validateOrigin(origin);
   
-  return {
-    "Access-Control-Allow-Origin": validatedOrigin,
+  const headers: Record<string, string> = {
     // Only allow headers we actually need:
     // - content-type: for JSON payloads
     // - authorization: for bearer tokens (used by authenticated endpoints)
@@ -845,6 +845,14 @@ export function buildCorsHeaders(req: Request): Record<string, string> {
     // NOTE: Access-Control-Allow-Credentials is NOT set (default: false)
     // We do not use cookies cross-origin
   };
+  
+  // Only set Access-Control-Allow-Origin if origin is validated
+  // Disallowed origins get NO ACAO header (not "null")
+  if (validatedOrigin) {
+    headers["Access-Control-Allow-Origin"] = validatedOrigin;
+  }
+  
+  return headers;
 }
 
 /**
