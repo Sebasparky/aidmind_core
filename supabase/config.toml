@@ -1,16 +1,16 @@
 project_id = "qdbfjxmxnxtubltahuqe"
 
 [functions.transcribe-audio]
-verify_jwt = false
+verify_jwt = true
 
 [functions.session-manager]
-verify_jwt = false
+verify_jwt = true
 
 [functions.redact-transcript]
-verify_jwt = false
+verify_jwt = true
 
 [functions.cleanup-orphan-sessions-dev]
-verify_jwt = false
+verify_jwt = true
 
 [functions.llm-gateway]
-verify_jwt = false
+verify_jwt = true
