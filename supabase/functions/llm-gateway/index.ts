@@ -10,7 +10,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logEyeEvent, deriveTenantId } from "../_shared/eye.ts";
 import { 
-  corsSecurityHeaders, 
+  buildCorsSecurityHeaders, 
   enforceTransportSecurity,
   secureFetch,
 } from "../_shared/security-headers.ts";
@@ -30,9 +30,12 @@ Deno.serve(async (req) => {
   const securityResponse = await enforceTransportSecurity(req);
   if (securityResponse) return securityResponse;
 
+  // Build CORS headers with validated origin
+  const corsHeaders = buildCorsSecurityHeaders(req);
+
   // CORS preflight (only after security check passes)
   if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: corsSecurityHeaders });
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -46,7 +49,7 @@ Deno.serve(async (req) => {
     if (!session_id) {
       return new Response(
         JSON.stringify({ error: "session_id is required" }),
-        { status: 400, headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -71,7 +74,7 @@ Deno.serve(async (req) => {
           reason: authResult.reason,
           message: "AI usage must be approved by a supervisor before LLM calls are allowed.",
         }),
-        { status: 403, headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -119,7 +122,7 @@ Deno.serve(async (req) => {
 
       return new Response(
         JSON.stringify({ error: "LLM service not configured" }),
-        { status: 500, headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -162,7 +165,7 @@ Deno.serve(async (req) => {
 
       return new Response(
         JSON.stringify({ error: "LLM call failed", code: llmResult.error?.code }),
-        { status: 502, headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
+        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -191,7 +194,7 @@ Deno.serve(async (req) => {
 
       return new Response(
         JSON.stringify({ error: "LLM call failed", status: llmResponse.status }),
-        { status: llmResponse.status, headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
+        { status: llmResponse.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -228,7 +231,7 @@ Deno.serve(async (req) => {
         model,
         usage: llmResponseData.usage,
       }),
-      { status: 200, headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 
   } catch (error) {
@@ -252,7 +255,7 @@ Deno.serve(async (req) => {
 
     return new Response(
       JSON.stringify({ error: "Internal server error" }),
-      { status: 500, headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });
