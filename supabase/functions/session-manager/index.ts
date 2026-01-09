@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { logEyeEvent } from "../_shared/eye.ts";
-import { corsSecurityHeaders as corsHeaders, isSecureRequest, createInsecureRequestResponse } from "../_shared/security-headers.ts";
+import { corsSecurityHeaders as corsHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
 
 const SERVICE_NAME = "session-manager";
 
@@ -220,10 +220,9 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  // Reject insecure requests (API endpoints)
-  if (!isSecureRequest(req)) {
-    return createInsecureRequestResponse();
-  }
+  // MANDATORY security check - no exceptions, no overrides
+  const securityResponse = enforceTransportSecurity(req);
+  if (securityResponse) return securityResponse;
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;

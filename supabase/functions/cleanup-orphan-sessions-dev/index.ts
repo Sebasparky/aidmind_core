@@ -24,7 +24,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { logEyeEvent, SESSION_INACTIVITY_TIMEOUT_MINUTES } from "../_shared/eye.ts";
-import { corsSecurityHeaders as corsHeaders, isSecureRequest, createInsecureRequestResponse } from "../_shared/security-headers.ts";
+import { corsSecurityHeaders as corsHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
 
 const SERVICE_NAME = "cleanup-orphan-sessions-dev";
 
@@ -65,10 +65,9 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  // Reject insecure requests (API endpoints)
-  if (!isSecureRequest(req)) {
-    return createInsecureRequestResponse();
-  }
+  // MANDATORY security check - no exceptions, no overrides
+  const securityResponse = enforceTransportSecurity(req);
+  if (securityResponse) return securityResponse;
 
   // Only allow in development environment
   const environment = Deno.env.get("ENVIRONMENT") || "dev";
