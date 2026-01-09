@@ -60,21 +60,19 @@ const CSP_VALUE = [
 /**
  * Valid Supabase Edge Functions host suffix.
  * 
- * SECURITY: Requests MUST arrive via Supabase infrastructure.
- * The host is set by the platform and cannot be spoofed by clients.
+ * SECURITY: Edge functions are ONLY served from Supabase infrastructure.
+ * The host is set by the platform load balancer and cannot be spoofed by clients.
+ * 
+ * NOTE: *.lovableproject.com is frontend hosting ONLY, not edge function ingress.
+ * Do not add it here - edge functions MUST come through Supabase.
  */
 const SUPABASE_FUNCTIONS_HOST_SUFFIX = ".supabase.co";
 
 /**
  * Valid functions path prefix.
- * All edge functions are routed through /functions/v1/
+ * All Supabase edge functions are routed through /functions/v1/
  */
 const SUPABASE_FUNCTIONS_PATH_PREFIX = "/functions/v1/";
-
-/**
- * Lovable Cloud host suffix for alternate deployment.
- */
-const LOVABLE_FUNCTIONS_HOST_SUFFIX = ".lovableproject.com";
 
 // ============================================================
 // SECURITY HEADERS OBJECT
@@ -425,31 +423,36 @@ function isDevelopmentEnvironment(): boolean {
 }
 
 /**
- * Verify that the request host matches expected platform ingress.
+ * Verify request arrives via Supabase Edge Functions ingress.
  * 
  * CRITICAL: This uses the HOST from the request URL which is set by the
  * platform load balancer - NOT spoofable by clients.
  * 
  * We do NOT rely on x-forwarded-for or x-real-ip as these can be spoofed.
+ * 
+ * SECURITY CONSTRAINTS:
+ * - Host MUST end with ".supabase.co"
+ * - Path MUST start with "/functions/v1/"
+ * - NO other ingress points are valid for edge functions
+ * 
+ * NOTE: *.lovableproject.com is frontend hosting only.
+ * Edge functions are exclusively served from Supabase infrastructure.
  */
-function verifyPlatformIngress(req: Request): { verified: boolean; host: string; path: string } {
+function verifySupabaseEdgeFunctionIngress(req: Request): { verified: boolean; host: string; path: string } {
   try {
     const url = new URL(req.url);
     const host = url.host.toLowerCase();
     const path = url.pathname;
     
-    // Check if host matches Supabase functions domain
+    // Check if host matches Supabase functions domain ONLY
+    // Edge functions are NEVER served from *.lovableproject.com
     const isSupabaseHost = host.endsWith(SUPABASE_FUNCTIONS_HOST_SUFFIX);
-    const isLovableHost = host.endsWith(LOVABLE_FUNCTIONS_HOST_SUFFIX);
-    const isValidHost = isSupabaseHost || isLovableHost;
     
-    // Check if path starts with functions prefix (for Supabase)
-    const isValidPath = isSupabaseHost 
-      ? path.startsWith(SUPABASE_FUNCTIONS_PATH_PREFIX) 
-      : true; // Lovable might use different paths
+    // Path MUST start with /functions/v1/ for Supabase edge functions
+    const isValidPath = path.startsWith(SUPABASE_FUNCTIONS_PATH_PREFIX);
     
     return {
-      verified: isValidHost && isValidPath,
+      verified: isSupabaseHost && isValidPath,
       host,
       path,
     };
@@ -457,6 +460,12 @@ function verifyPlatformIngress(req: Request): { verified: boolean; host: string;
     return { verified: false, host: "invalid", path: "invalid" };
   }
 }
+
+/**
+ * @deprecated Use verifySupabaseEdgeFunctionIngress instead.
+ * This alias exists for backward compatibility during migration.
+ */
+const verifyPlatformIngress = verifySupabaseEdgeFunctionIngress;
 
 /**
  * Verify request transport security.

@@ -78,12 +78,14 @@ Deno.test({
 });
 
 Deno.test({
-  name: "Transport Guard - Production: Valid Lovable host + x-forwarded-proto=https → ALLOWED",
+  name: "Transport Guard - Production: Lovable host (frontend only) → REJECTED (not valid edge function ingress)",
   async fn() {
     const originalEnv = Deno.env.get("ENVIRONMENT");
     Deno.env.set("ENVIRONMENT", "production");
     
     try {
+      // SECURITY: *.lovableproject.com is frontend hosting ONLY
+      // Edge functions are exclusively served from *.supabase.co/functions/v1/
       const req = createMockRequest({
         url: "https://my-app.lovableproject.com/api/test",
         headers: {
@@ -92,10 +94,11 @@ Deno.test({
       });
       
       const isSecure = isSecureRequest(req);
-      assertEquals(isSecure, true, "Request with valid Lovable host and HTTPS proto should be allowed");
+      assertEquals(isSecure, false, "Lovable host should be REJECTED - edge functions only use Supabase ingress");
       
       const response = await enforceTransportSecurity(req);
-      assertEquals(response, null, "enforceTransportSecurity should return null for valid requests");
+      assertExists(response, "enforceTransportSecurity should return a Response for Lovable host");
+      assertEquals(response.status, 403, "Lovable host should return 403 Forbidden");
     } finally {
       if (originalEnv !== undefined) {
         Deno.env.set("ENVIRONMENT", originalEnv);
