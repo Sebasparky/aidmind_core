@@ -425,10 +425,8 @@ function isDevelopmentEnvironment(): boolean {
 /**
  * Verify request arrives via Supabase Edge Functions ingress.
  * 
- * CRITICAL: This uses the HOST from the request URL which is set by the
- * platform load balancer - NOT spoofable by clients.
- * 
- * We do NOT rely on x-forwarded-for or x-real-ip as these can be spoofed.
+ * Host/path invariants are used to validate expected ingress patterns;
+ * we still fail closed unless all requirements match.
  * 
  * SECURITY CONSTRAINTS:
  * - Host MUST end with ".supabase.co"
@@ -467,24 +465,41 @@ function verifySupabaseEdgeFunctionIngress(req: Request): { verified: boolean; h
  */
 const verifyPlatformIngress = verifySupabaseEdgeFunctionIngress;
 
+// ============================================================
+// TRANSPORT SECURITY TRUST MODEL
+// ============================================================
+// 
+// We do NOT trust client-provided headers such as x-forwarded-for.
+// 
+// We require multiple independent signals (x-forwarded-proto + URL protocol + host/path).
+// 
+// TRUSTED SIGNALS:
+// - x-forwarded-proto: Set by platform load balancer, indicates client→LB protocol
+// - URL protocol: Set by platform, indicates LB→function protocol
+// - URL host/path: Set by platform routing, validates expected ingress
+// 
+// UNTRUSTED (never rely on):
+// - x-forwarded-for: Easily spoofed by clients
+// - x-real-ip: Easily spoofed by clients
+// - Any single signal alone: Require correlation of multiple signals
+// ============================================================
+
 /**
  * Verify request transport security.
  * 
  * CRITICAL: This function enforces strict HTTPS requirements.
  * - NO per-route overrides
  * - NO debug mode
- * - NO exceptions (except development environment)
+ * - NO exceptions (except narrow development environment)
  * - FAIL CLOSED in production if cannot prove security
  * 
  * Production proof requires ALL of:
  * 1. x-forwarded-proto === "https"
- * 2. Host matches *.supabase.co or *.lovableproject.com
- * 3. Path starts with /functions/v1/ (for Supabase)
+ * 2. URL protocol === "https:"
+ * 3. Host matches *.supabase.co AND path starts with /functions/v1/
  * 
- * We do NOT trust:
- * - x-forwarded-for (spoofable by clients)
- * - x-real-ip (spoofable by clients)
- * - Missing x-forwarded-proto with https: URL (removed exception path)
+ * Host/path invariants are used to validate expected ingress patterns;
+ * we still fail closed unless all requirements match.
  * 
  * @returns TransportSecurityResult with verification details
  */
@@ -492,12 +507,12 @@ function verifyTransportSecurity(req: Request): TransportSecurityResult {
   const environment = Deno.env.get("ENVIRONMENT") ?? "production";
   const isDev = isDevelopmentEnvironment();
   
-  // Get protocol header (set by edge/proxy, not client)
+  // Get protocol header (set by platform load balancer, not client)
   const proto = req.headers.get("x-forwarded-proto")?.toLowerCase();
   
   // Verify platform ingress using host/path invariants
   const ingressCheck = verifyPlatformIngress(req);
-  
+
   // ============================================================
   // DEVELOPMENT EXCEPTION (ONLY when ENVIRONMENT === "development")
   // 
