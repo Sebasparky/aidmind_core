@@ -500,31 +500,60 @@ function verifyTransportSecurity(req: Request): TransportSecurityResult {
   
   // ============================================================
   // DEVELOPMENT EXCEPTION (ONLY when ENVIRONMENT === "development")
+  // 
+  // Development exception is intentionally narrow to avoid accidental
+  // insecure deployments. Only localhost or valid Supabase ingress allowed.
   // ============================================================
   if (isDev) {
-    // In development, allow direct HTTPS without proxy verification
     const url = new URL(req.url);
-    if (url.protocol === "https:") {
-      return {
-        secure: true,
-        proto: "https",
-        hostVerified: false, // Not verified via platform ingress
-        pathVerified: false,
-      };
-    }
-    // Even in dev, reject plain HTTP
-    if (!proto || proto !== "https") {
+    const host = url.host.toLowerCase();
+    
+    // ALWAYS reject http: URLs, even in development
+    if (url.protocol !== "https:") {
       return {
         secure: false,
-        reason: "DEV_INSECURE_PROTO",
-        proto: proto ?? url.protocol,
+        reason: "DEV_HTTP_REJECTED",
+        proto: url.protocol,
         hostVerified: false,
         pathVerified: false,
       };
     }
-    // Dev with x-forwarded-proto: https
+    
+    // Check if host is localhost variant
+    const isLocalhost = 
+      host === "localhost" ||
+      host.startsWith("localhost:") ||
+      host === "127.0.0.1" ||
+      host.startsWith("127.0.0.1:") ||
+      host === "[::1]" ||
+      host.startsWith("[::1]:");
+    
+    // Check if valid Supabase edge function ingress
+    const isValidSupabaseIngress = ingressCheck.verified;
+    
+    // Development exception is intentionally narrow to avoid accidental insecure deployments.
+    if (isLocalhost) {
+      return {
+        secure: true,
+        proto: "https",
+        hostVerified: false, // Localhost is trusted in dev
+        pathVerified: false,
+      };
+    }
+    
+    if (isValidSupabaseIngress) {
+      return {
+        secure: true,
+        proto: "https",
+        hostVerified: true,
+        pathVerified: true,
+      };
+    }
+    
+    // Reject all other hosts even in development
     return {
-      secure: true,
+      secure: false,
+      reason: "DEV_UNTRUSTED_HOST",
       proto: "https",
       hostVerified: false,
       pathVerified: false,
