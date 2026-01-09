@@ -24,7 +24,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { logEyeEvent, SESSION_INACTIVITY_TIMEOUT_MINUTES } from "../_shared/eye.ts";
-import { buildCorsSecurityHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
+import { buildCorsSecurityHeaders, enforceTransportSecurity, createSecureJsonHeaders } from "../_shared/security-headers.ts";
 
 const SERVICE_NAME = "cleanup-orphan-sessions-dev";
 
@@ -80,7 +80,7 @@ Deno.serve(async (req) => {
   if (environment === "production") {
     return new Response(
       JSON.stringify({ error: "This function is only available in development" }),
-      { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 403, headers: createSecureJsonHeaders(req) }
     );
   }
 
@@ -146,7 +146,7 @@ Deno.serve(async (req) => {
           dryRun,
           criteria: { daysBack, maxEventCount, inactiveMinutes },
         } as CleanupResponse),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { headers: createSecureJsonHeaders(req) }
       );
     }
 
@@ -229,7 +229,7 @@ Deno.serve(async (req) => {
           dryRun,
           criteria: { daysBack, maxEventCount, inactiveMinutes },
         } as CleanupResponse),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { headers: createSecureJsonHeaders(req) }
       );
     }
 
@@ -245,7 +245,7 @@ Deno.serve(async (req) => {
           dryRun: true,
           criteria: { daysBack, maxEventCount, inactiveMinutes },
         } as CleanupResponse),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { headers: createSecureJsonHeaders(req) }
       );
     }
 
@@ -435,14 +435,14 @@ Deno.serve(async (req) => {
     console.log(`[${SERVICE_NAME}] Cleanup complete:`, response);
 
     return new Response(JSON.stringify(response), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: createSecureJsonHeaders(req),
     });
   } catch (error: unknown) {
     console.error(`[${SERVICE_NAME}] Error:`, error);
     const message = error instanceof Error ? error.message : "Unknown error";
     return new Response(
       JSON.stringify({ error: message }),
-      { status: 500, headers: { ...buildCorsSecurityHeaders(req), "Content-Type": "application/json" } }
+      { status: 500, headers: createSecureJsonHeaders(req) }
     );
   }
 });
