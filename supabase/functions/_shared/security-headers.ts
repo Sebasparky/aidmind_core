@@ -524,7 +524,15 @@ function verifyTransportSecurity(req: Request): TransportSecurityResult {
   
   // ============================================================
   // PRODUCTION / STAGING: STRICT VERIFICATION (NO EXCEPTIONS)
+  // 
+  // SECURITY RATIONALE: Mixed transport signals are treated as suspicious.
+  // If x-forwarded-proto and URL protocol disagree, we MUST fail closed.
+  // This prevents downgrade attacks where an attacker might try to proxy
+  // HTTPS requests over HTTP or vice versa.
   // ============================================================
+  
+  // Get URL protocol for consistency check
+  const urlProtocol = new URL(req.url).protocol;
   
   // Check 1: x-forwarded-proto MUST be present and === "https"
   if (!proto) {
@@ -547,7 +555,20 @@ function verifyTransportSecurity(req: Request): TransportSecurityResult {
     };
   }
   
-  // Check 2: Host MUST match expected platform ingress
+  // Check 2: URL protocol MUST be https:
+  // SECURITY RATIONALE: Mixed signals between x-forwarded-proto and URL protocol
+  // are suspicious and must fail closed. We require BOTH to indicate HTTPS.
+  if (urlProtocol !== "https:") {
+    return {
+      secure: false,
+      reason: "INCONSISTENT_TRANSPORT_SIGNALS",
+      proto,
+      hostVerified: ingressCheck.verified,
+      pathVerified: false,
+    };
+  }
+  
+  // Check 3: Host MUST match expected platform ingress
   if (!ingressCheck.verified) {
     return {
       secure: false,
@@ -558,7 +579,7 @@ function verifyTransportSecurity(req: Request): TransportSecurityResult {
     };
   }
   
-  // All checks passed
+  // All checks passed - both x-forwarded-proto AND URL protocol are HTTPS
   return {
     secure: true,
     proto: "https",

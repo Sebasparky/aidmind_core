@@ -230,13 +230,15 @@ Deno.test({
 });
 
 Deno.test({
-  name: "Transport Guard - Production: URL with protocol http:// → REJECTED (regardless of x-forwarded-proto)",
+  name: "Transport Guard - Production: URL with protocol http:// + x-forwarded-proto=https → REJECTED (inconsistent signals)",
   async fn() {
     const originalEnv = Deno.env.get("ENVIRONMENT");
     Deno.env.set("ENVIRONMENT", "production");
     
     try {
-      // Even if x-forwarded-proto claims https, if URL is http, we need to verify platform ingress
+      // SECURITY RATIONALE: Mixed transport signals are suspicious and must fail closed.
+      // Even if x-forwarded-proto claims https, if URL protocol is http://, the signals
+      // are inconsistent. This could indicate a downgrade attack or misconfigured proxy.
       const req = createMockRequest({
         url: "http://qdbfjxmxnxtubltahuqe.supabase.co/functions/v1/session-manager",
         headers: {
@@ -244,11 +246,16 @@ Deno.test({
         },
       });
       
-      // The URL protocol being http:// doesn't automatically fail - 
-      // the x-forwarded-proto from the edge proxy is what we check
-      // This should pass because x-forwarded-proto=https and host/path are valid
+      // Inconsistent signals MUST be rejected - fail closed
       const isSecure = isSecureRequest(req);
-      assertEquals(isSecure, true, "URL protocol http with valid x-forwarded-proto=https should pass");
+      assertEquals(isSecure, false, "Mixed transport signals (http URL + https header) must be rejected");
+      
+      const response = await enforceTransportSecurity(req);
+      assertExists(response, "enforceTransportSecurity should return a Response for inconsistent signals");
+      assertEquals(response.status, 403, "Inconsistent transport signals should return 403 Forbidden");
+      
+      const body = await response.json();
+      assertEquals(body.code, "INSECURE_TRANSPORT", "Error code should be INSECURE_TRANSPORT");
     } finally {
       if (originalEnv !== undefined) {
         Deno.env.set("ENVIRONMENT", originalEnv);
