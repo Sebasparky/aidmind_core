@@ -859,6 +859,12 @@ export function buildCorsHeaders(req: Request): Record<string, string> {
     "Access-Control-Max-Age": "86400", // 24 hours preflight cache
     // NOTE: Access-Control-Allow-Credentials is NOT set (default: false)
     // We do not use cookies cross-origin
+    
+    // Vary: Origin is REQUIRED when ACAO is set dynamically per-request.
+    // This ensures caches don't serve a response with one origin's ACAO
+    // to a request from a different origin.
+    // Safe to always include even when ACAO is omitted.
+    "Vary": "Origin",
   };
   
   // Only set Access-Control-Allow-Origin if origin is validated
