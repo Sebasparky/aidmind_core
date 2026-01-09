@@ -16,6 +16,8 @@
  * - ALL outbound requests MUST use HTTPS with cert validation
  * - NO "skip TLS verification" allowed
  * - TLS failure = request failure (no insecure retry)
+ * - enforceTransportSecurity MUST run BEFORE any early return including OPTIONS
+ * - verifyTransportSecurity MUST fail closed in production
  */
 
 // ============================================================
@@ -52,37 +54,27 @@ const CSP_VALUE = [
 ].join("; ");
 
 // ============================================================
-// KNOWN TLS-TERMINATING PROXIES
+// PLATFORM INGRESS VERIFICATION (NON-SPOOFABLE)
 // ============================================================
 
 /**
- * Known trusted proxy identifiers.
- * Requests MUST arrive via one of these known proxies.
+ * Valid Supabase Edge Functions host suffix.
  * 
- * SECURITY: This list is intentionally restrictive.
- * Add new proxies only after security review.
+ * SECURITY: Requests MUST arrive via Supabase infrastructure.
+ * The host is set by the platform and cannot be spoofed by clients.
  */
-const KNOWN_TLS_PROXIES = new Set([
-  "supabase",           // Supabase Edge Functions proxy
-  "cloudflare",         // Cloudflare CDN
-  "vercel",             // Vercel Edge
-  "aws-elb",            // AWS Elastic Load Balancer
-  "google-frontend",    // Google Cloud Load Balancer
-  "azure-frontdoor",    // Azure Front Door
-]);
+const SUPABASE_FUNCTIONS_HOST_SUFFIX = ".supabase.co";
 
 /**
- * Headers that indicate request came through a known proxy.
- * At least one must be present for proxy verification.
+ * Valid functions path prefix.
+ * All edge functions are routed through /functions/v1/
  */
-const PROXY_INDICATOR_HEADERS = [
-  "x-forwarded-for",      // Standard proxy header
-  "x-real-ip",            // Common proxy header
-  "cf-connecting-ip",     // Cloudflare
-  "x-vercel-ip",          // Vercel
-  "x-amzn-trace-id",      // AWS
-  "x-cloud-trace-context", // Google Cloud
-];
+const SUPABASE_FUNCTIONS_PATH_PREFIX = "/functions/v1/";
+
+/**
+ * Lovable Cloud host suffix for alternate deployment.
+ */
+const LOVABLE_FUNCTIONS_HOST_SUFFIX = ".lovableproject.com";
 
 // ============================================================
 // SECURITY HEADERS OBJECT
@@ -407,7 +399,7 @@ export function extractBearerToken(req: Request): string | null {
 }
 
 // ============================================================
-// HTTPS ENFORCEMENT (STRICT)
+// HTTPS ENFORCEMENT (STRICT - NON-BYPASSABLE)
 // ============================================================
 
 /**
@@ -417,7 +409,53 @@ interface TransportSecurityResult {
   secure: boolean;
   reason?: string;
   proto?: string;
-  proxyVerified?: boolean;
+  hostVerified?: boolean;
+  pathVerified?: boolean;
+}
+
+/**
+ * Check if running in development environment.
+ * 
+ * ONLY in development (ENVIRONMENT === "development") is the 
+ * direct HTTPS without proxy verification allowed.
+ */
+function isDevelopmentEnvironment(): boolean {
+  const env = Deno.env.get("ENVIRONMENT");
+  return env === "development";
+}
+
+/**
+ * Verify that the request host matches expected platform ingress.
+ * 
+ * CRITICAL: This uses the HOST from the request URL which is set by the
+ * platform load balancer - NOT spoofable by clients.
+ * 
+ * We do NOT rely on x-forwarded-for or x-real-ip as these can be spoofed.
+ */
+function verifyPlatformIngress(req: Request): { verified: boolean; host: string; path: string } {
+  try {
+    const url = new URL(req.url);
+    const host = url.host.toLowerCase();
+    const path = url.pathname;
+    
+    // Check if host matches Supabase functions domain
+    const isSupabaseHost = host.endsWith(SUPABASE_FUNCTIONS_HOST_SUFFIX);
+    const isLovableHost = host.endsWith(LOVABLE_FUNCTIONS_HOST_SUFFIX);
+    const isValidHost = isSupabaseHost || isLovableHost;
+    
+    // Check if path starts with functions prefix (for Supabase)
+    const isValidPath = isSupabaseHost 
+      ? path.startsWith(SUPABASE_FUNCTIONS_PATH_PREFIX) 
+      : true; // Lovable might use different paths
+    
+    return {
+      verified: isValidHost && isValidPath,
+      host,
+      path,
+    };
+  } catch {
+    return { verified: false, host: "invalid", path: "invalid" };
+  }
 }
 
 /**
@@ -426,75 +464,111 @@ interface TransportSecurityResult {
  * CRITICAL: This function enforces strict HTTPS requirements.
  * - NO per-route overrides
  * - NO debug mode
- * - NO exceptions
+ * - NO exceptions (except development environment)
+ * - FAIL CLOSED in production if cannot prove security
  * 
- * Checks:
- * 1. X-Forwarded-Proto MUST be "https"
- * 2. Request MUST arrive via known TLS-terminating proxy
+ * Production proof requires ALL of:
+ * 1. x-forwarded-proto === "https"
+ * 2. Host matches *.supabase.co or *.lovableproject.com
+ * 3. Path starts with /functions/v1/ (for Supabase)
+ * 
+ * We do NOT trust:
+ * - x-forwarded-for (spoofable by clients)
+ * - x-real-ip (spoofable by clients)
+ * - Missing x-forwarded-proto with https: URL (removed exception path)
  * 
  * @returns TransportSecurityResult with verification details
  */
 function verifyTransportSecurity(req: Request): TransportSecurityResult {
-  // Check 1: X-Forwarded-Proto MUST be "https"
-  const proto = req.headers.get("x-forwarded-proto");
+  const environment = Deno.env.get("ENVIRONMENT") ?? "production";
+  const isDev = isDevelopmentEnvironment();
   
-  if (!proto) {
-    // No proto header - check if direct HTTPS (edge case: direct function invocation)
+  // Get protocol header (set by edge/proxy, not client)
+  const proto = req.headers.get("x-forwarded-proto")?.toLowerCase();
+  
+  // Verify platform ingress using host/path invariants
+  const ingressCheck = verifyPlatformIngress(req);
+  
+  // ============================================================
+  // DEVELOPMENT EXCEPTION (ONLY when ENVIRONMENT === "development")
+  // ============================================================
+  if (isDev) {
+    // In development, allow direct HTTPS without proxy verification
     const url = new URL(req.url);
-    if (url.protocol !== "https:") {
+    if (url.protocol === "https:") {
       return {
-        secure: false,
-        reason: "MISSING_PROTO_HEADER",
-        proto: url.protocol,
-        proxyVerified: false,
+        secure: true,
+        proto: "https",
+        hostVerified: false, // Not verified via platform ingress
+        pathVerified: false,
       };
     }
-    // Direct HTTPS without proxy - allowed but logged
+    // Even in dev, reject plain HTTP
+    if (!proto || proto !== "https") {
+      return {
+        secure: false,
+        reason: "DEV_INSECURE_PROTO",
+        proto: proto ?? url.protocol,
+        hostVerified: false,
+        pathVerified: false,
+      };
+    }
+    // Dev with x-forwarded-proto: https
     return {
       secure: true,
       proto: "https",
-      proxyVerified: false,
+      hostVerified: false,
+      pathVerified: false,
     };
   }
   
-  if (proto.toLowerCase() !== "https") {
+  // ============================================================
+  // PRODUCTION / STAGING: STRICT VERIFICATION (NO EXCEPTIONS)
+  // ============================================================
+  
+  // Check 1: x-forwarded-proto MUST be present and === "https"
+  if (!proto) {
+    return {
+      secure: false,
+      reason: "MISSING_PROTO_HEADER",
+      proto: undefined,
+      hostVerified: ingressCheck.verified,
+      pathVerified: false,
+    };
+  }
+  
+  if (proto !== "https") {
     return {
       secure: false,
       reason: "INSECURE_PROTO",
-      proto: proto.toLowerCase(),
-      proxyVerified: false,
+      proto,
+      hostVerified: ingressCheck.verified,
+      pathVerified: false,
     };
   }
   
-  // Check 2: Verify request arrived via known TLS-terminating proxy
-  // At least one proxy indicator header must be present
-  const hasProxyIndicator = PROXY_INDICATOR_HEADERS.some(
-    (header) => req.headers.has(header)
-  );
+  // Check 2: Host MUST match expected platform ingress
+  if (!ingressCheck.verified) {
+    return {
+      secure: false,
+      reason: "INVALID_PLATFORM_INGRESS",
+      proto,
+      hostVerified: false,
+      pathVerified: false,
+    };
+  }
   
-  // Check for known proxy identifier in Via or X-Forwarded-By headers
-  const viaHeader = req.headers.get("via")?.toLowerCase() ?? "";
-  const forwardedByHeader = req.headers.get("x-forwarded-by")?.toLowerCase() ?? "";
-  
-  const hasKnownProxy = Array.from(KNOWN_TLS_PROXIES).some(
-    (proxy) => viaHeader.includes(proxy) || forwardedByHeader.includes(proxy)
-  );
-  
-  // In Supabase Edge Functions context, we trust the x-forwarded-proto header
-  // if any proxy indicator is present (Supabase always sets these)
-  const proxyVerified = hasProxyIndicator || hasKnownProxy;
-  
-  // For Supabase Edge Functions, x-forwarded-proto=https is sufficient
-  // because Supabase infrastructure guarantees TLS termination
+  // All checks passed
   return {
     secure: true,
     proto: "https",
-    proxyVerified,
+    hostVerified: true,
+    pathVerified: true,
   };
 }
 
 /**
- * Check if request is secure (HTTPS via trusted proxy).
+ * Check if request is secure (HTTPS via trusted platform ingress).
  * 
  * This is the ONLY function that should be used for transport security checks.
  * NO overrides, NO debug mode, NO exceptions.
@@ -507,8 +581,11 @@ export function isSecureRequest(req: Request): boolean {
     console.warn("[SECURITY] Transport security check FAILED:", {
       reason: result.reason,
       proto: result.proto,
+      hostVerified: result.hostVerified,
+      pathVerified: result.pathVerified,
       method: req.method,
       path: new URL(req.url).pathname,
+      environment: Deno.env.get("ENVIRONMENT") ?? "production",
       // NEVER log: req.body, headers with auth tokens, etc.
     });
   }
@@ -600,26 +677,28 @@ export function createSecureJsonHeaders(
 /**
  * Enforce ALL security checks on a request.
  * 
- * Use this as the FIRST check in every edge function handler.
+ * CRITICAL: Use this as the FIRST check in every edge function handler,
+ * BEFORE any other logic including CORS preflight handling.
+ * 
  * Returns a Response if the request should be rejected, null otherwise.
  * 
  * CRITICAL: This check is MANDATORY and has NO overrides.
  * 
  * Checks performed:
- * 1. Transport security (HTTPS via trusted proxy)
+ * 1. Transport security (HTTPS via trusted platform ingress)
  * 2. No tokens in URL
  * 
  * @example
  * ```typescript
  * Deno.serve(async (req) => {
- *   // CORS preflight (allowed without security check)
- *   if (req.method === "OPTIONS") {
- *     return new Response(null, { headers: corsSecurityHeaders });
- *   }
- *   
- *   // MANDATORY security check - no exceptions
- *   const securityResponse = enforceTransportSecurity(req);
+ *   // MANDATORY security check - BEFORE any other logic
+ *   const securityResponse = await enforceTransportSecurity(req);
  *   if (securityResponse) return securityResponse;
+ *   
+ *   // CORS preflight (only after security check passes)
+ *   if (req.method === "OPTIONS") {
+ *     return new Response(null, { status: 204, headers: corsSecurityHeaders });
+ *   }
  *   
  *   // ... rest of handler
  * });
@@ -662,6 +741,8 @@ export async function enforceTransportSecurity(req: Request): Promise<Response |
 /**
  * Synchronous version for backward compatibility.
  * Prefer the async version for proper event emission.
+ * 
+ * @deprecated Use enforceTransportSecurity (async) instead
  */
 export function enforceTransportSecuritySync(req: Request): Response | null {
   // Check 1: Transport security (HTTPS)
@@ -984,7 +1065,7 @@ export async function secureFetch(
       error_message: urlValidation.error,
       request_id: requestId,
     };
-    emitSecurityEvent(event);
+    await emitSecurityEvent(event);
     
     return {
       ok: false,
@@ -1073,7 +1154,7 @@ export async function secureFetch(
       error_message: errorMessage.slice(0, 200), // Truncate for safety
       request_id: requestId,
     };
-    emitSecurityEvent(event);
+    await emitSecurityEvent(event);
     
     return {
       ok: false,
@@ -1108,14 +1189,14 @@ export async function secureFetchJson<T = unknown>(
   }
   
   try {
-    const data = await result.response!.json() as T;
-    return { ok: true, data };
-  } catch (error) {
+    const data = await result.response!.json();
+    return { ok: true, data: data as T };
+  } catch (e) {
     return {
       ok: false,
       error: {
         type: "INTERNAL_SERVICE_ERROR",
-        message: `Failed to parse JSON: ${error instanceof Error ? error.message : "Unknown"}`,
+        message: `JSON parse error: ${e instanceof Error ? e.message : "Unknown"}`,
         code: "JSON_PARSE_ERROR",
       },
     };
@@ -1125,7 +1206,7 @@ export async function secureFetchJson<T = unknown>(
 /**
  * Secure POST JSON helper.
  * 
- * Same security guarantees as secureFetch, with JSON body serialization.
+ * Same security guarantees as secureFetch, with JSON request/response.
  */
 export async function securePostJson<T = unknown>(
   url: string,

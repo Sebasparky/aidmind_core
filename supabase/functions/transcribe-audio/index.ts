@@ -2,10 +2,9 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { 
-  corsSecurityHeaders as corsHeaders, 
+  corsSecurityHeaders, 
   enforceTransportSecurity,
   secureFetch,
-  emitSecurityEvent,
 } from "../_shared/security-headers.ts";
 
 const SERVICE_NAME = "transcribe-audio";
@@ -25,11 +24,12 @@ interface TranscribeRequest {
 }
 
 // Log Eye event for audit trail (no PHI)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function logEyeEvent(
   supabase: any,
   sessionId: string | null,
   eventType: string,
-  eventData: Record<string, any> = {}
+  eventData: Record<string, unknown> = {}
 ) {
   try {
     await supabase.from("eye_events").insert({
@@ -44,14 +44,17 @@ async function logEyeEvent(
 }
 
 serve(async (req) => {
-  // Handle CORS preflight
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
-
-  // MANDATORY security check - no exceptions, no overrides
+  // ============================================================
+  // MANDATORY SECURITY CHECK - BEFORE ANY OTHER LOGIC
+  // This MUST run before CORS preflight to enforce HTTPS on all requests
+  // ============================================================
   const securityResponse = await enforceTransportSecurity(req);
   if (securityResponse) return securityResponse;
+
+  // CORS preflight (only after security check passes)
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: corsSecurityHeaders });
+  }
 
   try {
     const openAIApiKey = Deno.env.get("aidmind-key");
@@ -68,7 +71,7 @@ serve(async (req) => {
     if (!session_id || !audio_object_key) {
       return new Response(
         JSON.stringify({ error: "session_id and audio_object_key are required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 400, headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -291,13 +294,13 @@ serve(async (req) => {
         model,
         job_id: jobData.id,
       }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
     console.error("Transcription error:", error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
     );
   }
 });

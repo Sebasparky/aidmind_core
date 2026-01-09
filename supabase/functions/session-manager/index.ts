@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { logEyeEvent } from "../_shared/eye.ts";
-import { corsSecurityHeaders as corsHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
+import { corsSecurityHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
 
 const SERVICE_NAME = "session-manager";
 
@@ -34,6 +34,7 @@ interface PurgeOptions {
 }
 
 // Purge all ephemeral data for a session
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function purgeSessionData(
   supabase: any,
   sessionId: string,
@@ -69,7 +70,7 @@ async function purgeSessionData(
     .eq("session_id", sessionId);
 
   if (jobs && jobs.length > 0) {
-    const objectKeys = jobs.map((j: any) => j.audio_object_key);
+    const objectKeys = jobs.map((j: { audio_object_key: string }) => j.audio_object_key);
     const { error: storageError } = await supabase.storage
       .from("audio-uploads")
       .remove(objectKeys);
@@ -126,10 +127,10 @@ async function purgeSessionData(
 
     // Emit deletion events for each artifact type
     const transcriptDeleted = artifacts.some(
-      (a: any) => a.artifact_type === "transcript"
+      (a: { artifact_type: string }) => a.artifact_type === "transcript"
     );
     const minimizedDeleted = artifacts.some(
-      (a: any) => a.artifact_type === "minimized_transcript"
+      (a: { artifact_type: string }) => a.artifact_type === "minimized_transcript"
     );
 
     if (transcriptDeleted) {
@@ -215,14 +216,17 @@ async function purgeSessionData(
 }
 
 serve(async (req) => {
-  // CORS preflight
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
-
-  // MANDATORY security check - no exceptions, no overrides
+  // ============================================================
+  // MANDATORY SECURITY CHECK - BEFORE ANY OTHER LOGIC
+  // This MUST run before CORS preflight to enforce HTTPS on all requests
+  // ============================================================
   const securityResponse = await enforceTransportSecurity(req);
   if (securityResponse) return securityResponse;
+
+  // CORS preflight (only after security check passes)
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: corsSecurityHeaders });
+  }
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -250,7 +254,7 @@ serve(async (req) => {
             }),
             {
               status: 400,
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
+              headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
             }
           );
         }
@@ -294,7 +298,7 @@ serve(async (req) => {
         });
 
         return new Response(JSON.stringify({ success: true, session }), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
         });
       }
 
@@ -304,7 +308,7 @@ serve(async (req) => {
             JSON.stringify({ error: "session_id is required" }),
             {
               status: 400,
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
+              headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
             }
           );
         }
@@ -328,7 +332,7 @@ serve(async (req) => {
         return new Response(
           JSON.stringify({ success: true, session, artifacts }),
           {
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
+            headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
           }
         );
       }
@@ -339,7 +343,7 @@ serve(async (req) => {
             JSON.stringify({ error: "session_id is required" }),
             {
               status: 400,
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
+              headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
             }
           );
         }
@@ -367,7 +371,7 @@ serve(async (req) => {
         }
 
         return new Response(JSON.stringify({ success: true }), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
         });
       }
 
@@ -377,7 +381,7 @@ serve(async (req) => {
             JSON.stringify({ error: "session_id is required" }),
             {
               status: 400,
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
+              headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
             }
           );
         }
@@ -417,7 +421,7 @@ serve(async (req) => {
         });
 
         return new Response(JSON.stringify({ success: true }), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
         });
       }
 
@@ -427,7 +431,7 @@ serve(async (req) => {
             JSON.stringify({ error: "session_id is required" }),
             {
               status: 400,
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
+              headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
             }
           );
         }
@@ -467,7 +471,7 @@ serve(async (req) => {
         });
 
         return new Response(JSON.stringify({ success: true }), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
         });
       }
 
@@ -477,7 +481,7 @@ serve(async (req) => {
             JSON.stringify({ error: "session_id is required" }),
             {
               status: 400,
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
+              headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
             }
           );
         }
@@ -491,170 +495,143 @@ serve(async (req) => {
         });
 
         return new Response(JSON.stringify({ success: true }), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
         });
       }
 
       case "export": {
         // Export stage: EXPORT_STARTED → EXPORT_COMPLETED/EXPORT_FAILED
         // Validates Eye event infrastructure with a real end-to-end pipeline stage
-        
         if (!session_id) {
           return new Response(
-            JSON.stringify({ error: "session_id is required" }),
+            JSON.stringify({ error: "session_id is required for export" }),
             {
               status: 400,
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
+              headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
             }
           );
         }
 
-        if (!request_id) {
+        // Get session info
+        const { data: session } = await supabase
+          .from("sessions")
+          .select("case_id")
+          .eq("session_id", session_id)
+          .single();
+
+        if (!session) {
           return new Response(
-            JSON.stringify({ error: "request_id is required for export" }),
+            JSON.stringify({ error: "Session not found" }),
             {
-              status: 400,
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
+              status: 404,
+              headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
             }
           );
         }
 
-        const destinationType = data?.destination_type ?? "system_of_record";
-        const destinationId = data?.destination_id ?? "default";
+        // Get WIP bundle artifact if exists
+        const { data: wipBundle } = await supabase
+          .from("ephemeral_artifacts")
+          .select("content")
+          .eq("session_id", session_id)
+          .eq("artifact_type", "wip_bundle")
+          .single();
 
-        console.log(`[Export] Starting export for session ${session_id}`);
+        // Generate export bundle ID
+        const bundleId = `bundle_${crypto.randomUUID()}`;
+        const destination = data?.destination_type ?? "case_management_system";
+        const destinationId = data?.destination_id ?? session.case_id;
 
         // Emit EXPORT_STARTED
         await logEyeEvent(supabase, {
-          session_id: session_id,
+          session_id,
           event_type: "EXPORT_STARTED",
           request: req,
           serviceName: SERVICE_NAME,
           payload: {
-            request_id: request_id,
-            operator_id: operator_id,
-            resource_type: "export",
-            resource_id: session_id,
-            destination_type: destinationType,
+            bundle_id: bundleId,
+            case_id: session.case_id,
+            destination_type: destination,
             destination_id: destinationId,
+            operator_id,
+            request_id,
           },
         });
 
-        try {
-          // Get session to verify it exists and is in a valid state
-          const { data: session, error: sessionError } = await supabase
-            .from("sessions")
-            .select("state, case_id")
-            .eq("session_id", session_id)
-            .maybeSingle();
+        // Update session state
+        await supabase
+          .from("sessions")
+          .update({ state: "EXPORTING" })
+          .eq("session_id", session_id);
 
-          if (sessionError || !session) {
-            throw new Error("Session not found");
-          }
+        // Simulate export process (in production, this would be actual export)
+        // For now, we just mark it as complete
 
-          // Verify session is in exportable state
-          if (session.state !== "CLOSED") {
-            // EXPORT_FAILED: Session must be closed before export
-            await logEyeEvent(supabase, {
-              session_id: session_id,
-              event_type: "EXPORT_FAILED",
-              request: req,
-              serviceName: SERVICE_NAME,
-              payload: {
-                request_id: request_id,
-                operator_id: operator_id,
-                resource_type: "export",
-                resource_id: session_id,
-                result: "failure",
-                severity: "WARN",
-                reason_code: "VALIDATION_FAILED",
-                destination_type: destinationType,
-                current_state: session.state,
-              },
-            });
+        // Emit EXPORT_COMPLETED
+        await logEyeEvent(supabase, {
+          session_id,
+          event_type: "EXPORT_COMPLETED",
+          request: req,
+          serviceName: SERVICE_NAME,
+          payload: {
+            bundle_id: bundleId,
+            case_id: session.case_id,
+            destination_type: destination,
+            destination_id: destinationId,
+            has_wip_bundle: !!wipBundle,
+            operator_id,
+            request_id,
+          },
+        });
 
-            return new Response(
-              JSON.stringify({
-                success: false,
-                error: "Session must be closed before export",
-              }),
-              {
-                status: 400,
-                headers: { ...corsHeaders, "Content-Type": "application/json" },
-              }
-            );
-          }
+        // Emit WIP_BUNDLE_EXPORTED (terminal event)
+        await logEyeEvent(supabase, {
+          session_id,
+          event_type: "WIP_BUNDLE_EXPORTED",
+          request: req,
+          serviceName: SERVICE_NAME,
+          payload: {
+            severity: "NOTICE",
+            bundle_id: bundleId,
+            destination_type: destination,
+            destination_id: destinationId,
+            operator_id,
+            request_id,
+          },
+        });
 
-          // Simulate export operation (placeholder for real export logic)
-          // In production, this would export to the system of record
-          console.log(`[Export] Exporting session ${session_id} to ${destinationType}/${destinationId}`);
+        // Mark session as exported
+        await supabase
+          .from("sessions")
+          .update({
+            state: "EXPORTED",
+            closed_at: new Date().toISOString(),
+          })
+          .eq("session_id", session_id);
 
-          // EXPORT_COMPLETED: Success
-          await logEyeEvent(supabase, {
-            session_id: session_id,
-            event_type: "EXPORT_COMPLETED",
-            request: req,
-            serviceName: SERVICE_NAME,
-            payload: {
-              request_id: request_id,
-              operator_id: operator_id,
-              resource_type: "export",
-              resource_id: session_id,
-              destination_type: destinationType,
-              destination_id: destinationId,
+        return new Response(
+          JSON.stringify({
+            success: true,
+            bundle_id: bundleId,
+            destination: {
+              type: destination,
+              id: destinationId,
             },
-          });
-
-          console.log(`[Export] Completed export for session ${session_id}`);
-
-          return new Response(
-            JSON.stringify({
-              success: true,
-              exported_to: { destination_type: destinationType, destination_id: destinationId },
-            }),
-            {
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
-            }
-          );
-        } catch (error) {
-          console.error(`[Export] Failed for session ${session_id}:`, error);
-
-          // EXPORT_FAILED
-          await logEyeEvent(supabase, {
-            session_id: session_id,
-            event_type: "EXPORT_FAILED",
-            request: req,
-            serviceName: SERVICE_NAME,
-            payload: {
-              request_id: request_id,
-              operator_id: operator_id,
-              resource_type: "export",
-              resource_id: session_id,
-              result: "failure",
-              severity: "WARN",
-              reason_code: "INTERNAL_ERROR",
-              destination_type: destinationType,
-            },
-          });
-
-          return new Response(
-            JSON.stringify({
-              success: false,
-              error: error instanceof Error ? error.message : "Export failed",
-            }),
-            {
-              status: 500,
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
-            }
-          );
-        }
+          }),
+          {
+            headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+          }
+        );
       }
 
       default:
-        return new Response(JSON.stringify({ error: "Invalid action" }), {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ error: `Unknown action: ${action}` }),
+          {
+            status: 400,
+            headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+          }
+        );
     }
   } catch (error) {
     console.error("Session manager error:", error);
@@ -664,7 +641,7 @@ serve(async (req) => {
       }),
       {
         status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
       }
     );
   }
