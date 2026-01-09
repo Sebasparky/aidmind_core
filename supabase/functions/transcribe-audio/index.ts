@@ -50,7 +50,7 @@ serve(async (req) => {
   }
 
   // MANDATORY security check - no exceptions, no overrides
-  const securityResponse = enforceTransportSecurity(req);
+  const securityResponse = await enforceTransportSecurity(req);
   if (securityResponse) return securityResponse;
 
   try {

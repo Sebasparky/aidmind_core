@@ -29,7 +29,7 @@ Deno.serve(async (req) => {
   }
 
   // MANDATORY security check - no exceptions, no overrides
-  const securityResponse = enforceTransportSecurity(req);
+  const securityResponse = await enforceTransportSecurity(req);
   if (securityResponse) return securityResponse;
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);

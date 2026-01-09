@@ -625,7 +625,45 @@ export function createSecureJsonHeaders(
  * });
  * ```
  */
-export function enforceTransportSecurity(req: Request): Response | null {
+export async function enforceTransportSecurity(req: Request): Promise<Response | null> {
+  // Check 1: Transport security (HTTPS)
+  if (!isSecureRequest(req)) {
+    // Emit security event for monitoring
+    await emitSecurityEvent({
+      type: "INSECURE_TRANSPORT",
+      timestamp: new Date().toISOString(),
+      service: "transport-guard",
+      target_url: req.url,
+      error_code: "HTTP_REJECTED",
+      error_message: "Request rejected due to insecure transport",
+      proto: req.headers.get("x-forwarded-proto") ?? "http",
+    });
+    return createInsecureRequestResponse();
+  }
+  
+  // Check 2: No tokens in URL
+  const tokenInUrlResponse = rejectTokensInUrl(req);
+  if (tokenInUrlResponse) {
+    // Emit security event for token in URL
+    await emitSecurityEvent({
+      type: "TOKEN_IN_URL",
+      timestamp: new Date().toISOString(),
+      service: "transport-guard",
+      target_url: "[REDACTED_DUE_TO_TOKEN]",
+      error_code: "TOKEN_IN_URL",
+      error_message: "Request rejected due to token in URL",
+    });
+    return tokenInUrlResponse;
+  }
+  
+  return null;
+}
+
+/**
+ * Synchronous version for backward compatibility.
+ * Prefer the async version for proper event emission.
+ */
+export function enforceTransportSecuritySync(req: Request): Response | null {
   // Check 1: Transport security (HTTPS)
   if (!isSecureRequest(req)) {
     return createInsecureRequestResponse();
@@ -688,7 +726,11 @@ export type SecurityEventType =
   | "INSECURE_URL_REJECTED"
   | "CERT_VALIDATION_FAILED"
   | "SERVICE_UNREACHABLE"
-  | "INTERNAL_SERVICE_ERROR";
+  | "INTERNAL_SERVICE_ERROR"
+  | "INSECURE_TRANSPORT"
+  | "TOKEN_IN_URL"
+  | "HTTP_REJECTED"
+  | "HSTS_MISSING";
 
 /**
  * Security event data structure
@@ -701,15 +743,43 @@ export interface SecurityEvent {
   error_code?: string;
   error_message?: string;
   request_id?: string;
+  proto?: string;
+  tls_version?: string;
+}
+
+// Supabase client for persisting security events
+let supabaseClient: ReturnType<typeof createClient> | null = null;
+
+function getSupabaseClient(): ReturnType<typeof createClient> | null {
+  if (supabaseClient) return supabaseClient;
+  
+  try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    
+    if (!supabaseUrl || !serviceKey) {
+      return null;
+    }
+    
+    supabaseClient = createClient(supabaseUrl, serviceKey);
+    return supabaseClient;
+  } catch {
+    return null;
+  }
 }
 
 /**
  * Emit a security event for monitoring/alerting.
  * 
- * In production, this should be connected to your SIEM/monitoring system.
- * For now, it logs to console in a structured format.
+ * This function:
+ * 1. Logs to console in structured JSON format for SIEM integration
+ * 2. Persists to eye_events table for dashboard visibility
+ * 3. Emits runtime alerts for critical events
+ * 
+ * CRITICAL: This is called when HTTP requests reach application logic,
+ * which should NEVER happen if edge enforcement is working correctly.
  */
-export function emitSecurityEvent(event: SecurityEvent): void {
+export async function emitSecurityEvent(event: SecurityEvent): Promise<void> {
   // Sanitize the URL to remove any credentials
   let sanitizedUrl = event.target_url;
   try {
@@ -731,9 +801,73 @@ export function emitSecurityEvent(event: SecurityEvent): void {
     target_url: sanitizedUrl,
   };
   
-  // Log as structured JSON for log aggregation
+  // 1. Log as structured JSON for log aggregation
   console.error("[SECURITY_EVENT]", JSON.stringify(sanitizedEvent));
+  
+  // 2. Persist to eye_events table for dashboard
+  try {
+    const client = getSupabaseClient();
+    if (client) {
+      await client.from("eye_events").insert({
+        event_type: `SECURITY_${event.type}`,
+        event_data: {
+          type: event.type,
+          service: event.service,
+          target_url: sanitizedUrl,
+          error_code: event.error_code,
+          error_message: event.error_message?.slice(0, 200),
+          request_id: event.request_id,
+          proto: event.proto,
+          tls_version: event.tls_version,
+          severity: getSeverityForEvent(event.type),
+          environment: Deno.env.get("ENVIRONMENT") ?? "production",
+        },
+      });
+    }
+  } catch (dbError) {
+    // Don't fail the request if we can't persist the event
+    console.error("[SECURITY_EVENT_PERSIST_FAILED]", dbError);
+  }
+  
+  // 3. Emit runtime alert for critical events
+  if (isCriticalSecurityEvent(event.type)) {
+    console.error("[SECURITY_ALERT_CRITICAL]", JSON.stringify({
+      alert: "CRITICAL_SECURITY_EVENT",
+      ...sanitizedEvent,
+    }));
+  }
 }
+
+/**
+ * Determine severity level for security event type
+ */
+function getSeverityForEvent(type: SecurityEventType): string {
+  switch (type) {
+    case "TLS_FAILURE":
+    case "CERT_VALIDATION_FAILED":
+      return "CRITICAL";
+    case "INSECURE_TRANSPORT":
+    case "HTTP_REJECTED":
+      return "HIGH";
+    case "TOKEN_IN_URL":
+    case "INSECURE_URL_REJECTED":
+      return "WARN";
+    default:
+      return "INFO";
+  }
+}
+
+/**
+ * Check if event type requires immediate alerting
+ */
+function isCriticalSecurityEvent(type: SecurityEventType): boolean {
+  return type === "TLS_FAILURE" || 
+         type === "CERT_VALIDATION_FAILED" ||
+         type === "INSECURE_TRANSPORT";
+}
+
+// Import for Supabase client
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 /**
  * Validate that a URL uses HTTPS.
