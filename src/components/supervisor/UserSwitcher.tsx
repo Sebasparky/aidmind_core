@@ -2,6 +2,7 @@
  * User Switcher for Mock RBAC Testing
  */
 
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { MockUser, MOCK_USERS, ROLE_DISPLAY_NAMES, ROLE_COLORS } from "@/lib/rbac/types";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +24,21 @@ interface UserSwitcherProps {
 
 export function UserSwitcher({ currentUser }: UserSwitcherProps) {
   const { switchUser } = useAuth();
+  const navigate = useNavigate();
+
+  const handleSwitchUser = (userId: string) => {
+    switchUser(userId);
+    const user = Object.values(MOCK_USERS).find((u) => u.id === userId);
+    if (user) {
+      if (user.role === "auditor") {
+        navigate("/auditor");
+      } else if (user.role === "supervisor") {
+        navigate("/supervisor");
+      } else {
+        navigate("/dashboard");
+      }
+    }
+  };
 
   if (!currentUser) {
     return null;
@@ -49,11 +65,10 @@ export function UserSwitcher({ currentUser }: UserSwitcherProps) {
           <Users className="h-4 w-4" />
           Switch User (Dev Only)
         </DropdownMenuLabel>
-        <DropdownMenuSeparator />
         {Object.values(MOCK_USERS).map((user) => (
           <DropdownMenuItem
             key={user.id}
-            onClick={() => switchUser(user.id)}
+            onClick={() => handleSwitchUser(user.id)}
             className={cn(
               "flex items-center justify-between cursor-pointer",
               user.id === currentUser.id && "bg-muted"

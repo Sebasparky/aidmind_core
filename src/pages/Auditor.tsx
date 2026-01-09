@@ -21,6 +21,7 @@ import { useAIAuthorization } from "@/hooks/useAIAuthorization";
 import { computeComplianceStatus } from "@/lib/eye/verdict";
 import { EventFeed } from "@/components/supervisor/EventFeed";
 import { PurgeProofPanel } from "@/components/supervisor/PurgeProofPanel";
+import { UserSwitcher } from "@/components/supervisor/UserSwitcher";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -78,6 +79,7 @@ export default function Auditor() {
             <span>{currentUser.name}</span>
             <span>•</span>
             <span>{currentUser.email}</span>
+            <UserSwitcher currentUser={currentUser} />
           </div>
         </div>
       </header>
