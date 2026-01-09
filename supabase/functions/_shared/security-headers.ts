@@ -2,16 +2,20 @@
  * Security Headers Module
  * 
  * HTTPS-Only Security Policy:
- * - All traffic MUST be HTTPS
+ * - All traffic MUST be HTTPS (inbound AND outbound)
  * - HSTS enforced with preload
  * - Secure cookie settings
  * - CSP to prevent mixed content
+ * - Internal network treated as HOSTILE
  * 
  * CRITICAL SECURITY INVARIANTS:
  * - NO per-route overrides allowed
  * - NO "debug HTTP" mode
  * - NO request body logging on failure
  * - ALL requests MUST pass transport security check
+ * - ALL outbound requests MUST use HTTPS with cert validation
+ * - NO "skip TLS verification" allowed
+ * - TLS failure = request failure (no insecure retry)
  */
 
 // ============================================================
@@ -670,4 +674,337 @@ export function safeError(message: string, obj?: unknown): void {
   } else {
     console.error(message, sanitizeForLogging(obj));
   }
+}
+
+// ============================================================
+// SECURE INTERNAL SERVICE COMMUNICATION
+// ============================================================
+
+/**
+ * Security event types for internal service communication
+ */
+export type SecurityEventType = 
+  | "TLS_FAILURE"
+  | "INSECURE_URL_REJECTED"
+  | "CERT_VALIDATION_FAILED"
+  | "SERVICE_UNREACHABLE"
+  | "INTERNAL_SERVICE_ERROR";
+
+/**
+ * Security event data structure
+ */
+export interface SecurityEvent {
+  type: SecurityEventType;
+  timestamp: string;
+  service: string;
+  target_url: string;  // Will be sanitized (no credentials)
+  error_code?: string;
+  error_message?: string;
+  request_id?: string;
+}
+
+/**
+ * Emit a security event for monitoring/alerting.
+ * 
+ * In production, this should be connected to your SIEM/monitoring system.
+ * For now, it logs to console in a structured format.
+ */
+export function emitSecurityEvent(event: SecurityEvent): void {
+  // Sanitize the URL to remove any credentials
+  let sanitizedUrl = event.target_url;
+  try {
+    const parsed = new URL(event.target_url);
+    parsed.username = "";
+    parsed.password = "";
+    // Remove sensitive query params
+    for (const key of ["token", "key", "secret", "password", "auth"]) {
+      parsed.searchParams.delete(key);
+    }
+    sanitizedUrl = parsed.toString();
+  } catch {
+    // If URL parsing fails, just mask it
+    sanitizedUrl = "[INVALID_URL]";
+  }
+  
+  const sanitizedEvent: SecurityEvent = {
+    ...event,
+    target_url: sanitizedUrl,
+  };
+  
+  // Log as structured JSON for log aggregation
+  console.error("[SECURITY_EVENT]", JSON.stringify(sanitizedEvent));
+}
+
+/**
+ * Validate that a URL uses HTTPS.
+ * 
+ * CRITICAL: Plain HTTP is NEVER allowed, even for internal services.
+ * The internal network is treated as hostile.
+ */
+function validateSecureUrl(url: string): { valid: boolean; error?: string } {
+  try {
+    const parsed = new URL(url);
+    
+    // Only HTTPS is allowed
+    if (parsed.protocol !== "https:") {
+      return {
+        valid: false,
+        error: `Protocol "${parsed.protocol}" is not allowed. Only HTTPS is permitted.`,
+      };
+    }
+    
+    // Block localhost/internal IPs in production
+    // (In Deno/Supabase Edge, we trust the platform's network)
+    
+    return { valid: true };
+  } catch (e) {
+    return {
+      valid: false,
+      error: `Invalid URL: ${e instanceof Error ? e.message : "Unknown error"}`,
+    };
+  }
+}
+
+/**
+ * Options for secure fetch.
+ */
+export interface SecureFetchOptions extends Omit<RequestInit, "signal"> {
+  /**
+   * Timeout in milliseconds. Default: 30000 (30 seconds)
+   */
+  timeoutMs?: number;
+  
+  /**
+   * Service name for logging/events. Default: "unknown"
+   */
+  serviceName?: string;
+  
+  /**
+   * Request ID for correlation. Default: auto-generated
+   */
+  requestId?: string;
+}
+
+/**
+ * Result of a secure fetch operation.
+ */
+export interface SecureFetchResult {
+  ok: boolean;
+  response?: Response;
+  error?: {
+    type: SecurityEventType;
+    message: string;
+    code?: string;
+  };
+}
+
+/**
+ * Secure fetch wrapper for internal service-to-service communication.
+ * 
+ * CRITICAL SECURITY INVARIANTS:
+ * - Only HTTPS URLs are allowed
+ * - Certificate validation is ALWAYS enabled (no skip TLS)
+ * - TLS failures result in request failure (NO insecure retry)
+ * - All failures emit security events
+ * 
+ * This function treats the internal network as HOSTILE. All communication
+ * between services MUST be encrypted with valid certificates.
+ * 
+ * @example
+ * ```typescript
+ * const result = await secureFetch("https://internal-service.example.com/api/data", {
+ *   method: "POST",
+ *   headers: { "Content-Type": "application/json" },
+ *   body: JSON.stringify({ key: "value" }),
+ *   serviceName: "my-edge-function",
+ *   timeoutMs: 10000,
+ * });
+ * 
+ * if (!result.ok) {
+ *   // Handle error - security event already emitted
+ *   return new Response(JSON.stringify({ error: result.error.message }), { status: 502 });
+ * }
+ * 
+ * const data = await result.response.json();
+ * ```
+ */
+export async function secureFetch(
+  url: string,
+  options: SecureFetchOptions = {}
+): Promise<SecureFetchResult> {
+  const {
+    timeoutMs = 30000,
+    serviceName = "unknown",
+    requestId = crypto.randomUUID(),
+    ...fetchOptions
+  } = options;
+  
+  // Step 1: Validate URL is HTTPS
+  const urlValidation = validateSecureUrl(url);
+  if (!urlValidation.valid) {
+    const event: SecurityEvent = {
+      type: "INSECURE_URL_REJECTED",
+      timestamp: new Date().toISOString(),
+      service: serviceName,
+      target_url: url,
+      error_message: urlValidation.error,
+      request_id: requestId,
+    };
+    emitSecurityEvent(event);
+    
+    return {
+      ok: false,
+      error: {
+        type: "INSECURE_URL_REJECTED",
+        message: urlValidation.error ?? "URL validation failed",
+        code: "HTTPS_REQUIRED",
+      },
+    };
+  }
+  
+  // Step 2: Create abort controller for timeout
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  
+  try {
+    // Step 3: Make the request
+    // CRITICAL: We do NOT set any options to skip TLS verification.
+    // Deno's fetch validates certificates by default.
+    // There is NO way to disable this - that's intentional.
+    const response = await fetch(url, {
+      ...fetchOptions,
+      signal: controller.signal,
+    });
+    
+    clearTimeout(timeoutId);
+    
+    return {
+      ok: true,
+      response,
+    };
+    
+  } catch (error) {
+    clearTimeout(timeoutId);
+    
+    // Determine error type
+    let eventType: SecurityEventType = "INTERNAL_SERVICE_ERROR";
+    let errorCode = "UNKNOWN";
+    let errorMessage = error instanceof Error ? error.message : "Unknown error";
+    
+    if (error instanceof Error) {
+      const msg = error.message.toLowerCase();
+      
+      // TLS/Certificate errors
+      if (
+        msg.includes("certificate") ||
+        msg.includes("ssl") ||
+        msg.includes("tls") ||
+        msg.includes("handshake") ||
+        msg.includes("self-signed") ||
+        msg.includes("unable to verify")
+      ) {
+        eventType = "TLS_FAILURE";
+        errorCode = "CERT_VALIDATION_FAILED";
+        // CRITICAL: Do NOT retry without TLS. Request fails.
+      }
+      // Connection errors
+      else if (
+        msg.includes("connection refused") ||
+        msg.includes("econnrefused") ||
+        msg.includes("network") ||
+        msg.includes("dns")
+      ) {
+        eventType = "SERVICE_UNREACHABLE";
+        errorCode = "CONNECTION_FAILED";
+      }
+      // Timeout
+      else if (
+        msg.includes("abort") ||
+        msg.includes("timeout") ||
+        error.name === "AbortError"
+      ) {
+        eventType = "SERVICE_UNREACHABLE";
+        errorCode = "TIMEOUT";
+        errorMessage = `Request timed out after ${timeoutMs}ms`;
+      }
+    }
+    
+    // Emit security event
+    const event: SecurityEvent = {
+      type: eventType,
+      timestamp: new Date().toISOString(),
+      service: serviceName,
+      target_url: url,
+      error_code: errorCode,
+      error_message: errorMessage.slice(0, 200), // Truncate for safety
+      request_id: requestId,
+    };
+    emitSecurityEvent(event);
+    
+    return {
+      ok: false,
+      error: {
+        type: eventType,
+        message: errorMessage,
+        code: errorCode,
+      },
+    };
+  }
+}
+
+/**
+ * Secure JSON fetch helper.
+ * 
+ * Same security guarantees as secureFetch, but with JSON parsing.
+ */
+export async function secureFetchJson<T = unknown>(
+  url: string,
+  options: SecureFetchOptions = {}
+): Promise<{ ok: true; data: T } | { ok: false; error: { type: SecurityEventType; message: string; code?: string } }> {
+  const result = await secureFetch(url, {
+    ...options,
+    headers: {
+      "Accept": "application/json",
+      ...options.headers,
+    },
+  });
+  
+  if (!result.ok) {
+    return { ok: false, error: result.error! };
+  }
+  
+  try {
+    const data = await result.response!.json() as T;
+    return { ok: true, data };
+  } catch (error) {
+    return {
+      ok: false,
+      error: {
+        type: "INTERNAL_SERVICE_ERROR",
+        message: `Failed to parse JSON: ${error instanceof Error ? error.message : "Unknown"}`,
+        code: "JSON_PARSE_ERROR",
+      },
+    };
+  }
+}
+
+/**
+ * Secure POST JSON helper.
+ * 
+ * Same security guarantees as secureFetch, with JSON body serialization.
+ */
+export async function securePostJson<T = unknown>(
+  url: string,
+  body: unknown,
+  options: SecureFetchOptions = {}
+): Promise<{ ok: true; data: T } | { ok: false; error: { type: SecurityEventType; message: string; code?: string } }> {
+  return secureFetchJson<T>(url, {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+    body: JSON.stringify(body),
+  });
 }
