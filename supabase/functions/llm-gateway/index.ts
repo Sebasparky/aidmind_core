@@ -9,7 +9,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logEyeEvent, deriveTenantId } from "../_shared/eye.ts";
-import { corsSecurityHeaders as corsHeaders, isSecureRequest, createInsecureRequestResponse } from "../_shared/security-headers.ts";
+import { corsSecurityHeaders as corsHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
 import { checkLLMAuthorization } from "../_shared/llm-authorization.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -24,10 +24,9 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  // Reject insecure requests (API endpoints)
-  if (!isSecureRequest(req)) {
-    return createInsecureRequestResponse();
-  }
+  // MANDATORY security check - no exceptions, no overrides
+  const securityResponse = enforceTransportSecurity(req);
+  if (securityResponse) return securityResponse;
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const requestId = crypto.randomUUID();

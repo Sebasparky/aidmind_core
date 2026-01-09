@@ -1,7 +1,7 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { corsSecurityHeaders as corsHeaders, isSecureRequest, createInsecureRequestResponse } from "../_shared/security-headers.ts";
+import { corsSecurityHeaders as corsHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
 
 // Supported transcription models
 const SUPPORTED_MODELS = ["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"];
@@ -42,10 +42,9 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  // Reject insecure requests (API endpoints)
-  if (!isSecureRequest(req)) {
-    return createInsecureRequestResponse();
-  }
+  // MANDATORY security check - no exceptions, no overrides
+  const securityResponse = enforceTransportSecurity(req);
+  if (securityResponse) return securityResponse;
 
   try {
     const openAIApiKey = Deno.env.get("aidmind-key");
