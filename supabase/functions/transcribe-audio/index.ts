@@ -5,6 +5,7 @@ import {
   buildCorsSecurityHeaders, 
   enforceTransportSecurity,
   secureFetch,
+  createSecureJsonHeaders,
 } from "../_shared/security-headers.ts";
 
 const SERVICE_NAME = "transcribe-audio";
@@ -301,11 +302,9 @@ serve(async (req) => {
     );
   } catch (error) {
     console.error("Transcription error:", error);
-    // Build headers again for error response
-    const errorCorsHeaders = buildCorsSecurityHeaders(req);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
-      { status: 500, headers: { ...errorCorsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: createSecureJsonHeaders(req) }
     );
   }
 });

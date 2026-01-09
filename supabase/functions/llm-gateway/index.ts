@@ -13,6 +13,7 @@ import {
   buildCorsSecurityHeaders, 
   enforceTransportSecurity,
   secureFetch,
+  createSecureJsonHeaders,
 } from "../_shared/security-headers.ts";
 import { checkLLMAuthorization } from "../_shared/llm-authorization.ts";
 
@@ -49,7 +50,7 @@ Deno.serve(async (req) => {
     if (!session_id) {
       return new Response(
         JSON.stringify({ error: "session_id is required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 400, headers: createSecureJsonHeaders(req) }
       );
     }
 
@@ -74,7 +75,7 @@ Deno.serve(async (req) => {
           reason: authResult.reason,
           message: "AI usage must be approved by a supervisor before LLM calls are allowed.",
         }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 403, headers: createSecureJsonHeaders(req) }
       );
     }
 
@@ -122,7 +123,7 @@ Deno.serve(async (req) => {
 
       return new Response(
         JSON.stringify({ error: "LLM service not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 500, headers: createSecureJsonHeaders(req) }
       );
     }
 
@@ -165,7 +166,7 @@ Deno.serve(async (req) => {
 
       return new Response(
         JSON.stringify({ error: "LLM call failed", code: llmResult.error?.code }),
-        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 502, headers: createSecureJsonHeaders(req) }
       );
     }
 
@@ -194,7 +195,7 @@ Deno.serve(async (req) => {
 
       return new Response(
         JSON.stringify({ error: "LLM call failed", status: llmResponse.status }),
-        { status: llmResponse.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: llmResponse.status, headers: createSecureJsonHeaders(req) }
       );
     }
 
@@ -231,7 +232,7 @@ Deno.serve(async (req) => {
         model,
         usage: llmResponseData.usage,
       }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 200, headers: createSecureJsonHeaders(req) }
     );
 
   } catch (error) {
@@ -255,7 +256,7 @@ Deno.serve(async (req) => {
 
     return new Response(
       JSON.stringify({ error: "Internal server error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: createSecureJsonHeaders(req) }
     );
   }
 });

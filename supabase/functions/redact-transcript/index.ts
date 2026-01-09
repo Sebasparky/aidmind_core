@@ -2,7 +2,7 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { logEyeEvent as sharedLogEyeEvent } from "../_shared/eye.ts";
-import { buildCorsSecurityHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
+import { buildCorsSecurityHeaders, enforceTransportSecurity, createSecureJsonHeaders } from "../_shared/security-headers.ts";
 
 const SERVICE_NAME = "redact-transcript";
 
@@ -2250,7 +2250,7 @@ serve(async (req) => {
     if (!session_id) {
       return new Response(
         JSON.stringify({ error: "session_id is required" }),
-        { status: 400, headers: buildCorsSecurityHeaders(req) }
+        { status: 400, headers: createSecureJsonHeaders(req) }
       );
     }
 
@@ -2266,7 +2266,7 @@ serve(async (req) => {
       if (!artifact) {
         return new Response(
           JSON.stringify({ error: "No transcript found for session" }),
-          { status: 404, headers: buildCorsSecurityHeaders(req) }
+          { status: 404, headers: createSecureJsonHeaders(req) }
         );
       }
       transcript = artifact.content;
@@ -2361,13 +2361,13 @@ serve(async (req) => {
         redaction: result.redaction,
         minimized_text_source: result.minimized_text_source,
       }),
-      { headers: buildCorsSecurityHeaders(req) }
+      { headers: createSecureJsonHeaders(req) }
     );
   } catch (error) {
     console.error("Redaction error:", error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
-      { status: 500, headers: buildCorsSecurityHeaders(req) }
+      { status: 500, headers: createSecureJsonHeaders(req) }
     );
   }
 });

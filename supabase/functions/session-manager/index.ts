@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { logEyeEvent } from "../_shared/eye.ts";
-import { buildCorsSecurityHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
+import { buildCorsSecurityHeaders, enforceTransportSecurity, createSecureJsonHeaders } from "../_shared/security-headers.ts";
 
 const SERVICE_NAME = "session-manager";
 
@@ -602,7 +602,7 @@ serve(async (req) => {
       }),
       {
         status: 500,
-        headers: { ...buildCorsSecurityHeaders(req), "Content-Type": "application/json" },
+        headers: createSecureJsonHeaders(req),
       }
     );
   }
