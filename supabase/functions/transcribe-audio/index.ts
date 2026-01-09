@@ -1,7 +1,14 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { corsSecurityHeaders as corsHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
+import { 
+  corsSecurityHeaders as corsHeaders, 
+  enforceTransportSecurity,
+  secureFetch,
+  emitSecurityEvent,
+} from "../_shared/security-headers.ts";
+
+const SERVICE_NAME = "transcribe-audio";
 
 // Supported transcription models
 const SUPPORTED_MODELS = ["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"];
@@ -142,8 +149,9 @@ serve(async (req) => {
     formData.append("response_format", "text");
 
     // Call OpenAI transcription API with retry logic
+    // Using secureFetch for TLS enforcement (internal network is hostile)
     console.log(`[Transcribe] Calling OpenAI API with model: ${model}`);
-    console.log(`[Transcribe] API key present: ${!!openAIApiKey}, length: ${openAIApiKey?.length || 0}`);
+    console.log(`[Transcribe] API key present: ${!!openAIApiKey}`);
     
     let openAIResponse: Response | null = null;
     let lastError: string = "";
@@ -157,20 +165,41 @@ serve(async (req) => {
         await new Promise(resolve => setTimeout(resolve, waitTime));
       }
       
-      openAIResponse = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      // Use secureFetch - enforces HTTPS, validates certs, emits security events on failure
+      const fetchResult = await secureFetch("https://api.openai.com/v1/audio/transcriptions", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${openAIApiKey}`,
         },
         body: formData,
+        serviceName: SERVICE_NAME,
+        requestId: jobData.id,
+        timeoutMs: 120000, // 2 minutes for audio transcription
       });
+      
+      if (!fetchResult.ok) {
+        // TLS/network failure - do NOT retry (security policy)
+        lastError = fetchResult.error?.message ?? "Network error";
+        console.error(`[Transcribe] Secure fetch failed:`, fetchResult.error);
+        
+        // If it's a TLS failure, break immediately (no insecure retry)
+        if (fetchResult.error?.type === "TLS_FAILURE") {
+          break;
+        }
+        
+        // For other errors (timeout, unreachable), we might retry
+        if (attempt >= maxRetries) break;
+        continue;
+      }
+      
+      openAIResponse = fetchResult.response!;
       
       if (openAIResponse.ok) {
         break;
       }
       
       lastError = await openAIResponse.text();
-      console.error(`OpenAI API error (attempt ${attempt + 1}):`, openAIResponse.status, lastError);
+      console.error(`OpenAI API error (attempt ${attempt + 1}):`, openAIResponse.status, lastError.slice(0, 200));
       
       // Don't retry on 4xx errors (except 429)
       if (openAIResponse.status !== 429 && openAIResponse.status >= 400 && openAIResponse.status < 500) {

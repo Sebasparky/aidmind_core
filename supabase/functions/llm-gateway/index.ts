@@ -9,7 +9,11 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logEyeEvent, deriveTenantId } from "../_shared/eye.ts";
-import { corsSecurityHeaders as corsHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
+import { 
+  corsSecurityHeaders as corsHeaders, 
+  enforceTransportSecurity,
+  secureFetch,
+} from "../_shared/security-headers.ts";
 import { checkLLMAuthorization } from "../_shared/llm-authorization.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -116,7 +120,8 @@ Deno.serve(async (req) => {
       );
     }
 
-    const llmResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    // Use secureFetch for internal service communication (treats network as hostile)
+    const llmResult = await secureFetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -127,8 +132,39 @@ Deno.serve(async (req) => {
         messages,
         max_completion_tokens: 1000,
       }),
+      serviceName: SERVICE_NAME,
+      requestId,
+      timeoutMs: 60000, // 60 seconds for LLM calls
     });
 
+    if (!llmResult.ok) {
+      // Security event already emitted by secureFetch
+      await logEyeEvent(supabase, {
+        session_id,
+        event_type: "LLM_CALL_FAILED",
+        request: req,
+        serviceName: SERVICE_NAME,
+        payload: {
+          operator_id,
+          request_id: requestId,
+          result: "failure",
+          severity: "WARN",
+          resource_type: "llm_call",
+          resource_id: requestId,
+          error_code: llmResult.error?.code ?? "SERVICE_ERROR",
+          error_message: llmResult.error?.message.slice(0, 200) ?? "Unknown error",
+          model,
+        },
+      });
+
+      return new Response(
+        JSON.stringify({ error: "LLM call failed", code: llmResult.error?.code }),
+        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const llmResponse = llmResult.response!;
+    
     if (!llmResponse.ok) {
       const errorText = await llmResponse.text();
       
@@ -156,7 +192,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    const llmResult = await llmResponse.json();
+    const llmResponseData = await llmResponse.json();
 
     // ============================================================
     // EMIT LLM_CALL_COMPLETED
@@ -175,7 +211,7 @@ Deno.serve(async (req) => {
         resource_id: requestId,
         model,
         data_retention_mode: "zero",
-        tokens_used: llmResult.usage?.total_tokens || 0,
+        tokens_used: llmResponseData.usage?.total_tokens || 0,
         approval_event_id: authResult.approvalEventId,
       },
     });
@@ -185,9 +221,9 @@ Deno.serve(async (req) => {
       JSON.stringify({
         success: true,
         request_id: requestId,
-        result: llmResult.choices?.[0]?.message?.content || "",
+        result: llmResponseData.choices?.[0]?.message?.content || "",
         model,
-        usage: llmResult.usage,
+        usage: llmResponseData.usage,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
