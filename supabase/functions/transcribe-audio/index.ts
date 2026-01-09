@@ -2,7 +2,7 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { 
-  corsSecurityHeaders, 
+  buildCorsSecurityHeaders, 
   enforceTransportSecurity,
   secureFetch,
 } from "../_shared/security-headers.ts";
@@ -51,9 +51,12 @@ serve(async (req) => {
   const securityResponse = await enforceTransportSecurity(req);
   if (securityResponse) return securityResponse;
 
+  // Build CORS headers with validated origin
+  const corsHeaders = buildCorsSecurityHeaders(req);
+
   // CORS preflight (only after security check passes)
   if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: corsSecurityHeaders });
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
 
   try {
@@ -71,7 +74,7 @@ serve(async (req) => {
     if (!session_id || !audio_object_key) {
       return new Response(
         JSON.stringify({ error: "session_id and audio_object_key are required" }),
-        { status: 400, headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -294,13 +297,15 @@ serve(async (req) => {
         model,
         job_id: jobData.id,
       }),
-      { headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
     console.error("Transcription error:", error);
+    // Build headers again for error response
+    const errorCorsHeaders = buildCorsSecurityHeaders(req);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
-      { status: 500, headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...errorCorsHeaders, "Content-Type": "application/json" } }
     );
   }
 });

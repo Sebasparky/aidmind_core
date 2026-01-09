@@ -644,25 +644,158 @@ export function createHttpsRedirectResponse(req: Request): Response {
 }
 
 // ============================================================
-// CORS + SECURITY HEADERS (COMBINED)
+// CORS + SECURITY HEADERS (STRICT ORIGIN ALLOWLIST)
 // ============================================================
 
 /**
- * Combined CORS and security headers for API responses
+ * Get allowed origins from environment variable.
+ * 
+ * ALLOWED_ORIGINS should be a comma-separated list of origins, e.g.:
+ * "https://my-app.lovableproject.com,https://my-app.vercel.app"
+ * 
+ * @returns Array of allowed origin strings
+ */
+function getAllowedOrigins(): string[] {
+  const originsEnv = Deno.env.get("ALLOWED_ORIGINS") ?? "";
+  if (!originsEnv.trim()) {
+    // Default allowed origins for Lovable/Supabase deployments
+    return [];
+  }
+  return originsEnv
+    .split(",")
+    .map((origin) => origin.trim().toLowerCase())
+    .filter((origin) => origin.length > 0);
+}
+
+/**
+ * Validate an origin against the allowlist.
+ * 
+ * @param origin - The Origin header value from the request
+ * @returns The validated origin if allowed, or "null" if not
+ */
+function validateOrigin(origin: string | null): string {
+  if (!origin) {
+    return "null";
+  }
+  
+  const normalizedOrigin = origin.trim().toLowerCase();
+  const allowedOrigins = getAllowedOrigins();
+  
+  // If no origins configured, reject all (fail closed)
+  if (allowedOrigins.length === 0) {
+    // In development, allow any origin for testing
+    if (isDevelopmentEnvironment()) {
+      return origin;
+    }
+    // Production with no allowlist = reject
+    console.warn("[SECURITY] CORS: No ALLOWED_ORIGINS configured, rejecting origin:", normalizedOrigin);
+    return "null";
+  }
+  
+  // Check if origin is in allowlist
+  if (allowedOrigins.includes(normalizedOrigin)) {
+    return origin; // Return original (not normalized) for exact match
+  }
+  
+  // Check for wildcard subdomain patterns (e.g., "*.lovableproject.com")
+  for (const allowed of allowedOrigins) {
+    if (allowed.startsWith("*.")) {
+      const suffix = allowed.slice(1); // e.g., ".lovableproject.com"
+      try {
+        const originUrl = new URL(normalizedOrigin);
+        if (originUrl.host.endsWith(suffix) || originUrl.host === suffix.slice(1)) {
+          return origin;
+        }
+      } catch {
+        // Invalid origin URL, skip
+      }
+    }
+  }
+  
+  console.warn("[SECURITY] CORS: Origin not in allowlist:", normalizedOrigin);
+  return "null";
+}
+
+/**
+ * Build CORS headers for a specific request.
+ * 
+ * CRITICAL: This function computes CORS headers based on the request's Origin.
+ * - If Origin is in allowlist → set Access-Control-Allow-Origin to that origin
+ * - If Origin is NOT in allowlist → set Access-Control-Allow-Origin to "null"
+ * - Access-Control-Allow-Credentials is NOT set (cookies not needed cross-origin)
+ * 
+ * @param req - The incoming request
+ * @returns Record of CORS headers
+ */
+export function buildCorsHeaders(req: Request): Record<string, string> {
+  const origin = req.headers.get("origin");
+  const validatedOrigin = validateOrigin(origin);
+  
+  return {
+    "Access-Control-Allow-Origin": validatedOrigin,
+    // Only allow headers we actually need:
+    // - content-type: for JSON payloads
+    // - authorization: for bearer tokens (used by authenticated endpoints)
+    // - x-client-info: Supabase client metadata
+    // - apikey: Supabase anon key (not sensitive, publishable)
+    "Access-Control-Allow-Headers": "content-type, authorization, x-client-info, apikey",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Max-Age": "86400", // 24 hours preflight cache
+    // NOTE: Access-Control-Allow-Credentials is NOT set (default: false)
+    // We do not use cookies cross-origin
+  };
+}
+
+/**
+ * Build combined CORS + security headers for a specific request.
+ * 
+ * Use this for all API responses to ensure both CORS and security headers are present.
+ * 
+ * @param req - The incoming request
+ * @returns Record of combined CORS and security headers
+ */
+export function buildCorsSecurityHeaders(req: Request): Record<string, string> {
+  return {
+    ...buildCorsHeaders(req),
+    ...securityHeaders,
+  };
+}
+
+/**
+ * Static CORS headers (DEPRECATED - use buildCorsSecurityHeaders instead)
+ * 
+ * @deprecated This uses Access-Control-Allow-Origin: "*" which is insecure.
+ * Use buildCorsSecurityHeaders(req) for dynamic origin validation.
  */
 export const corsSecurityHeaders: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
+  // DEPRECATED: Static headers maintained for backward compatibility during migration
+  // Edge functions should migrate to buildCorsSecurityHeaders(req)
+  "Access-Control-Allow-Origin": "null", // Fail closed by default
+  "Access-Control-Allow-Headers": "content-type, authorization, x-client-info, apikey",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   ...securityHeaders,
 };
 
 /**
- * Create headers object for JSON API responses with full security
+ * Create headers object for JSON API responses with full security.
+ * 
+ * @param req - The incoming request (for CORS origin validation)
+ * @param additionalHeaders - Optional additional headers
  */
 export function createSecureJsonHeaders(
+  req?: Request,
   additionalHeaders?: Record<string, string>
 ): Record<string, string> {
+  // If request provided, use dynamic CORS headers
+  if (req) {
+    return {
+      "Content-Type": "application/json",
+      ...buildCorsSecurityHeaders(req),
+      ...additionalHeaders,
+    };
+  }
+  
+  // Fallback to static headers (deprecated path)
   return {
     "Content-Type": "application/json",
     ...corsSecurityHeaders,

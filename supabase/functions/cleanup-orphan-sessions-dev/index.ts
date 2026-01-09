@@ -24,7 +24,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { logEyeEvent, SESSION_INACTIVITY_TIMEOUT_MINUTES } from "../_shared/eye.ts";
-import { corsSecurityHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
+import { buildCorsSecurityHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
 
 const SERVICE_NAME = "cleanup-orphan-sessions-dev";
 
@@ -67,9 +67,12 @@ Deno.serve(async (req) => {
   const securityResponse = await enforceTransportSecurity(req);
   if (securityResponse) return securityResponse;
 
+  // Build CORS headers with validated origin
+  const corsHeaders = buildCorsSecurityHeaders(req);
+
   // CORS preflight (only after security check passes)
   if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: corsSecurityHeaders });
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
 
   // Only allow in development environment
@@ -77,7 +80,7 @@ Deno.serve(async (req) => {
   if (environment === "production") {
     return new Response(
       JSON.stringify({ error: "This function is only available in development" }),
-      { status: 403, headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
+      { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 
@@ -143,7 +146,7 @@ Deno.serve(async (req) => {
           dryRun,
           criteria: { daysBack, maxEventCount, inactiveMinutes },
         } as CleanupResponse),
-        { headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -165,12 +168,37 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // If has terminal event, skip
+      // If session already has a terminal event, skip
       if (terminalEvents && terminalEvents.length > 0) {
         continue;
       }
 
-      // Count total events for this session
+      // Check last heartbeat/activity
+      const { data: lastActivity, error: activityError } = await supabase
+        .from("eye_events")
+        .select("created_at, event_type")
+        .eq("session_id", session.session_id)
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (activityError) {
+        console.error(`[${SERVICE_NAME}] Error checking activity for ${session.session_id}:`, activityError);
+        continue;
+      }
+
+      const lastActivityTime = lastActivity?.[0]?.created_at 
+        ? new Date(lastActivity[0].created_at) 
+        : new Date(session.created_at);
+
+      // Check if session is inactive (no activity within timeout window)
+      if (lastActivityTime < inactiveCutoff) {
+        // Session is abandoned (no activity within timeout)
+        abandonedSessionIds.push(session.session_id);
+        console.log(`[${SERVICE_NAME}] Session ${session.session_id} is ABANDONED (last activity: ${lastActivityTime.toISOString()})`);
+        continue;
+      }
+
+      // Count total events for the session
       const { count: eventCount, error: countError } = await supabase
         .from("eye_events")
         .select("id", { count: "exact", head: true })
@@ -181,52 +209,12 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Get the most recent event timestamp
-      const { data: latestEvent, error: latestError } = await supabase
-        .from("eye_events")
-        .select("created_at")
-        .eq("session_id", session.session_id)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .single();
-
-      if (latestError && latestError.code !== "PGRST116") {
-        console.error(`[${SERVICE_NAME}] Error getting latest event for ${session.session_id}:`, latestError);
-        continue;
-      }
-
-      const lastEventTime = latestEvent?.created_at
-        ? new Date(latestEvent.created_at)
-        : new Date(session.created_at);
-
-      // Session is abandoned if inactive for too long (no heartbeat)
-      // This is the primary abandonment detection mechanism
-      const isInactive = lastEventTime < inactiveCutoff;
-      
-      // Session is an orphan if it has very few events (dev cleanup heuristic)
-      const hasLowEventCount = (eventCount || 0) <= maxEventCount;
-
-      if (isInactive) {
-        // Inactivity-based abandonment: this is the safety-first path
-        abandonedSessionIds.push(session.session_id);
-        console.log(`[${SERVICE_NAME}] Abandoned session detected: ${session.session_id}`, {
-          eventCount,
-          lastEventTime: lastEventTime.toISOString(),
-          minutesSinceLastEvent: (Date.now() - lastEventTime.getTime()) / (1000 * 60),
-          reason: "INACTIVITY_TIMEOUT",
-        });
-      } else if (hasLowEventCount) {
-        // Low event count: dev cleanup heuristic (separate from abandonment)
+      // If session has few events and is relatively old, consider it an orphan (dev cleanup)
+      if ((eventCount ?? 0) <= maxEventCount) {
         orphanSessionIds.push(session.session_id);
-        console.log(`[${SERVICE_NAME}] Orphan session found: ${session.session_id}`, {
-          eventCount,
-          lastEventTime: lastEventTime.toISOString(),
-          reason: "LOW_EVENT_COUNT",
-        });
+        console.log(`[${SERVICE_NAME}] Session ${session.session_id} is ORPHAN (${eventCount} events)`);
       }
     }
-
-    console.log(`[${SERVICE_NAME}] Identified ${abandonedSessionIds.length} abandoned + ${orphanSessionIds.length} orphan sessions`);
 
     const allSessionsToCleanup = [...abandonedSessionIds, ...orphanSessionIds];
 
@@ -241,7 +229,7 @@ Deno.serve(async (req) => {
           dryRun,
           criteria: { daysBack, maxEventCount, inactiveMinutes },
         } as CleanupResponse),
-        { headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -257,7 +245,7 @@ Deno.serve(async (req) => {
           dryRun: true,
           criteria: { daysBack, maxEventCount, inactiveMinutes },
         } as CleanupResponse),
-        { headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -447,14 +435,14 @@ Deno.serve(async (req) => {
     console.log(`[${SERVICE_NAME}] Cleanup complete:`, response);
 
     return new Response(JSON.stringify(response), {
-      headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error: unknown) {
     console.error(`[${SERVICE_NAME}] Error:`, error);
     const message = error instanceof Error ? error.message : "Unknown error";
     return new Response(
       JSON.stringify({ error: message }),
-      { status: 500, headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...buildCorsSecurityHeaders(req), "Content-Type": "application/json" } }
     );
   }
 });

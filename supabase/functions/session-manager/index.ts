@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { logEyeEvent } from "../_shared/eye.ts";
-import { corsSecurityHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
+import { buildCorsSecurityHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
 
 const SERVICE_NAME = "session-manager";
 
@@ -107,74 +107,20 @@ async function purgeSessionData(
     purgeSuccess = false;
   }
 
-  // 3. Delete ephemeral artifacts (transcripts)
-  const { data: artifacts } = await supabase
-    .from("ephemeral_artifacts")
-    .select("id, artifact_type")
-    .eq("session_id", sessionId);
-
-  const { error: artifactsError } = await supabase
+  // 3. Delete ephemeral artifacts
+  const { data: deletedArtifacts, error: artifactsError } = await supabase
     .from("ephemeral_artifacts")
     .delete()
-    .eq("session_id", sessionId);
+    .eq("session_id", sessionId)
+    .select("id");
 
   if (artifactsError) {
-    console.error("Failed to delete ephemeral artifacts:", artifactsError);
+    console.error("Failed to delete artifacts:", artifactsError);
     purgeSuccess = false;
-  } else if (artifacts && artifacts.length > 0) {
-    artifactsDeletedCount = artifacts.length;
-    console.log(`[Purge] Deleted ${artifacts.length} ephemeral artifacts`);
-
-    // Emit deletion events for each artifact type
-    const transcriptDeleted = artifacts.some(
-      (a: { artifact_type: string }) => a.artifact_type === "transcript"
-    );
-    const minimizedDeleted = artifacts.some(
-      (a: { artifact_type: string }) => a.artifact_type === "minimized_transcript"
-    );
-
-    if (transcriptDeleted) {
-      await logEyeEvent(supabase, {
-        session_id: sessionId,
-        event_type: "TRANSCRIPT_DELETED",
-        request: req,
-        serviceName: SERVICE_NAME,
-        payload: {
-          severity: "NOTICE",
-          reason_code: purgeReasonCode,
-          request_id,
-        },
-      });
-    }
-    if (minimizedDeleted) {
-      await logEyeEvent(supabase, {
-        session_id: sessionId,
-        event_type: "MINIMIZED_TRANSCRIPT_DELETED",
-        request: req,
-        serviceName: SERVICE_NAME,
-        payload: {
-          severity: "NOTICE",
-          reason_code: purgeReasonCode,
-          request_id,
-        },
-      });
-    }
+  } else {
+    artifactsDeletedCount = deletedArtifacts?.length ?? 0;
+    console.log(`[Purge] Deleted ${artifactsDeletedCount} artifacts`);
   }
-
-  // Emit EPHEMERAL_SCAN_RESULT to indicate all data purged (deletion proof)
-  await logEyeEvent(supabase, {
-    session_id: sessionId,
-    event_type: "EPHEMERAL_SCAN_RESULT",
-    request: req,
-    serviceName: SERVICE_NAME,
-    payload: {
-      remaining_count: 0,
-      remaining_types: [],
-      severity: "NOTICE",
-      reason_code: purgeReasonCode,
-      request_id,
-    },
-  });
 
   // Emit PURGE_COMPLETED or PURGE_FAILED
   if (purgeSuccess) {
@@ -186,10 +132,25 @@ async function purgeSessionData(
       payload: {
         severity: "NOTICE",
         reason_code: purgeReasonCode,
-        audio_deleted: audioDeletedCount,
-        artifacts_deleted: artifactsDeletedCount,
         actor_type,
         operator_id,
+        request_id,
+        audio_deleted: audioDeletedCount,
+        artifacts_deleted: artifactsDeletedCount,
+      },
+    });
+
+    // Emit EPHEMERAL_SCAN_RESULT for deletion proof
+    await logEyeEvent(supabase, {
+      session_id: sessionId,
+      event_type: "EPHEMERAL_SCAN_RESULT",
+      request: req,
+      serviceName: SERVICE_NAME,
+      payload: {
+        remaining_count: 0,
+        remaining_types: [],
+        severity: "NOTICE",
+        reason_code: purgeReasonCode,
         request_id,
       },
     });
@@ -201,9 +162,7 @@ async function purgeSessionData(
       serviceName: SERVICE_NAME,
       payload: {
         severity: "HIGH",
-        result: "failure",
         reason_code: purgeReasonCode,
-        failure_reason_code: "PARTIAL_DELETION",
         actor_type,
         operator_id,
         request_id,
@@ -211,8 +170,7 @@ async function purgeSessionData(
     });
   }
 
-  console.log(`[Purge] Completed purge for session ${sessionId}, reason: ${purgeReasonCode}`);
-  return purgeSuccess;
+  console.log(`[Purge] Complete for session ${sessionId}`);
 }
 
 serve(async (req) => {
@@ -223,9 +181,12 @@ serve(async (req) => {
   const securityResponse = await enforceTransportSecurity(req);
   if (securityResponse) return securityResponse;
 
+  // Build CORS headers with validated origin
+  const corsHeaders = buildCorsSecurityHeaders(req);
+
   // CORS preflight (only after security check passes)
   if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: corsSecurityHeaders });
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
 
   try {
@@ -254,7 +215,7 @@ serve(async (req) => {
             }),
             {
               status: 400,
-              headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
             }
           );
         }
@@ -298,7 +259,7 @@ serve(async (req) => {
         });
 
         return new Response(JSON.stringify({ success: true, session }), {
-          headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
@@ -308,7 +269,7 @@ serve(async (req) => {
             JSON.stringify({ error: "session_id is required" }),
             {
               status: 400,
-              headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
             }
           );
         }
@@ -332,7 +293,7 @@ serve(async (req) => {
         return new Response(
           JSON.stringify({ success: true, session, artifacts }),
           {
-            headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
           }
         );
       }
@@ -343,7 +304,7 @@ serve(async (req) => {
             JSON.stringify({ error: "session_id is required" }),
             {
               status: 400,
-              headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
             }
           );
         }
@@ -371,7 +332,7 @@ serve(async (req) => {
         }
 
         return new Response(JSON.stringify({ success: true }), {
-          headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
@@ -381,7 +342,7 @@ serve(async (req) => {
             JSON.stringify({ error: "session_id is required" }),
             {
               status: 400,
-              headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
             }
           );
         }
@@ -421,7 +382,7 @@ serve(async (req) => {
         });
 
         return new Response(JSON.stringify({ success: true }), {
-          headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
@@ -431,7 +392,7 @@ serve(async (req) => {
             JSON.stringify({ error: "session_id is required" }),
             {
               status: 400,
-              headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
             }
           );
         }
@@ -471,7 +432,7 @@ serve(async (req) => {
         });
 
         return new Response(JSON.stringify({ success: true }), {
-          headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
@@ -481,7 +442,7 @@ serve(async (req) => {
             JSON.stringify({ error: "session_id is required" }),
             {
               status: 400,
-              headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
             }
           );
         }
@@ -495,7 +456,7 @@ serve(async (req) => {
         });
 
         return new Response(JSON.stringify({ success: true }), {
-          headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
@@ -507,7 +468,7 @@ serve(async (req) => {
             JSON.stringify({ error: "session_id is required for export" }),
             {
               status: 400,
-              headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
             }
           );
         }
@@ -524,7 +485,7 @@ serve(async (req) => {
             JSON.stringify({ error: "Session not found" }),
             {
               status: 404,
-              headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
             }
           );
         }
@@ -619,7 +580,7 @@ serve(async (req) => {
             },
           }),
           {
-            headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
           }
         );
       }
@@ -629,7 +590,7 @@ serve(async (req) => {
           JSON.stringify({ error: `Unknown action: ${action}` }),
           {
             status: 400,
-            headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
           }
         );
     }
@@ -641,7 +602,7 @@ serve(async (req) => {
       }),
       {
         status: 500,
-        headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+        headers: { ...buildCorsSecurityHeaders(req), "Content-Type": "application/json" },
       }
     );
   }
