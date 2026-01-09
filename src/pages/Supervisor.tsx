@@ -21,6 +21,7 @@ import { EventDetailDrawer } from "@/components/supervisor/EventDetailDrawer";
 import { PurgeProofPanel } from "@/components/supervisor/PurgeProofPanel";
 import { AIAuthorizationPanel } from "@/components/supervisor/AIAuthorizationPanel";
 import { ComplianceExportPanel } from "@/components/supervisor/ComplianceExportPanel";
+import { SecurityDashboardPanel } from "@/components/supervisor/SecurityDashboardPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -265,9 +266,10 @@ export default function Supervisor() {
             </TabsContent>
 
             <TabsContent value="governance" className="flex-1 mt-0">
-              <div className="grid gap-6 md:grid-cols-2">
+              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
                 <AIAuthorizationPanel />
                 <ComplianceExportPanel />
+                <SecurityDashboardPanel className="lg:col-span-1" />
               </div>
             </TabsContent>
           </Tabs>
