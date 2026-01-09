@@ -700,6 +700,12 @@ function getAllowedOrigins(): string[] {
 /**
  * Validate an origin against the allowlist.
  * 
+ * SECURITY CONSTRAINTS (production/staging):
+ * - Origin MUST use https:// protocol (http:// is always rejected)
+ * - Origin MUST match allowlist (exact or wildcard)
+ * - Wildcard matching uses proper suffix check with dot boundary
+ *   to prevent example.com.evil.com from matching *.example.com
+ * 
  * @param origin - The Origin header value from the request
  * @returns The validated origin if allowed, or "null" if not
  */
@@ -709,35 +715,71 @@ function validateOrigin(origin: string | null): string {
   }
   
   const normalizedOrigin = origin.trim().toLowerCase();
+  const isDev = isDevelopmentEnvironment();
+  
+  // ============================================================
+  // SECURITY: Reject http:// origins in production/staging
+  // Only development allows insecure origins for local testing
+  // ============================================================
+  let originUrl: URL;
+  try {
+    originUrl = new URL(normalizedOrigin);
+  } catch {
+    console.warn("[SECURITY] CORS: Invalid origin URL rejected:", normalizedOrigin);
+    return "null";
+  }
+  
+  if (originUrl.protocol !== "https:" && !isDev) {
+    console.warn("[SECURITY] CORS: Rejecting non-HTTPS origin in production:", normalizedOrigin);
+    return "null";
+  }
+  
   const allowedOrigins = getAllowedOrigins();
   
-  // If no origins configured, reject all (fail closed)
+  // If no origins configured, reject all (fail closed) unless dev
   if (allowedOrigins.length === 0) {
-    // In development, allow any origin for testing
-    if (isDevelopmentEnvironment()) {
-      return origin;
+    if (isDev) {
+      return origin; // Allow any origin in development for testing
     }
-    // Production with no allowlist = reject
     console.warn("[SECURITY] CORS: No ALLOWED_ORIGINS configured, rejecting origin:", normalizedOrigin);
     return "null";
   }
   
-  // Check if origin is in allowlist
+  // Check if origin is in allowlist (exact match)
   if (allowedOrigins.includes(normalizedOrigin)) {
     return origin; // Return original (not normalized) for exact match
   }
   
-  // Check for wildcard subdomain patterns (e.g., "*.lovableproject.com")
+  // ============================================================
+  // WILDCARD MATCHING (e.g., "*.example.com")
+  // 
+  // SECURITY CONSTRAINTS:
+  // - Pattern must start with "*."
+  // - MUST enforce HTTPS protocol
+  // - MUST use proper dot-boundary suffix matching
+  //   - "*.example.com" matches "app.example.com" ✓
+  //   - "*.example.com" does NOT match "example.com.evil.com" ✗
+  //   - "*.example.com" matches "example.com" (bare domain) ✓
+  // ============================================================
   for (const allowed of allowedOrigins) {
     if (allowed.startsWith("*.")) {
-      const suffix = allowed.slice(1); // e.g., ".lovableproject.com"
-      try {
-        const originUrl = new URL(normalizedOrigin);
-        if (originUrl.host.endsWith(suffix) || originUrl.host === suffix.slice(1)) {
-          return origin;
-        }
-      } catch {
-        // Invalid origin URL, skip
+      // Extract the base domain (e.g., "example.com" from "*.example.com")
+      const baseDomain = allowed.slice(2); // Remove "*."
+      
+      // Get the origin's host (already validated as proper URL above)
+      const originHost = originUrl.host;
+      
+      // Check for exact base domain match (e.g., "example.com")
+      if (originHost === baseDomain) {
+        return origin;
+      }
+      
+      // Check for subdomain match with PROPER dot boundary
+      // This prevents "example.com.evil.com" from matching "*.example.com"
+      // by requiring the match to be ".example.com" at a dot boundary
+      const wildcardSuffix = "." + baseDomain;
+      if (originHost.endsWith(wildcardSuffix)) {
+        return origin;
       }
     }
   }
