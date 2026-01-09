@@ -24,7 +24,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { logEyeEvent, SESSION_INACTIVITY_TIMEOUT_MINUTES } from "../_shared/eye.ts";
-import { corsSecurityHeaders as corsHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
+import { corsSecurityHeaders, enforceTransportSecurity } from "../_shared/security-headers.ts";
 
 const SERVICE_NAME = "cleanup-orphan-sessions-dev";
 
@@ -60,21 +60,24 @@ const TERMINAL_EVENT_TYPES = [
 ];
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
-
-  // MANDATORY security check - no exceptions, no overrides
+  // ============================================================
+  // MANDATORY SECURITY CHECK - BEFORE ANY OTHER LOGIC
+  // This MUST run before CORS preflight to enforce HTTPS on all requests
+  // ============================================================
   const securityResponse = await enforceTransportSecurity(req);
   if (securityResponse) return securityResponse;
+
+  // CORS preflight (only after security check passes)
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: corsSecurityHeaders });
+  }
 
   // Only allow in development environment
   const environment = Deno.env.get("ENVIRONMENT") || "dev";
   if (environment === "production") {
     return new Response(
       JSON.stringify({ error: "This function is only available in development" }),
-      { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 403, headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
     );
   }
 
@@ -140,7 +143,7 @@ Deno.serve(async (req) => {
           dryRun,
           criteria: { daysBack, maxEventCount, inactiveMinutes },
         } as CleanupResponse),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -238,7 +241,7 @@ Deno.serve(async (req) => {
           dryRun,
           criteria: { daysBack, maxEventCount, inactiveMinutes },
         } as CleanupResponse),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -254,7 +257,7 @@ Deno.serve(async (req) => {
           dryRun: true,
           criteria: { daysBack, maxEventCount, inactiveMinutes },
         } as CleanupResponse),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -444,14 +447,14 @@ Deno.serve(async (req) => {
     console.log(`[${SERVICE_NAME}] Cleanup complete:`, response);
 
     return new Response(JSON.stringify(response), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
     });
   } catch (error: unknown) {
     console.error(`[${SERVICE_NAME}] Error:`, error);
     const message = error instanceof Error ? error.message : "Unknown error";
     return new Response(
       JSON.stringify({ error: message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...corsSecurityHeaders, "Content-Type": "application/json" } }
     );
   }
 });
