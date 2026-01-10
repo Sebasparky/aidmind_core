@@ -1,3 +1,4 @@
+/// <reference types="@testing-library/jest-dom" />
 /**
  * XSS Prevention Tests - Safe Render Module
  * 
@@ -7,7 +8,6 @@
  * NO REAL SECRETS REQUIRED - all tests use mock data.
  */
 
-import "@testing-library/jest-dom/vitest";
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import React from "react";
