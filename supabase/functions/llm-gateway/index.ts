@@ -16,12 +16,117 @@ import {
   createSecureJsonHeaders,
 } from "../_shared/security-headers.ts";
 import { checkLLMAuthorization } from "../_shared/llm-authorization.ts";
+import {
+  validateUuid,
+  validatePlainText,
+  validateEnum,
+  validationErrorResponse,
+  type ValidationErrors,
+} from "../_shared/input-validation.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 
 const SERVICE_NAME = "llm-gateway";
+
+// Valid LLM models (allowlist)
+const VALID_MODELS = [
+  "google/gemini-2.5-flash",
+  "google/gemini-2.0-flash",
+  "google/gemini-3-flash-preview",
+  "anthropic/claude-3-5-sonnet",
+  "anthropic/claude-3-5-haiku",
+  "openai/gpt-4o",
+  "openai/gpt-4o-mini",
+] as const;
+
+// Validation field configs
+const FIELD_LIMITS = {
+  operator_id: { maxLength: 50, minLength: 1 },
+} as const;
+
+interface LLMRequest {
+  session_id: string;
+  operator_id?: string;
+  messages: Array<{ role: string; content: string }>;
+  model?: string;
+}
+
+/**
+ * Validate LLM gateway request payload.
+ * CRITICAL: Never echo raw user input in error responses.
+ */
+function validateLLMRequest(body: unknown): { valid: true; data: LLMRequest } | { valid: false; errors: ValidationErrors } {
+  if (typeof body !== "object" || body === null) {
+    return { valid: false, errors: { body: "INVALID_INPUT" } };
+  }
+
+  const rawBody = body as Record<string, unknown>;
+  const errors: ValidationErrors = {};
+
+  // Validate session_id (required UUID)
+  const sessionIdResult = validateUuid("session_id", rawBody.session_id);
+  if (!sessionIdResult.ok) {
+    errors.session_id = sessionIdResult.errorCode;
+  }
+
+  // Validate operator_id (optional plain text)
+  if (rawBody.operator_id !== undefined && rawBody.operator_id !== null && rawBody.operator_id !== "") {
+    const operatorIdResult = validatePlainText("operator_id", rawBody.operator_id, FIELD_LIMITS.operator_id);
+    if (!operatorIdResult.ok) {
+      errors.operator_id = operatorIdResult.errorCode;
+    }
+  }
+
+  // Validate messages array
+  if (!Array.isArray(rawBody.messages)) {
+    errors.messages = "INVALID_INPUT";
+  } else if (rawBody.messages.length === 0) {
+    errors.messages = "REQUIRED";
+  } else {
+    // Validate each message
+    for (let i = 0; i < rawBody.messages.length; i++) {
+      const msg = rawBody.messages[i];
+      if (typeof msg !== "object" || msg === null) {
+        errors[`messages[${i}]`] = "INVALID_INPUT";
+        continue;
+      }
+      
+      const msgObj = msg as Record<string, unknown>;
+      
+      // Validate role (enum: user, assistant, system)
+      const roleResult = validateEnum(`messages[${i}].role`, msgObj.role, ["user", "assistant", "system"] as const);
+      if (!roleResult.ok) {
+        errors[`messages[${i}].role`] = roleResult.errorCode;
+      }
+      
+      // Validate content (plain text, max 50000 chars for LLM context)
+      const contentResult = validatePlainText(`messages[${i}].content`, msgObj.content, { maxLength: 50000, minLength: 1, preserveNewlines: true });
+      if (!contentResult.ok) {
+        errors[`messages[${i}].content`] = contentResult.errorCode;
+      }
+    }
+  }
+
+  // Validate model (optional, defaults to google/gemini-2.5-flash)
+  if (rawBody.model !== undefined && rawBody.model !== null && rawBody.model !== "") {
+    const modelResult = validateEnum("model", rawBody.model, VALID_MODELS);
+    if (!modelResult.ok) {
+      errors.model = modelResult.errorCode;
+    }
+  }
+
+  if (Object.keys(errors).length > 0) {
+    console.log(`[${SERVICE_NAME}] Validation failed:`, {
+      failed_fields: Object.keys(errors),
+      error_codes: Object.values(errors),
+    });
+    return { valid: false, errors };
+  }
+
+  return { valid: true, data: body as LLMRequest };
+}
 
 Deno.serve(async (req) => {
   // ============================================================
@@ -44,12 +149,33 @@ Deno.serve(async (req) => {
   const tenantId = deriveTenantId(req);
 
   try {
-    const body = await req.json();
-    const { session_id, operator_id, messages, model = "google/gemini-2.5-flash" } = body;
+    // Parse and validate request body
+    let rawBody: unknown;
+    try {
+      rawBody = await req.json();
+    } catch {
+      return new Response(
+        JSON.stringify({ error: "Invalid JSON body", code: "INVALID_JSON" }),
+        { status: 400, headers: createSecureJsonHeaders(req) }
+      );
+    }
 
+    // Validate all fields using allowlist-based validation
+    const validation = validateLLMRequest(rawBody);
+    if (!validation.valid) {
+      // CRITICAL: Never echo attacker payload - return only field names and error codes
+      return validationErrorResponse(validation.errors, corsHeaders);
+    }
+
+    const { session_id, operator_id, messages, model = "google/gemini-2.5-flash" } = validation.data;
+
+    // Log only sanitized metadata (never raw values)
+    console.log(`[${SERVICE_NAME}] Request: session=${session_id ? "provided" : "missing"}, messages=${messages.length}`);
+
+    // session_id already validated as required UUID above - this check is redundant but kept for safety
     if (!session_id) {
       return new Response(
-        JSON.stringify({ error: "session_id is required" }),
+        JSON.stringify({ error: "session_id is required", code: "REQUIRED" }),
         { status: 400, headers: createSecureJsonHeaders(req) }
       );
     }

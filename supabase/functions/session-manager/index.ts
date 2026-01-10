@@ -2,14 +2,45 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { logEyeEvent } from "../_shared/eye.ts";
 import { buildCorsSecurityHeaders, enforceTransportSecurity, createSecureJsonHeaders } from "../_shared/security-headers.ts";
+import {
+  validatePlainText,
+  validateUuid,
+  validateEnum,
+  validateOptional,
+  collectErrors,
+  validationErrorResponse,
+  type ValidationErrors,
+  type ValidationResult,
+} from "../_shared/input-validation.ts";
 
 const SERVICE_NAME = "session-manager";
 
 // TTL configurations
 const SESSION_TTL_HOURS = 24;
 
+// Valid actions (allowlist)
+const VALID_ACTIONS = ["create", "update", "close", "cancel", "purge", "get", "export"] as const;
+type SessionAction = typeof VALID_ACTIONS[number];
+
+// Valid session states (allowlist)
+const VALID_STATES = ["NEW", "RECORDING", "TRANSCRIBED", "REDACTING", "INPUT_READY", "VERIFICATION_REVIEW", "EXPORTING", "EXPORTED", "CLOSED", "CANCELLED", "ABANDONED"] as const;
+
+// Valid interaction types (allowlist)
+const VALID_INTERACTION_TYPES = ["in_person", "phone", "video", "chat", "email"] as const;
+
+// Validation field configs (max lengths enforced)
+const FIELD_LIMITS = {
+  case_id: { maxLength: 50, minLength: 1 },
+  case_label: { maxLength: 120, minLength: 1 },
+  client_label: { maxLength: 100, minLength: 1 },
+  operator_id: { maxLength: 50, minLength: 1 },
+  request_id: { maxLength: 50, minLength: 1 },
+  destination_type: { maxLength: 50, minLength: 1 },
+  destination_id: { maxLength: 100, minLength: 1 },
+} as const;
+
 interface SessionRequest {
-  action: "create" | "update" | "close" | "cancel" | "purge" | "get" | "export";
+  action: SessionAction;
   session_id?: string;
   operator_id?: string;
   request_id?: string; // Idempotency key
@@ -23,6 +54,127 @@ interface SessionRequest {
     destination_type?: string;
     destination_id?: string;
   };
+}
+
+/**
+ * Validate session manager request payload.
+ * All fields are validated with allowlist-based rules.
+ * CRITICAL: Never echo raw user input in error responses.
+ */
+function validateSessionRequest(body: unknown): { valid: true; data: SessionRequest } | { valid: false; errors: ValidationErrors } {
+  if (typeof body !== "object" || body === null) {
+    return { valid: false, errors: { body: "INVALID_INPUT" } };
+  }
+
+  const rawBody = body as Record<string, unknown>;
+  const errors: ValidationErrors = {};
+
+  // Validate action (required, enum)
+  const actionResult = validateEnum("action", rawBody.action, VALID_ACTIONS);
+  if (!actionResult.ok) {
+    errors.action = actionResult.errorCode;
+  }
+
+  // Validate session_id (optional UUID)
+  if (rawBody.session_id !== undefined && rawBody.session_id !== null && rawBody.session_id !== "") {
+    const sessionIdResult = validateUuid("session_id", rawBody.session_id);
+    if (!sessionIdResult.ok) {
+      errors.session_id = sessionIdResult.errorCode;
+    }
+  }
+
+  // Validate operator_id (optional plain text)
+  if (rawBody.operator_id !== undefined && rawBody.operator_id !== null && rawBody.operator_id !== "") {
+    const operatorIdResult = validatePlainText("operator_id", rawBody.operator_id, FIELD_LIMITS.operator_id);
+    if (!operatorIdResult.ok) {
+      errors.operator_id = operatorIdResult.errorCode;
+    }
+  }
+
+  // Validate request_id (optional plain text)
+  if (rawBody.request_id !== undefined && rawBody.request_id !== null && rawBody.request_id !== "") {
+    const requestIdResult = validatePlainText("request_id", rawBody.request_id, FIELD_LIMITS.request_id);
+    if (!requestIdResult.ok) {
+      errors.request_id = requestIdResult.errorCode;
+    }
+  }
+
+  // Validate data object fields if present
+  if (rawBody.data !== undefined && rawBody.data !== null) {
+    if (typeof rawBody.data !== "object") {
+      errors.data = "INVALID_INPUT";
+    } else {
+      const data = rawBody.data as Record<string, unknown>;
+
+      // case_id
+      if (data.case_id !== undefined && data.case_id !== null && data.case_id !== "") {
+        const caseIdResult = validatePlainText("data.case_id", data.case_id, FIELD_LIMITS.case_id);
+        if (!caseIdResult.ok) {
+          errors["data.case_id"] = caseIdResult.errorCode;
+        }
+      }
+
+      // case_label (user-provided title, max 120 chars)
+      if (data.case_label !== undefined && data.case_label !== null && data.case_label !== "") {
+        const caseLabelResult = validatePlainText("data.case_label", data.case_label, FIELD_LIMITS.case_label);
+        if (!caseLabelResult.ok) {
+          errors["data.case_label"] = caseLabelResult.errorCode;
+        }
+      }
+
+      // client_label
+      if (data.client_label !== undefined && data.client_label !== null && data.client_label !== "") {
+        const clientLabelResult = validatePlainText("data.client_label", data.client_label, FIELD_LIMITS.client_label);
+        if (!clientLabelResult.ok) {
+          errors["data.client_label"] = clientLabelResult.errorCode;
+        }
+      }
+
+      // interaction_type (enum)
+      if (data.interaction_type !== undefined && data.interaction_type !== null && data.interaction_type !== "") {
+        const interactionResult = validateEnum("data.interaction_type", data.interaction_type, VALID_INTERACTION_TYPES);
+        if (!interactionResult.ok) {
+          errors["data.interaction_type"] = interactionResult.errorCode;
+        }
+      }
+
+      // state (enum)
+      if (data.state !== undefined && data.state !== null && data.state !== "") {
+        const stateResult = validateEnum("data.state", data.state, VALID_STATES);
+        if (!stateResult.ok) {
+          errors["data.state"] = stateResult.errorCode;
+        }
+      }
+
+      // destination_type
+      if (data.destination_type !== undefined && data.destination_type !== null && data.destination_type !== "") {
+        const destTypeResult = validatePlainText("data.destination_type", data.destination_type, FIELD_LIMITS.destination_type);
+        if (!destTypeResult.ok) {
+          errors["data.destination_type"] = destTypeResult.errorCode;
+        }
+      }
+
+      // destination_id
+      if (data.destination_id !== undefined && data.destination_id !== null && data.destination_id !== "") {
+        const destIdResult = validatePlainText("data.destination_id", data.destination_id, FIELD_LIMITS.destination_id);
+        if (!destIdResult.ok) {
+          errors["data.destination_id"] = destIdResult.errorCode;
+        }
+      }
+    }
+  }
+
+  if (Object.keys(errors).length > 0) {
+    // Log validation failure metadata (never log raw values)
+    console.log(`[${SERVICE_NAME}] Validation failed:`, {
+      failed_fields: Object.keys(errors),
+      error_codes: Object.values(errors),
+    });
+    return { valid: false, errors };
+  }
+
+  // All validations passed - cast to typed request
+  return { valid: true, data: body as SessionRequest };
 }
 
 // Purge options for unified reason code tracking
@@ -194,17 +346,28 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const {
-      action,
-      session_id,
-      operator_id,
-      request_id,
-      data,
-    }: SessionRequest = await req.json();
+    // Parse and validate request body
+    let rawBody: unknown;
+    try {
+      rawBody = await req.json();
+    } catch {
+      return new Response(
+        JSON.stringify({ error: "Invalid JSON body", code: "INVALID_JSON" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
-    console.log(
-      `[SessionManager] Action: ${action}, Session: ${session_id || "new"}, RequestId: ${request_id || "none"}`
-    );
+    // Validate all fields using allowlist-based validation
+    const validation = validateSessionRequest(rawBody);
+    if (!validation.valid) {
+      // CRITICAL: Never echo attacker payload - return only field names and error codes
+      return validationErrorResponse(validation.errors, corsHeaders);
+    }
+
+    const { action, session_id, operator_id, request_id, data } = validation.data;
+
+    // Log only sanitized metadata (never raw values)
+    console.log(`[SessionManager] Action: ${action}, Session: ${session_id ? "provided" : "new"}, RequestId: ${request_id ? "provided" : "none"}`);
 
     switch (action) {
       case "create": {
