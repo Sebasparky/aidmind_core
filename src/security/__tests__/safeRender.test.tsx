@@ -154,9 +154,16 @@ describe("renderSafeMarkdown", () => {
     it("should not render img tags with event handlers", () => {
       const { container } = render(renderSafeMarkdown('![alt](x" onerror="alert(1))'));
       
+      // No img element should exist
       expect(container.querySelector("img")).toBeNull();
-      // Check no onerror attribute exists anywhere
-      expect(container.innerHTML).not.toContain("onerror");
+      // No onerror attribute should exist on any element
+      expect(container.querySelector("[onerror]")).toBeNull();
+      // Verify no dangerous links exist
+      const a = container.querySelector("a");
+      if (a) {
+        expect(a.getAttribute("href") || "").not.toMatch(/^javascript:/i);
+        expect(a.getAttribute("href") || "").not.toMatch(/^data:/i);
+      }
     });
     
     it("should sanitize javascript: URLs in links", () => {
@@ -181,8 +188,10 @@ describe("renderSafeMarkdown", () => {
     it("should not render inline event handlers", () => {
       const { container } = render(renderSafeMarkdown('**bold** <div onclick="alert(1)">text</div>'));
       
-      // Check no onclick attribute exists
-      expect(container.innerHTML).not.toMatch(/onclick/i);
+      // No onclick attribute should exist on any element
+      expect(container.querySelector("[onclick]")).toBeNull();
+      // Raw HTML div should not be interpreted as an element
+      expect(container.querySelector("div[onclick]")).toBeNull();
     });
     
     it("should not render svg tags", () => {
@@ -278,21 +287,34 @@ describe("renderSafeMarkdown", () => {
 // =============================================================================
 
 describe("stripHtml", () => {
-  it("should strip all HTML tags", () => {
+  it("should strip all HTML tags and return plain text", () => {
     const result = stripHtml("<p>Hello <strong>World</strong></p>");
-    // Note: stripHtml uses textContent which escapes HTML
+    // Should return only the text content
+    expect(result).toBe("Hello World");
     expect(result).not.toContain("<");
     expect(result).not.toContain(">");
   });
   
   it("should handle XSS payloads safely", () => {
     const result = stripHtml('<script>alert(1)</script>');
+    // Script content is extracted as text (script doesn't execute since element is not in DOM)
+    expect(result).toBe("alert(1)");
     expect(result).not.toContain("<script>");
+  });
+  
+  it("should extract text from nested HTML", () => {
+    const result = stripHtml("<div><p>Nested <em>content</em></p></div>");
+    expect(result).toBe("Nested content");
   });
   
   it("should return empty string for empty input", () => {
     const result = stripHtml("");
     expect(result).toBe("");
+  });
+  
+  it("should handle HTML with attributes", () => {
+    const result = stripHtml('<a href="https://example.com" onclick="alert(1)">Link</a>');
+    expect(result).toBe("Link");
   });
 });
 

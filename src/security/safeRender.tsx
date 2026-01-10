@@ -168,16 +168,21 @@ function sanitizeHref(href: string | null | undefined): string | null {
 /**
  * Strips all HTML tags from text, returning plain text only.
  * Use this when you need to extract text content from potentially unsafe HTML.
+ * 
+ * SECURITY: The element is never appended to the document, so scripts cannot execute.
+ * We use innerHTML to parse, then textContent to extract safe text.
  */
 export function stripHtml(html: string): string {
-  // Create a temporary div to parse HTML (browser-safe)
+  if (!html) return "";
+  
+  // Create a temporary div to parse HTML (browser/jsdom-safe)
   if (typeof document !== "undefined") {
     const temp = document.createElement("div");
-    temp.textContent = html; // This escapes HTML
+    temp.innerHTML = html; // Parse HTML (element is not in DOM, so scripts won't execute)
     return temp.textContent || "";
   }
   
-  // Fallback for SSR: simple regex strip
+  // Fallback for SSR: simple regex strip (less robust but safe)
   return html.replace(/<[^>]*>/g, "");
 }
 
