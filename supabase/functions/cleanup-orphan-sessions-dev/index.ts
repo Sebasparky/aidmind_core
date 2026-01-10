@@ -25,6 +25,11 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { logEyeEvent, SESSION_INACTIVITY_TIMEOUT_MINUTES } from "../_shared/eye.ts";
 import { buildCorsSecurityHeaders, enforceTransportSecurity, createSecureJsonHeaders } from "../_shared/security-headers.ts";
+import {
+  validatePlainText,
+  validationErrorResponse,
+  type ValidationErrors,
+} from "../_shared/input-validation.ts";
 
 const SERVICE_NAME = "cleanup-orphan-sessions-dev";
 
@@ -33,6 +38,62 @@ interface CleanupRequest {
   daysBack?: number;
   maxEventCount?: number;  // Sessions with this many or fewer events are considered orphans
   inactiveMinutes?: number;  // Override for SESSION_INACTIVITY_TIMEOUT_MINUTES
+}
+
+/**
+ * Validate cleanup request payload.
+ * CRITICAL: Never echo raw user input in error responses.
+ */
+function validateCleanupRequest(body: unknown): { valid: true; data: CleanupRequest } | { valid: false; errors: ValidationErrors } {
+  // Empty body is valid - use defaults
+  if (body === undefined || body === null) {
+    return { valid: true, data: {} };
+  }
+
+  if (typeof body !== "object") {
+    return { valid: false, errors: { body: "INVALID_INPUT" } };
+  }
+
+  const rawBody = body as Record<string, unknown>;
+  const errors: ValidationErrors = {};
+
+  // Validate dryRun (optional boolean)
+  if (rawBody.dryRun !== undefined && rawBody.dryRun !== null) {
+    if (typeof rawBody.dryRun !== "boolean") {
+      errors.dryRun = "INVALID_INPUT";
+    }
+  }
+
+  // Validate daysBack (optional positive integer)
+  if (rawBody.daysBack !== undefined && rawBody.daysBack !== null) {
+    if (typeof rawBody.daysBack !== "number" || !Number.isInteger(rawBody.daysBack) || rawBody.daysBack < 1 || rawBody.daysBack > 365) {
+      errors.daysBack = "INVALID_INPUT";
+    }
+  }
+
+  // Validate maxEventCount (optional positive integer)
+  if (rawBody.maxEventCount !== undefined && rawBody.maxEventCount !== null) {
+    if (typeof rawBody.maxEventCount !== "number" || !Number.isInteger(rawBody.maxEventCount) || rawBody.maxEventCount < 0 || rawBody.maxEventCount > 100) {
+      errors.maxEventCount = "INVALID_INPUT";
+    }
+  }
+
+  // Validate inactiveMinutes (optional positive integer)
+  if (rawBody.inactiveMinutes !== undefined && rawBody.inactiveMinutes !== null) {
+    if (typeof rawBody.inactiveMinutes !== "number" || !Number.isInteger(rawBody.inactiveMinutes) || rawBody.inactiveMinutes < 1 || rawBody.inactiveMinutes > 10080) {
+      errors.inactiveMinutes = "INVALID_INPUT";
+    }
+  }
+
+  if (Object.keys(errors).length > 0) {
+    console.log(`[${SERVICE_NAME}] Validation failed:`, {
+      failed_fields: Object.keys(errors),
+      error_codes: Object.values(errors),
+    });
+    return { valid: false, errors };
+  }
+
+  return { valid: true, data: body as CleanupRequest };
 }
 
 interface CleanupResponse {
@@ -90,13 +151,28 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // Parse request body
-    let body: CleanupRequest = {};
+    // Parse and validate request body
+    let rawBody: unknown = {};
     try {
-      body = await req.json();
+      const text = await req.text();
+      if (text) {
+        rawBody = JSON.parse(text);
+      }
     } catch {
-      // Empty body is fine, use defaults
+      return new Response(
+        JSON.stringify({ error: "Invalid JSON body", code: "INVALID_JSON" }),
+        { status: 400, headers: createSecureJsonHeaders(req) }
+      );
     }
+
+    // Validate all fields using allowlist-based validation
+    const validation = validateCleanupRequest(rawBody);
+    if (!validation.valid) {
+      // CRITICAL: Never echo attacker payload - return only field names and error codes
+      return validationErrorResponse(validation.errors, corsHeaders);
+    }
+
+    const body = validation.data;
 
     const dryRun = body.dryRun ?? true;  // Default to dry run for safety
     const daysBack = body.daysBack ?? 7;

@@ -7,21 +7,76 @@ import {
   secureFetch,
   createSecureJsonHeaders,
 } from "../_shared/security-headers.ts";
+import {
+  validatePlainText,
+  validateUuid,
+  validateEnum,
+  validationErrorResponse,
+  type ValidationErrors,
+} from "../_shared/input-validation.ts";
 
 const SERVICE_NAME = "transcribe-audio";
 
-// Supported transcription models
-const SUPPORTED_MODELS = ["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"];
+// Supported transcription models (allowlist)
+const SUPPORTED_MODELS = ["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"] as const;
 const DEFAULT_MODEL = "gpt-4o-mini-transcribe";
 
 // TTL configurations (in seconds)
 const TRANSCRIPT_TTL_SECONDS = 30 * 60; // 30 minutes
 const AUDIO_TTL_SECONDS = 60 * 60; // 1 hour
 
+// Validation field configs
+const FIELD_LIMITS = {
+  audio_object_key: { maxLength: 500, minLength: 1 },
+} as const;
+
 interface TranscribeRequest {
   session_id: string;
   audio_object_key: string;
   model?: string;
+}
+
+/**
+ * Validate transcribe request payload.
+ * CRITICAL: Never echo raw user input in error responses.
+ */
+function validateTranscribeRequest(body: unknown): { valid: true; data: TranscribeRequest } | { valid: false; errors: ValidationErrors } {
+  if (typeof body !== "object" || body === null) {
+    return { valid: false, errors: { body: "INVALID_INPUT" } };
+  }
+
+  const rawBody = body as Record<string, unknown>;
+  const errors: ValidationErrors = {};
+
+  // Validate session_id (required UUID)
+  const sessionIdResult = validateUuid("session_id", rawBody.session_id);
+  if (!sessionIdResult.ok) {
+    errors.session_id = sessionIdResult.errorCode;
+  }
+
+  // Validate audio_object_key (required plain text - storage path)
+  const audioKeyResult = validatePlainText("audio_object_key", rawBody.audio_object_key, FIELD_LIMITS.audio_object_key);
+  if (!audioKeyResult.ok) {
+    errors.audio_object_key = audioKeyResult.errorCode;
+  }
+
+  // Validate model (optional enum)
+  if (rawBody.model !== undefined && rawBody.model !== null && rawBody.model !== "") {
+    const modelResult = validateEnum("model", rawBody.model, SUPPORTED_MODELS);
+    if (!modelResult.ok) {
+      errors.model = modelResult.errorCode;
+    }
+  }
+
+  if (Object.keys(errors).length > 0) {
+    console.log(`[${SERVICE_NAME}] Validation failed:`, {
+      failed_fields: Object.keys(errors),
+      error_codes: Object.values(errors),
+    });
+    return { valid: false, errors };
+  }
+
+  return { valid: true, data: body as TranscribeRequest };
 }
 
 // Log Eye event for audit trail (no PHI)
@@ -70,19 +125,28 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { session_id, audio_object_key, model: requestedModel }: TranscribeRequest = await req.json();
-
-    if (!session_id || !audio_object_key) {
+    // Parse and validate request body
+    let rawBody: unknown;
+    try {
+      rawBody = await req.json();
+    } catch {
       return new Response(
-        JSON.stringify({ error: "session_id and audio_object_key are required" }),
+        JSON.stringify({ error: "Invalid JSON body", code: "INVALID_JSON" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Validate model selection
-    const model = requestedModel && SUPPORTED_MODELS.includes(requestedModel) 
-      ? requestedModel 
-      : DEFAULT_MODEL;
+    // Validate all fields using allowlist-based validation
+    const validation = validateTranscribeRequest(rawBody);
+    if (!validation.valid) {
+      // CRITICAL: Never echo attacker payload - return only field names and error codes
+      return validationErrorResponse(validation.errors, corsHeaders);
+    }
+
+    const { session_id, audio_object_key, model: requestedModel } = validation.data;
+
+    // Model is already validated - use provided or default
+    const model = requestedModel ?? DEFAULT_MODEL;
 
     console.log(`[Transcribe] Starting transcription for session ${session_id} with model ${model}`);
 

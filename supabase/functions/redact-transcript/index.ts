@@ -3,6 +3,12 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { logEyeEvent as sharedLogEyeEvent } from "../_shared/eye.ts";
 import { buildCorsSecurityHeaders, enforceTransportSecurity, createSecureJsonHeaders } from "../_shared/security-headers.ts";
+import {
+  validateUuid,
+  validatePlainText,
+  validationErrorResponse,
+  type ValidationErrors,
+} from "../_shared/input-validation.ts";
 
 const SERVICE_NAME = "redact-transcript";
 
@@ -170,6 +176,63 @@ interface RedactRequest {
   transcript?: string;
   verification_only?: boolean;
   redact_agency_refs?: boolean; // Feature flag for agency reference redaction (default: false)
+}
+
+// Validation field configs for redact-transcript
+const REDACT_FIELD_LIMITS = {
+  // Transcript can be large (up to 100KB of text)
+  transcript: { maxLength: 100000, minLength: 1, preserveNewlines: true, allowEmpty: true },
+} as const;
+
+/**
+ * Validate redact-transcript request payload.
+ * CRITICAL: Never echo raw user input in error responses.
+ */
+function validateRedactRequest(body: unknown): { valid: true; data: RedactRequest } | { valid: false; errors: ValidationErrors } {
+  if (typeof body !== "object" || body === null) {
+    return { valid: false, errors: { body: "INVALID_INPUT" } };
+  }
+
+  const rawBody = body as Record<string, unknown>;
+  const errors: ValidationErrors = {};
+
+  // Validate session_id (required UUID)
+  const sessionIdResult = validateUuid("session_id", rawBody.session_id);
+  if (!sessionIdResult.ok) {
+    errors.session_id = sessionIdResult.errorCode;
+  }
+
+  // Validate transcript (optional plain text - can be very long)
+  if (rawBody.transcript !== undefined && rawBody.transcript !== null && rawBody.transcript !== "") {
+    const transcriptResult = validatePlainText("transcript", rawBody.transcript, REDACT_FIELD_LIMITS.transcript);
+    if (!transcriptResult.ok) {
+      errors.transcript = transcriptResult.errorCode;
+    }
+  }
+
+  // Validate verification_only (optional boolean)
+  if (rawBody.verification_only !== undefined && rawBody.verification_only !== null) {
+    if (typeof rawBody.verification_only !== "boolean") {
+      errors.verification_only = "INVALID_INPUT";
+    }
+  }
+
+  // Validate redact_agency_refs (optional boolean)
+  if (rawBody.redact_agency_refs !== undefined && rawBody.redact_agency_refs !== null) {
+    if (typeof rawBody.redact_agency_refs !== "boolean") {
+      errors.redact_agency_refs = "INVALID_INPUT";
+    }
+  }
+
+  if (Object.keys(errors).length > 0) {
+    console.log(`[redact-transcript] Validation failed:`, {
+      failed_fields: Object.keys(errors),
+      error_codes: Object.values(errors),
+    });
+    return { valid: false, errors };
+  }
+
+  return { valid: true, data: body as RedactRequest };
 }
 
 interface RedactionCounts {
@@ -2230,9 +2293,12 @@ serve(async (req) => {
   const securityResponse = await enforceTransportSecurity(req);
   if (securityResponse) return securityResponse;
 
+  // Build CORS headers
+  const corsHeaders = buildCorsSecurityHeaders(req);
+
   // Handle CORS preflight (after security check)
   if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: buildCorsSecurityHeaders(req) });
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
 
   try {
@@ -2245,14 +2311,28 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { session_id, transcript: providedTranscript, verification_only, redact_agency_refs }: RedactRequest = await req.json();
-
-    if (!session_id) {
+    // Parse and validate request body
+    let rawBody: unknown;
+    try {
+      rawBody = await req.json();
+    } catch {
       return new Response(
-        JSON.stringify({ error: "session_id is required" }),
+        JSON.stringify({ error: "Invalid JSON body", code: "INVALID_JSON" }),
         { status: 400, headers: createSecureJsonHeaders(req) }
       );
     }
+
+    // Validate all fields using allowlist-based validation
+    const validation = validateRedactRequest(rawBody);
+    if (!validation.valid) {
+      // CRITICAL: Never echo attacker payload - return only field names and error codes
+      return validationErrorResponse(validation.errors, corsHeaders);
+    }
+
+    const { session_id, transcript: providedTranscript, verification_only, redact_agency_refs } = validation.data;
+
+    // Log only sanitized metadata (never raw values)
+    console.log(`[redact-transcript] Request: session=${session_id ? "provided" : "missing"}, transcript_provided=${!!providedTranscript}`);
 
     let transcript: string = providedTranscript || "";
     if (!transcript) {
