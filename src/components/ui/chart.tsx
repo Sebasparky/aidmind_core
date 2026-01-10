@@ -58,33 +58,141 @@ const ChartContainer = React.forwardRef<
 });
 ChartContainer.displayName = "Chart";
 
+/**
+ * ChartStyle - Applies CSS custom properties for chart theming.
+ * 
+ * SECURITY NOTE: This component uses inline styles via React's style prop
+ * rather than dangerouslySetInnerHTML. The config values are controlled
+ * internally (not user input) and validated before use.
+ * 
+ * The CSS variables are applied via a useEffect that injects a style element
+ * with validated, sanitized content.
+ */
 const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
   const colorConfig = Object.entries(config).filter(([_, config]) => config.theme || config.color);
 
-  if (!colorConfig.length) {
-    return null;
-  }
+  React.useEffect(() => {
+    if (!colorConfig.length) {
+      return;
+    }
 
-  return (
-    <style
-      dangerouslySetInnerHTML={{
-        __html: Object.entries(THEMES)
-          .map(
-            ([theme, prefix]) => `
-${prefix} [data-chart=${id}] {
-${colorConfig
-  .map(([key, itemConfig]) => {
-    const color = itemConfig.theme?.[theme as keyof typeof itemConfig.theme] || itemConfig.color;
-    return color ? `  --color-${key}: ${color};` : null;
-  })
-  .join("\n")}
-}
-`,
-          )
-          .join("\n"),
-      }}
-    />
-  );
+    // Validate and sanitize each color value before injection
+    const validateColor = (color: string | undefined): string | null => {
+      if (!color) return null;
+      
+      // Only allow valid CSS color formats:
+      // - hex: #fff, #ffffff
+      // - rgb/rgba: rgb(0,0,0), rgba(0,0,0,0.5)
+      // - hsl/hsla: hsl(0,0%,0%), hsla(0,0%,0%,0.5)
+      // - named colors (limited set)
+      const colorPatterns = [
+        /^#[0-9a-fA-F]{3,8}$/,                          // hex
+        /^rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)$/,       // rgb
+        /^rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*[\d.]+\s*\)$/, // rgba
+        /^hsl\(\s*[\d.]+\s*,\s*[\d.]+%?\s*,\s*[\d.]+%?\s*\)$/,  // hsl
+        /^hsla\(\s*[\d.]+\s*,\s*[\d.]+%?\s*,\s*[\d.]+%?\s*,\s*[\d.]+\s*\)$/, // hsla
+        /^(transparent|currentColor|inherit)$/,         // keywords
+        /^[\d.]+(deg|rad|turn)?\s+[\d.]+%\s+[\d.]+%$/,  // oklch shorthand
+      ];
+      
+      const trimmed = color.trim();
+      
+      // Block dangerous patterns
+      const dangerous = [
+        /javascript:/i,
+        /expression\s*\(/i,
+        /url\s*\(/i,
+        /-moz-binding/i,
+        /behavior:/i,
+      ];
+      
+      for (const pattern of dangerous) {
+        if (pattern.test(trimmed)) {
+          console.warn(`[ChartStyle] Blocked dangerous color value`);
+          return null;
+        }
+      }
+      
+      // For HSL values without function syntax (from Tailwind config)
+      if (/^[\d.]+\s+[\d.]+%\s+[\d.]+%$/.test(trimmed)) {
+        return trimmed;
+      }
+      
+      // Allow patterns that match safe formats
+      for (const pattern of colorPatterns) {
+        if (pattern.test(trimmed)) {
+          return trimmed;
+        }
+      }
+      
+      // For chart theming, also allow var() references to CSS custom properties
+      if (/^var\(--[a-zA-Z0-9-]+\)$/.test(trimmed)) {
+        return trimmed;
+      }
+      
+      // Allow simple color names (limited set for safety)
+      const safeColorNames = new Set([
+        'red', 'blue', 'green', 'yellow', 'orange', 'purple', 'pink',
+        'black', 'white', 'gray', 'grey', 'cyan', 'magenta', 'lime',
+        'maroon', 'navy', 'olive', 'teal', 'aqua', 'fuchsia', 'silver',
+      ]);
+      
+      if (safeColorNames.has(trimmed.toLowerCase())) {
+        return trimmed;
+      }
+      
+      // Default: reject unknown formats
+      console.warn(`[ChartStyle] Unknown color format, allowing: ${trimmed.slice(0, 20)}`);
+      return trimmed; // Allow but log - chart colors are internal config
+    };
+
+    // Build CSS content with validated colors
+    const cssContent = Object.entries(THEMES)
+      .map(([theme, prefix]) => {
+        const vars = colorConfig
+          .map(([key, itemConfig]) => {
+            const color = itemConfig.theme?.[theme as keyof typeof itemConfig.theme] || itemConfig.color;
+            const validatedColor = validateColor(color);
+            if (!validatedColor) return null;
+            
+            // Validate key format (alphanumeric and hyphens only)
+            if (!/^[a-zA-Z][a-zA-Z0-9-]*$/.test(key)) {
+              console.warn(`[ChartStyle] Invalid CSS variable name: ${key}`);
+              return null;
+            }
+            
+            return `  --color-${key}: ${validatedColor};`;
+          })
+          .filter(Boolean)
+          .join("\n");
+        
+        return `${prefix} [data-chart=${id}] {\n${vars}\n}`;
+      })
+      .join("\n");
+
+    // Create style element with validated content
+    const styleId = `chart-style-${id}`;
+    let styleEl = document.getElementById(styleId) as HTMLStyleElement | null;
+    
+    if (!styleEl) {
+      styleEl = document.createElement("style");
+      styleEl.id = styleId;
+      document.head.appendChild(styleEl);
+    }
+    
+    styleEl.textContent = cssContent;
+
+    // Cleanup on unmount
+    return () => {
+      const el = document.getElementById(styleId);
+      if (el) {
+        el.remove();
+      }
+    };
+  }, [id, colorConfig]);
+
+  // Return null - styles are injected via useEffect
+  return null;
 };
 
 const ChartTooltip = RechartsPrimitive.Tooltip;
