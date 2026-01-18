@@ -1,7 +1,21 @@
-import { useState, useCallback } from "react";
-import { supabase } from "@/integrations/supabase/client";
+/**
+ * Transcription Hook - V1 Stub
+ * 
+ * In v1, transcription and redaction features are DISABLED.
+ * This stub provides the same interface but returns disabled errors
+ * instead of invoking edge functions.
+ * 
+ * Original implementation: src/legacy/v0_pipeline/useTranscription.ts
+ */
 
-// Supported transcription models
+import { useState, useCallback } from "react";
+import { 
+  V1_ENABLE_TRANSCRIPTION, 
+  V1_ENABLE_REDACTION, 
+  V1_DISABLED_ERROR 
+} from "@/config/features";
+
+// Re-export types for compatibility
 export const TRANSCRIPTION_MODELS = {
   "gpt-4o-mini-transcribe": "GPT-4o Mini Transcribe (Default)",
   "gpt-4o-transcribe": "GPT-4o Transcribe",
@@ -41,7 +55,7 @@ export interface Layer2Error {
 }
 
 export interface LayerStatus {
-  status: string; // Allow any status string to support new Layer 2 statuses
+  status: string;
   counts?: Partial<RedactionCounts>;
   method?: string;
   skipped_reason?: string;
@@ -75,11 +89,19 @@ interface TranscriptionState {
 
 interface UseTranscriptionOptions {
   model?: TranscriptionModel;
-  autoRedact?: boolean; // Automatically trigger redaction after transcription
+  autoRedact?: boolean;
 }
 
+const V1_TRANSCRIPTION_ERROR = "Transcription is disabled in v1";
+const V1_REDACTION_ERROR = "Redaction is disabled in v1";
+
+/**
+ * V1 Stub - Transcription/Redaction features are disabled
+ * 
+ * All methods return disabled errors without invoking edge functions.
+ */
 export function useTranscription(options: UseTranscriptionOptions = {}) {
-  const { model = "gpt-4o-mini-transcribe", autoRedact = true } = options;
+  const { model = "gpt-4o-mini-transcribe" } = options;
 
   const [state, setState] = useState<TranscriptionState>({
     isUploading: false,
@@ -95,225 +117,81 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
     audioObjectKey: null,
   });
 
-  // Upload audio file to storage
-  const uploadAudio = useCallback(async (sessionId: string, file: File): Promise<string | null> => {
-    setState((prev) => ({ ...prev, isUploading: true, error: null }));
-
-    try {
-      // Generate unique object key
-      const fileExt = file.name.split(".").pop() || "webm";
-      const objectKey = `${sessionId}/${crypto.randomUUID()}.${fileExt}`;
-
-      console.log(`[Transcription] Uploading audio: ${objectKey}`);
-
-      const { error: uploadError } = await supabase.storage
-        .from("audio-uploads")
-        .upload(objectKey, file, {
-          contentType: file.type,
-          upsert: false,
-        });
-
-      if (uploadError) {
-        console.error("Audio upload failed:", uploadError);
-        throw new Error(`Upload failed: ${uploadError.message}`);
-      }
-
-      setState((prev) => ({ ...prev, isUploading: false, audioObjectKey: objectKey }));
-      console.log(`[Transcription] Audio uploaded successfully: ${objectKey}`);
-      return objectKey;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Upload failed";
-      setState((prev) => ({ ...prev, isUploading: false, error: errorMessage }));
+  // V1 pivot: transcription disabled - return error without calling edge function
+  const uploadAudio = useCallback(async (_sessionId: string, _file: File): Promise<string | null> => {
+    if (!V1_ENABLE_TRANSCRIPTION) {
+      console.warn("[V1 Pivot] uploadAudio called but transcription is disabled");
+      setState((prev) => ({ ...prev, error: V1_TRANSCRIPTION_ERROR }));
       return null;
     }
+    // This code is unreachable in v1
+    return null;
   }, []);
 
-  // Start transcription
+  // V1 pivot: transcription disabled
   const transcribe = useCallback(
-    async (sessionId: string, audioObjectKey: string): Promise<string | null> => {
-      setState((prev) => ({ ...prev, isTranscribing: true, error: null }));
-
-      try {
-        console.log(`[Transcription] Starting transcription with model: ${model}`);
-
-        const { data, error } = await supabase.functions.invoke("transcribe-audio", {
-          body: {
-            session_id: sessionId,
-            audio_object_key: audioObjectKey,
-            model,
-          },
-        });
-
-        if (error) {
-          throw new Error(error.message);
-        }
-
-        if (!data.success) {
-          throw new Error(data.error || "Transcription failed");
-        }
-
-        const transcript = data.transcript;
-        setState((prev) => ({ ...prev, isTranscribing: false, transcript }));
-        console.log(`[Transcription] Transcription complete, length: ${transcript.length}`);
-
-        // Auto-trigger redaction if enabled
-        if (autoRedact) {
-          await redact(sessionId, transcript);
-        }
-
-        return transcript;
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "Transcription failed";
-        setState((prev) => ({ ...prev, isTranscribing: false, error: errorMessage }));
+    async (_sessionId: string, _audioObjectKey: string): Promise<string | null> => {
+      if (!V1_ENABLE_TRANSCRIPTION) {
+        console.warn("[V1 Pivot] transcribe called but transcription is disabled");
+        setState((prev) => ({ ...prev, error: V1_TRANSCRIPTION_ERROR }));
         return null;
       }
+      return null;
     },
-    [model, autoRedact]
+    []
   );
 
-  // Start 3-layer redaction/minimization pipeline
-  const redact = useCallback(async (sessionId: string, transcript?: string): Promise<{
+  // V1 pivot: redaction disabled
+  const redact = useCallback(async (_sessionId: string, _transcript?: string): Promise<{
     minimizedTranscript: string | null;
     verificationPassed: boolean;
     failedCategories: string[];
     redactionStatus: RedactionStatus | null;
     minimizedTextSource: "ner" | "regex" | null;
   }> => {
-    setState((prev) => ({ ...prev, isRedacting: true, error: null, verificationResult: null }));
-
-    try {
-      console.log(`[Transcription] Starting 3-layer redaction pipeline for session: ${sessionId}`);
-
-      const { data, error } = await supabase.functions.invoke("redact-transcript", {
-        body: {
-          session_id: sessionId,
-          transcript,
-        },
-      });
-
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      if (!data.success) {
-        throw new Error(data.error || "Redaction failed");
-      }
-
-      const minimizedTranscript = data.minimized_text;
-      const redactionCounts = data.redaction_counts as RedactionCounts;
-      const verificationResult = data.verification_result as VerificationResult;
-      const redactionStatus = data.redaction as RedactionStatus | undefined;
-      const minimizedTextSource = data.minimized_text_source as "ner" | "regex" | undefined;
-
-      setState((prev) => ({ 
-        ...prev, 
-        isRedacting: false, 
-        minimizedTranscript,
-        redactionCounts,
-        redactionStatus: redactionStatus || null,
-        minimizedTextSource: minimizedTextSource || null,
-        verificationResult,
-      }));
-
-      console.log(`[Transcription] Redaction complete. Verification: ${verificationResult.status}`);
-      console.log(`[Transcription] Redaction counts:`, redactionCounts);
-      console.log(`[Transcription] Minimized text source: ${minimizedTextSource}`);
-
-      if (verificationResult.status === "FAIL") {
-        console.warn(`[Transcription] Verification FAILED. Categories: ${verificationResult.categories?.join(", ")}`);
-      }
-
-      return {
-        minimizedTranscript,
-        verificationPassed: verificationResult.status === "PASS",
-        failedCategories: verificationResult.categories || [],
-        redactionStatus: redactionStatus || null,
-        minimizedTextSource: minimizedTextSource || null,
+    if (!V1_ENABLE_REDACTION) {
+      console.warn("[V1 Pivot] redact called but redaction is disabled");
+      setState((prev) => ({ ...prev, error: V1_REDACTION_ERROR }));
+      return { 
+        minimizedTranscript: null, 
+        verificationPassed: false, 
+        failedCategories: [], 
+        redactionStatus: null, 
+        minimizedTextSource: null 
       };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Redaction failed";
-      setState((prev) => ({ ...prev, isRedacting: false, error: errorMessage }));
-      return { minimizedTranscript: null, verificationPassed: false, failedCategories: [], redactionStatus: null, minimizedTextSource: null };
     }
+    return { minimizedTranscript: null, verificationPassed: false, failedCategories: [], redactionStatus: null, minimizedTextSource: null };
   }, []);
 
-  // Re-verify text with Layer 3 LLM verification only (no regex/NER re-run)
-  const reverify = useCallback(async (sessionId: string, editedText: string): Promise<{
+  // V1 pivot: redaction disabled
+  const reverify = useCallback(async (_sessionId: string, _editedText: string): Promise<{
     verificationPassed: boolean;
     failedCategories: string[];
   }> => {
-    setState((prev) => ({ ...prev, isRedacting: true, error: null }));
-
-    try {
-      console.log(`[Transcription] Starting Layer 3 verification only for session: ${sessionId}`);
-
-      const { data, error } = await supabase.functions.invoke("redact-transcript", {
-        body: {
-          session_id: sessionId,
-          transcript: editedText,
-          verification_only: true, // Signal to skip Layers 1 & 2
-        },
-      });
-
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      if (!data.success) {
-        throw new Error(data.error || "Verification failed");
-      }
-
-      const verificationResult = data.verification_result as VerificationResult;
-
-      setState((prev) => ({ 
-        ...prev, 
-        isRedacting: false, 
-        minimizedTranscript: editedText,
-        verificationResult,
-      }));
-
-      console.log(`[Transcription] Re-verification complete. Status: ${verificationResult.status}`);
-
-      return {
-        verificationPassed: verificationResult.status === "PASS",
-        failedCategories: verificationResult.categories || [],
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Verification failed";
-      setState((prev) => ({ ...prev, isRedacting: false, error: errorMessage }));
+    if (!V1_ENABLE_REDACTION) {
+      console.warn("[V1 Pivot] reverify called but redaction is disabled");
+      setState((prev) => ({ ...prev, error: V1_REDACTION_ERROR }));
       return { verificationPassed: false, failedCategories: [] };
     }
+    return { verificationPassed: false, failedCategories: [] };
   }, []);
 
-  // Full pipeline: upload → transcribe → redact
+  // V1 pivot: full pipeline disabled
   const processAudio = useCallback(
-    async (sessionId: string, file: File): Promise<{ 
+    async (_sessionId: string, _file: File): Promise<{ 
       transcript: string; 
       minimizedTranscript: string;
       verificationPassed: boolean;
       redactionCounts: RedactionCounts;
     } | null> => {
-      // Step 1: Upload
-      const objectKey = await uploadAudio(sessionId, file);
-      if (!objectKey) return null;
-
-      // Step 2: Transcribe (redaction will auto-trigger if autoRedact is true)
-      const transcript = await transcribe(sessionId, objectKey);
-      if (!transcript) return null;
-
-      // Wait for state to settle if autoRedact is true
-      if (autoRedact) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
+      if (!V1_ENABLE_TRANSCRIPTION || !V1_ENABLE_REDACTION) {
+        console.warn("[V1 Pivot] processAudio called but transcription/redaction is disabled");
+        setState((prev) => ({ ...prev, error: V1_DISABLED_ERROR }));
+        return null;
       }
-
-      return {
-        transcript,
-        minimizedTranscript: state.minimizedTranscript || "",
-        verificationPassed: state.verificationResult?.status === "PASS",
-        redactionCounts: state.redactionCounts || {} as RedactionCounts,
-      };
+      return null;
     },
-    [uploadAudio, transcribe, autoRedact, state.minimizedTranscript, state.verificationResult, state.redactionCounts]
+    []
   );
 
   // Reset state
@@ -333,7 +211,6 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
     });
   }, []);
 
-  // Check if verification failed
   const verificationFailed = state.verificationResult?.status === "FAIL";
   const failedCategories = state.verificationResult?.categories || [];
 

@@ -1,12 +1,15 @@
 project_id = "qdbfjxmxnxtubltahuqe"
 
-[functions.transcribe-audio]
-verify_jwt = true
+# V1 PIVOT: transcribe-audio and redact-transcript return 410 Gone
+# Original implementations preserved in supabase/functions/_future/
 
-[functions.session-manager]
-verify_jwt = true
+[functions.transcribe-audio]
+verify_jwt = false
 
 [functions.redact-transcript]
+verify_jwt = false
+
+[functions.session-manager]
 verify_jwt = true
 
 [functions.cleanup-orphan-sessions-dev]

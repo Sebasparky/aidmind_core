@@ -1,6 +1,11 @@
 import { useState, useCallback, useRef } from "react";
 import { useTranscription, TranscriptionModel, TRANSCRIPTION_MODELS } from "./useTranscription";
 import { useSessionApi } from "./useSessionApi";
+import { 
+  V1_ENABLE_TRANSCRIPTION, 
+  V1_ENABLE_REDACTION, 
+  V1_ENABLE_GENERATIVE_NOTE_GEN 
+} from "@/config/features";
 
 // Re-export for convenience
 export { TRANSCRIPTION_MODELS };
@@ -315,171 +320,77 @@ export function useSessionMachine({
     [state, simulateAsync]
   );
 
-  // START_TRANSCRIPTION: AUDIO_UPLOADED → TRANSCRIBING → TRANSCRIBED
+  // V1 PIVOT: START_TRANSCRIPTION disabled
+  // Original: AUDIO_UPLOADED → TRANSCRIBING → TRANSCRIBED
   const startTranscription = useCallback(async () => {
-    if (state !== "AUDIO_UPLOADED") return;
-    setState("TRANSCRIBING");
-    
-    if (useRealTranscription && data.audioFile) {
-      try {
-        // Upload audio to storage
-        const objectKey = await transcription.uploadAudio(data.sessionId, data.audioFile);
-        if (!objectKey) {
-          throw new Error("Failed to upload audio");
-        }
-        
-        // Transcribe using OpenAI API
-        const transcript = await transcription.transcribe(data.sessionId, objectKey);
-        if (!transcript) {
-          throw new Error("Transcription failed");
-        }
-        
-        setData((prev) => ({ ...prev, transcript }));
-        setState("TRANSCRIBED");
-        
-        console.log("[AidMind Event] TRANSCRIPTION_COMPLETED");
-      } catch (error) {
-        console.error("Transcription error:", error);
-        setData((prev) => ({
-          ...prev,
-          errorMessage: error instanceof Error ? error.message : "Transcription failed",
-          previousStateBeforeError: "TRANSCRIBING",
-        }));
-        setState("ERROR");
-      }
-    } else {
-      // Fallback to mock for development
-      await simulateAsync(2000);
-      setData((prev) => ({ ...prev, transcript: MOCK_TRANSCRIPT }));
-      setState("TRANSCRIBED");
-    }
-  }, [state, data.audioFile, data.sessionId, useRealTranscription, transcription, simulateAsync]);
-
-  // START_REDACTION: TRANSCRIBED/TEXT_PROVIDED → REDACTING → INPUT_READY or VERIFICATION_REVIEW
-  const startRedaction = useCallback(async () => {
-    if (state !== "TRANSCRIBED" && state !== "TEXT_PROVIDED") return;
-    setState("REDACTING");
-    
-    if (useRealTranscription && (data.transcript || data.textNotes)) {
-      try {
-        // Use the 3-layer redact function
-        const result = await transcription.redact(data.sessionId, data.transcript || data.textNotes);
-        
-        if (!result.minimizedTranscript) {
-          throw new Error("Redaction failed");
-        }
-        
-        // Check verification result
-        if (!result.verificationPassed) {
-          // Verification failed - enter VERIFICATION_REVIEW state
-          setData((prev) => ({
-            ...prev,
-            minimizedTranscript: result.minimizedTranscript || "",
-            verificationFailedCategories: result.failedCategories,
-            redactionStatus: result.redactionStatus ? {
-              layer1: result.redactionStatus.layer1,
-              layer2: result.redactionStatus.layer2,
-              layer3: result.redactionStatus.layer3,
-            } : undefined,
-          }));
-          setState("VERIFICATION_REVIEW");
-          console.log("[AidMind Event] REDACTION_REVIEW_ENTERED");
-          return;
-        }
-        
-        setData((prev) => ({
-          ...prev,
-          minimizedTranscript: result.minimizedTranscript || "",
-          verificationFailedCategories: undefined,
-          redactionStatus: result.redactionStatus ? {
-            layer1: result.redactionStatus.layer1,
-            layer2: result.redactionStatus.layer2,
-            layer3: result.redactionStatus.layer3,
-          } : undefined,
-        }));
-        setState("INPUT_READY");
-        
-        console.log("[AidMind Event] REDACTION_COMPLETED");
-      } catch (error) {
-        console.error("Redaction error:", error);
-        setData((prev) => ({
-          ...prev,
-          errorMessage: error instanceof Error ? error.message : "Redaction failed",
-          previousStateBeforeError: "REDACTING",
-        }));
-        setState("ERROR");
-      }
-    } else {
-      // Fallback to mock for development
-      await simulateAsync(1500);
+    if (!V1_ENABLE_TRANSCRIPTION) {
+      console.warn("[V1 Pivot] startTranscription called but feature is disabled");
       setData((prev) => ({
         ...prev,
-        minimizedTranscript: MOCK_MINIMIZED_TRANSCRIPT,
+        errorMessage: "Transcription is disabled in v1",
+        previousStateBeforeError: state,
       }));
-      setState("INPUT_READY");
+      setState("ERROR");
+      return;
     }
-  }, [state, data.sessionId, data.transcript, data.textNotes, useRealTranscription, transcription, simulateAsync]);
+    // V1: Unreachable code preserved for future use
+    if (state !== "AUDIO_UPLOADED") return;
+    setState("TRANSCRIBING");
+  }, [state]);
 
-  // REVERIFY_TEXT: VERIFICATION_REVIEW → INPUT_READY (if pass) or stay (if fail)
-  const reverifyText = useCallback(async (editedText: string) => {
-    if (state !== "VERIFICATION_REVIEW") return;
-    
-    setData((prev) => ({ ...prev, isReverifying: true }));
-    console.log("[AidMind Event] REDACTION_VERIFICATION_RETRY");
-    
-    try {
-      const result = await transcription.reverify(data.sessionId, editedText);
-      
-      if (result.verificationPassed) {
-        // Verification passed - proceed to INPUT_READY
-        setData((prev) => ({
-          ...prev,
-          minimizedTranscript: editedText,
-          verificationFailedCategories: undefined,
-          isReverifying: false,
-        }));
-        setState("INPUT_READY");
-        console.log("[AidMind Event] REDACTION_VERIFICATION_PASSED");
-        console.log("[AidMind Event] REDACTION_REVIEW_EXITED");
-      } else {
-        // Still failing - stay in review with updated categories
-        setData((prev) => ({
-          ...prev,
-          minimizedTranscript: editedText,
-          verificationFailedCategories: result.failedCategories,
-          isReverifying: false,
-        }));
-        console.log("[AidMind Event] REDACTION_VERIFICATION_FAILED", result.failedCategories);
-      }
-    } catch (error) {
-      console.error("Reverification error:", error);
-      setData((prev) => ({ ...prev, isReverifying: false }));
+  // V1 PIVOT: START_REDACTION disabled
+  // Original: TRANSCRIBED/TEXT_PROVIDED → REDACTING → INPUT_READY or VERIFICATION_REVIEW
+  const startRedaction = useCallback(async () => {
+    if (!V1_ENABLE_REDACTION) {
+      console.warn("[V1 Pivot] startRedaction called but feature is disabled");
+      setData((prev) => ({
+        ...prev,
+        errorMessage: "Redaction is disabled in v1",
+        previousStateBeforeError: state,
+      }));
+      setState("ERROR");
+      return;
     }
-  }, [state, data.sessionId, transcription]);
+    // V1: Unreachable code preserved for future use
+    if (state !== "TRANSCRIBED" && state !== "TEXT_PROVIDED") return;
+    setState("REDACTING");
+  }, [state]);
 
-  // DISCARD_AND_START_OVER: VERIFICATION_REVIEW → CLOSING → navigate to start
+  // V1 PIVOT: REVERIFY_TEXT disabled (depends on redaction)
+  const reverifyText = useCallback(async (_editedText: string) => {
+    if (!V1_ENABLE_REDACTION) {
+      console.warn("[V1 Pivot] reverifyText called but redaction is disabled");
+      return;
+    }
+  }, []);
+
+  // DISCARD_AND_START_OVER: VERIFICATION_REVIEW → CLOSING
   const discardAndStartOver = useCallback(() => {
     if (state !== "VERIFICATION_REVIEW") return;
-    console.log("[AidMind Event] SESSION_CANCELLED");
-    console.log("[AidMind Event] PURGE_STARTED");
-    console.log("[AidMind Event] REDACTION_REVIEW_EXITED");
     setState("CLOSING");
   }, [state]);
 
-  // GENERATE_DRAFT: INPUT_READY → RETRIEVING_CONTEXT → GENERATING → VALIDATING_OUTPUT → DRAFT_READY
+  // V1 PIVOT: GENERATE_DRAFT partially disabled (generative AI)
   const generateDraft = useCallback(async () => {
+    if (!V1_ENABLE_GENERATIVE_NOTE_GEN) {
+      console.warn("[V1 Pivot] generateDraft called but generative note gen is disabled");
+      setData((prev) => ({
+        ...prev,
+        errorMessage: "Generative note generation is disabled in v1",
+        previousStateBeforeError: state,
+      }));
+      setState("ERROR");
+      return;
+    }
+    // V1: Unreachable code preserved for future use
     if (state !== "INPUT_READY") return;
-    
     setState("RETRIEVING_CONTEXT");
-    await simulateAsync(1200); // Simulate context retrieval
-    
+    await simulateAsync(1200);
     setState("GENERATING");
     setData((prev) => ({ ...prev, llmRequestCount: prev.llmRequestCount + 1 }));
-    await simulateAsync(2500); // Simulate LLM generation
-    
+    await simulateAsync(2500);
     setState("VALIDATING_OUTPUT");
-    await simulateAsync(800); // Simulate validation
-    
+    await simulateAsync(800);
     setData((prev) => ({
       ...prev,
       generatedDraft: MOCK_GENERATED_DRAFT,
