@@ -77,13 +77,16 @@ function getIssueIcon(eventType: string): React.ReactNode {
 }
 
 // Get display name for issue type
+// NOTE: TRANSCRIPTION_*, REDACTION_*, VERIFICATION_*, and AUDIO_* are Legacy (v0 pipeline)
 function getIssueDisplayName(eventType: string): string {
   const names: Record<string, string> = {
-    TRANSCRIPTION_FAILED: "Transcription Failures",
-    REDACTION_FAILED: "Redaction Failures",
+    // Legacy – v0 pipeline events (not emitting in v1)
+    TRANSCRIPTION_FAILED: "Transcription Failures (Legacy – v0 pipeline)",
+    REDACTION_FAILED: "Redaction Failures (Legacy – v0 pipeline)",
+    AUDIO_UPLOAD_FAILED: "Upload Failures (Legacy – v0 pipeline)",
+    VERIFICATION_FAILED: "Verification Failures (Legacy – v0 pipeline)",
+    // Active v1 events
     PURGE_FAILED: "Purge Failures",
-    AUDIO_UPLOAD_FAILED: "Upload Failures",
-    VERIFICATION_FAILED: "Verification Failures",
   };
   return names[eventType] || eventType.replace(/_/g, " ");
 }
