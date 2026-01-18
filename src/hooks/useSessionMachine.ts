@@ -428,10 +428,7 @@ export function useSessionMachine({
     cleanup();
     setData((prev) => ({
       ...prev,
-      audioFile: undefined,
       textNotes: undefined,
-      transcript: undefined,
-      minimizedTranscript: undefined,
       generatedDraft: undefined,
       timelines: undefined,
     }));
@@ -456,10 +453,7 @@ export function useSessionMachine({
     cleanup();
     setData((prev) => ({
       ...prev,
-      audioFile: undefined,
       textNotes: undefined,
-      transcript: undefined,
-      minimizedTranscript: undefined,
       generatedDraft: undefined,
       timelines: undefined,
     }));

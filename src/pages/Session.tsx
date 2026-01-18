@@ -30,7 +30,6 @@ import {
 import { 
   Loader2, 
   CheckCircle2, 
-  XCircle, 
   ArrowRight,
   Edit3,
   RefreshCw,
@@ -65,7 +64,7 @@ export default function Session() {
   const resumeBundleParam = searchParams.get("resumeBundle");
 
   // Parse resume bundle if provided
-  const [resumeBundle, setResumeBundle] = useState<ResumeBundle | undefined>(() => {
+  const [resumeBundle] = useState<ResumeBundle | undefined>(() => {
     if (resumeBundleParam) {
       try {
         return JSON.parse(decodeURIComponent(resumeBundleParam));
