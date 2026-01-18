@@ -138,16 +138,25 @@ export default function Session() {
     }
   }, [state]);
 
-  // Auto-progress through transcription and redaction
-  useEffect(() => {
-    if (state === "AUDIO_UPLOADED") {
-      actions.startTranscription();
-    } else if (state === "TRANSCRIBED") {
-      actions.startRedaction();
-    } else if (state === "TEXT_PROVIDED") {
-      actions.startRedaction();
-    }
-  }, [state, actions]);
+  // V1 pivot: transcription/redaction disabled - no auto progression
+  // Original v0 code auto-triggered:
+  //   - startTranscription() when state === "AUDIO_UPLOADED"
+  //   - startRedaction() when state === "TRANSCRIBED" or "TEXT_PROVIDED"
+  // 
+  // These features are quarantined. See:
+  //   - src/config/features.ts for feature gates
+  //   - src/legacy/v0_pipeline/ for quarantined frontend code
+  //   - supabase/functions/_future/ for quarantined edge functions
+  //
+  // useEffect(() => {
+  //   if (state === "AUDIO_UPLOADED") {
+  //     actions.startTranscription();
+  //   } else if (state === "TRANSCRIBED") {
+  //     actions.startRedaction();
+  //   } else if (state === "TEXT_PROVIDED") {
+  //     actions.startRedaction();
+  //   }
+  // }, [state, actions]);
 
   // Helper to map interaction type to note format
   // Navigate to dashboard when purged with appropriate message (color-coded)
