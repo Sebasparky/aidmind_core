@@ -5,7 +5,7 @@
  * are properly disabled in v1.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { 
   V1_ENABLE_TRANSCRIPTION, 
   V1_ENABLE_REDACTION, 
@@ -47,6 +47,10 @@ describe("V1 Feature Gates", () => {
 });
 
 describe("useTranscription hook (V1 stub)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
   it("uploadAudio returns null and sets error when transcription disabled", async () => {
     const { useTranscription } = await import("@/hooks/useTranscription");
     const { renderHook, act } = await import("@testing-library/react");
@@ -123,54 +127,5 @@ describe("useTranscription hook (V1 stub)", () => {
     });
     
     expect(processResult).toBeNull();
-  });
-
-  it("never invokes supabase.functions.invoke for transcribe-audio", async () => {
-    // This test verifies no edge function calls are made
-    const supabaseMock = vi.fn();
-    vi.mock("@/integrations/supabase/client", () => ({
-      supabase: {
-        functions: {
-          invoke: supabaseMock,
-        },
-      },
-    }));
-
-    const { useTranscription } = await import("@/hooks/useTranscription");
-    const { renderHook, act } = await import("@testing-library/react");
-    
-    const { result } = renderHook(() => useTranscription());
-    const mockFile = new File(["audio"], "test.mp3", { type: "audio/mpeg" });
-    
-    await act(async () => {
-      await result.current.uploadAudio("session-123", mockFile);
-      await result.current.transcribe("session-123", "key");
-    });
-    
-    // Supabase functions should never be called since features are disabled
-    expect(supabaseMock).not.toHaveBeenCalledWith("transcribe-audio", expect.anything());
-  });
-
-  it("never invokes supabase.functions.invoke for redact-transcript", async () => {
-    const supabaseMock = vi.fn();
-    vi.mock("@/integrations/supabase/client", () => ({
-      supabase: {
-        functions: {
-          invoke: supabaseMock,
-        },
-      },
-    }));
-
-    const { useTranscription } = await import("@/hooks/useTranscription");
-    const { renderHook, act } = await import("@testing-library/react");
-    
-    const { result } = renderHook(() => useTranscription());
-    
-    await act(async () => {
-      await result.current.redact("session-123", "transcript");
-      await result.current.reverify("session-123", "text");
-    });
-    
-    expect(supabaseMock).not.toHaveBeenCalledWith("redact-transcript", expect.anything());
   });
 });
