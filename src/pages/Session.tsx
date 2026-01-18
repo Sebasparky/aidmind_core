@@ -28,12 +28,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { 
-  Upload, 
-  FileAudio, 
   Loader2, 
   CheckCircle2, 
   XCircle, 
-  FileText,
   ArrowRight,
   Edit3,
   RefreshCw,
@@ -46,7 +43,6 @@ import {
   AlertCircle
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
-import { VerificationReviewPanel } from "@/components/session/VerificationReviewPanel";
 import { LeaveSessionDialog } from "@/components/session/LeaveSessionDialog";
 
 const DENY_REASONS = [
@@ -96,7 +92,6 @@ export default function Session() {
   });
 
   const [editedDraft, setEditedDraft] = useState("");
-  const [showTextInput, setShowTextInput] = useState(false);
   const [textInput, setTextInput] = useState("");
   
   // Exit dialog - only for explicit cancel button
@@ -270,23 +265,8 @@ export default function Session() {
     };
   }, [isDirtySession, guardedNavigateWithTarget, setGuard, clearGuard]);
 
-  const handleFileUpload = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) {
-        if (!file.type.startsWith("audio/")) {
-          toast({
-            title: "Invalid file type",
-            description: "Please upload an audio file.",
-            variant: "destructive",
-          });
-          return;
-        }
-        actions.uploadAudio(file);
-      }
-    },
-    [actions]
-  );
+  // V1: No audio upload - removed handleFileUpload
+  // Audio transcription is quarantined in src/legacy/v0_pipeline/
 
   const handleTextSubmit = useCallback(() => {
     if (textInput.trim()) {
@@ -437,45 +417,29 @@ export default function Session() {
     return labels[type] || type;
   };
 
+  // V1 Progress mapping (simplified - no transcription/redaction/generation states)
   const getProgressValue = (currentState: SessionState): number => {
     const progressMap: Record<SessionState, number> = {
       NEW: 0,
       READY_FOR_INPUT: 10,
-      AUDIO_UPLOADED: 20,
-      TEXT_PROVIDED: 20,
-      TRANSCRIBING: 30,
-      TRANSCRIBED: 40,
-      REDACTING: 50,
-      VERIFICATION_REVIEW: 55,
-      INPUT_READY: 60,
-      RETRIEVING_CONTEXT: 70,
-      GENERATING: 80,
-      VALIDATING_OUTPUT: 85,
-      DRAFT_READY: 90,
-      EDITING: 90,
-      APPROVED: 95,
-      EXPORTING: 98,
-      CLOSING: 99,
+      TEXT_PROVIDED: 30,
+      DRAFT_READY: 70,
+      EDITING: 80,
+      APPROVED: 90,
+      EXPORTING: 95,
+      CLOSING: 98,
       PURGED: 100,
       ERROR: 0,
     };
     return progressMap[currentState] || 0;
   };
 
+  // V1 State labels (simplified - no transcription/redaction/generation states)
   const getStateLabel = (currentState: SessionState): string => {
     const labels: Record<SessionState, string> = {
       NEW: "Initializing session...",
       READY_FOR_INPUT: "Ready for input",
-      AUDIO_UPLOADED: "Audio uploaded",
-      TEXT_PROVIDED: "Text provided",
-      TRANSCRIBING: "Transcribing audio...",
-      TRANSCRIBED: "Transcription complete",
-      REDACTING: "Minimizing and redacting sensitive details...",
-      VERIFICATION_REVIEW: "Review required",
-      INPUT_READY: "Input ready for processing",
-      RETRIEVING_CONTEXT: "Retrieving templates and policies...",
-      GENERATING: "Generating draft note...",
-      VALIDATING_OUTPUT: "Validating output...",
+      TEXT_PROVIDED: "Processing input...",
       DRAFT_READY: data.isResumedSession ? "Resumed draft ready for review" : "Draft ready for review",
       EDITING: "Editing draft",
       APPROVED: "Draft approved",
@@ -659,149 +623,32 @@ export default function Session() {
       {/* Main content */}
       <main className="container mx-auto px-6 py-8 max-w-4xl">
         
-        {/* READY_FOR_INPUT: Upload audio or paste text */}
+        {/* V1: READY_FOR_INPUT - Text input only (no audio upload) */}
         {state === "READY_FOR_INPUT" && (
           <Card>
             <CardHeader className="text-center">
               <CardTitle className="text-2xl">Start a New Note</CardTitle>
               <CardDescription>
-                Upload an audio recording to begin documentation
+                Enter your case notes to begin documentation
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              {!showTextInput ? (
-                <>
-                  {/* Audio upload */}
-                  <label className="block">
-                    <div className="border-2 border-dashed border-border rounded-lg p-12 text-center cursor-pointer hover:border-primary/50 hover:bg-accent/50 transition-colors">
-                      <Upload className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                      <p className="text-lg font-medium text-foreground mb-2">
-                        Click to upload audio
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        Supports MP3, WAV, M4A, and other audio formats
-                      </p>
-                    </div>
-                    <input
-                      type="file"
-                      accept="audio/*"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
-                  </label>
-                  
-                  <div className="relative">
-                    <div className="absolute inset-0 flex items-center">
-                      <span className="w-full border-t" />
-                    </div>
-                    <div className="relative flex justify-center text-xs uppercase">
-                      <span className="bg-background px-2 text-muted-foreground">
-                        or
-                      </span>
-                    </div>
-                  </div>
-                  
-                  <Button 
-                    variant="outline" 
-                    className="w-full"
-                    onClick={() => setShowTextInput(true)}
-                  >
-                    <FileText className="h-4 w-4 mr-2" />
-                    Paste text notes instead
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Textarea
-                    placeholder="Paste your notes here..."
-                    value={textInput}
-                    onChange={(e) => setTextInput(e.target.value)}
-                    className="min-h-[200px]"
-                  />
-                  <div className="flex gap-3">
-                    <Button 
-                      variant="outline" 
-                      onClick={() => setShowTextInput(false)}
-                    >
-                      Back to audio upload
-                    </Button>
-                    <Button 
-                      onClick={handleTextSubmit}
-                      disabled={!textInput.trim()}
-                    >
-                      Continue
-                      <ArrowRight className="h-4 w-4 ml-2" />
-                    </Button>
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Processing states */}
-        {(state === "AUDIO_UPLOADED" || 
-          state === "TRANSCRIBING" || 
-          state === "TRANSCRIBED" || 
-          state === "TEXT_PROVIDED" ||
-          state === "REDACTING") && (
-          <Card>
-            <CardContent className="py-12 text-center">
-              <Loader2 className="h-12 w-12 mx-auto text-primary animate-spin mb-4" />
-              <h3 className="text-lg font-medium text-foreground mb-2">
-                {getStateLabel(state)}
-              </h3>
-              <p className="text-sm text-muted-foreground">
-                {state === "TRANSCRIBING" && "Converting speech to text..."}
-                {state === "REDACTING" && "Removing sensitive information and minimizing data..."}
-                {(state === "AUDIO_UPLOADED" || state === "TRANSCRIBED" || state === "TEXT_PROVIDED") && 
-                  "Processing your input..."}
-              </p>
-              {data.audioFile && (
-                <div className="mt-6 inline-flex items-center gap-2 px-4 py-2 bg-accent rounded-lg">
-                  <FileAudio className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-sm text-foreground">{data.audioFile.name}</span>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* VERIFICATION_REVIEW: Verification failed - show review panel */}
-        {state === "VERIFICATION_REVIEW" && (
-          <VerificationReviewPanel
-            minimizedText={data.minimizedTranscript}
-            failedCategories={data.verificationFailedCategories || []}
-            isReverifying={data.isReverifying || false}
-            isLoading={!data.minimizedTranscript}
-            layerStatus={data.redactionStatus}
-            onReverify={actions.reverifyText}
-            onCancelSession={actions.cancelSession}
-            onDiscardAndStartOver={actions.discardAndStartOver}
-          />
-        )}
-        {state === "INPUT_READY" && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Input Ready</CardTitle>
-              <CardDescription>
-                Your input has been processed and minimized. Ready to generate the draft note.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="bg-accent/50 rounded-lg p-4">
-                <h4 className="text-sm font-medium text-muted-foreground mb-2">
-                  Minimized Transcript Preview
-                </h4>
-                <p className="text-foreground">{data.minimizedTranscript}</p>
-              </div>
-              
+              <Textarea
+                placeholder="Enter your case notes here..."
+                value={textInput}
+                onChange={(e) => setTextInput(e.target.value)}
+                className="min-h-[200px]"
+              />
               <div className="flex gap-3">
                 <Button variant="outline" onClick={handleCancelClick}>
-                  Cancel Session
+                  Cancel
                 </Button>
-                <Button onClick={actions.generateDraft} className="flex-1">
-                  Generate Draft
+                <Button 
+                  onClick={handleTextSubmit}
+                  disabled={!textInput.trim()}
+                  className="flex-1"
+                >
+                  Continue
                   <ArrowRight className="h-4 w-4 ml-2" />
                 </Button>
               </div>
@@ -809,27 +656,30 @@ export default function Session() {
           </Card>
         )}
 
-        {/* Generating states */}
-        {(state === "RETRIEVING_CONTEXT" || 
-          state === "GENERATING" || 
-          state === "VALIDATING_OUTPUT") && (
+        {/* V1: TEXT_PROVIDED - Show processing indicator and auto-proceed */}
+        {state === "TEXT_PROVIDED" && (
           <Card>
             <CardContent className="py-12 text-center">
               <Loader2 className="h-12 w-12 mx-auto text-primary animate-spin mb-4" />
               <h3 className="text-lg font-medium text-foreground mb-2">
-                {getStateLabel(state)}
+                Processing your input...
               </h3>
               <p className="text-sm text-muted-foreground">
-                {state === "RETRIEVING_CONTEXT" && "Loading templates, policies, and timeline rules..."}
-                {state === "GENERATING" && "Creating structured case note from your input..."}
-                {state === "VALIDATING_OUTPUT" && "Checking for compliance and data integrity..."}
+                Preparing your draft note
               </p>
-              <div className="mt-4 text-xs text-muted-foreground">
-                LLM Request Count: {data.llmRequestCount}
+              <div className="mt-6">
+                <Button onClick={() => actions.proceedToDraft()}>
+                  Continue to Draft
+                  <ArrowRight className="h-4 w-4 ml-2" />
+                </Button>
               </div>
             </CardContent>
           </Card>
         )}
+
+        {/* V0 states removed: AUDIO_UPLOADED, TRANSCRIBING, TRANSCRIBED, REDACTING, 
+            VERIFICATION_REVIEW, INPUT_READY, RETRIEVING_CONTEXT, GENERATING, VALIDATING_OUTPUT
+            See src/legacy/v0_pipeline/ for quarantined code */}
 
         {/* DRAFT_READY: Review and edit */}
         {(state === "DRAFT_READY" || state === "EDITING") && (
