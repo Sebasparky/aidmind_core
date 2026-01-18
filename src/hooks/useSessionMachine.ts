@@ -1,40 +1,50 @@
 import { useState, useCallback, useRef } from "react";
-import { useTranscription, TranscriptionModel, TRANSCRIPTION_MODELS } from "./useTranscription";
 import { useSessionApi } from "./useSessionApi";
-import { 
-  V1_ENABLE_TRANSCRIPTION, 
-  V1_ENABLE_REDACTION, 
-  V1_ENABLE_GENERATIVE_NOTE_GEN 
-} from "@/config/features";
 
-// Re-export for convenience
-export { TRANSCRIPTION_MODELS };
-export type { TranscriptionModel };
-
-// Session states following the AidMind State Machine
+/**
+ * V1 Session States
+ * 
+ * The v1 session flow is simplified - no transcription/redaction/generative pipeline.
+ * V0 states (AUDIO_UPLOADED, TRANSCRIBING, TRANSCRIBED, REDACTING, VERIFICATION_REVIEW,
+ * INPUT_READY, RETRIEVING_CONTEXT, GENERATING, VALIDATING_OUTPUT) are quarantined in:
+ *   src/legacy/v0_pipeline/legacySessionTypes.ts
+ */
 export type SessionState =
-  | "NEW"
-  | "READY_FOR_INPUT"
-  | "AUDIO_UPLOADED"
-  | "TEXT_PROVIDED"
-  | "TRANSCRIBING"
-  | "TRANSCRIBED"
-  | "REDACTING"
-  | "VERIFICATION_REVIEW" // New state for verification failure UX
-  | "INPUT_READY"
-  | "RETRIEVING_CONTEXT"
-  | "GENERATING"
-  | "VALIDATING_OUTPUT"
-  | "DRAFT_READY"
-  | "EDITING"
-  | "APPROVED"
-  | "EXPORTING"
-  | "CLOSING"
-  | "PURGED"
-  | "ERROR";
+  | "NEW"                 // Initial state
+  | "READY_FOR_INPUT"     // Awaiting user input (text notes)
+  | "TEXT_PROVIDED"       // User has provided text notes
+  | "DRAFT_READY"         // Draft is ready for review (manual entry or resumed)
+  | "EDITING"             // User is editing the draft
+  | "APPROVED"            // Draft has been approved
+  | "EXPORTING"           // Exporting to system of record
+  | "CLOSING"             // Cleaning up session data
+  | "PURGED"              // Session completed and cleaned up
+  | "ERROR";              // Error state
+
+// V1 states list for validation
+export const V1_SESSION_STATES = [
+  "NEW",
+  "READY_FOR_INPUT", 
+  "TEXT_PROVIDED",
+  "DRAFT_READY",
+  "EDITING",
+  "APPROVED",
+  "EXPORTING",
+  "CLOSING",
+  "PURGED",
+  "ERROR",
+] as const;
 
 export type TimelineEventStatus = "PENDING" | "CONFIRMED" | "DENIED";
 
+/**
+ * V1 Session Data
+ * 
+ * Removed v0 fields: transcript, minimizedTranscript, audioFile,
+ * verificationFailedCategories, isReverifying, redactionStatus
+ * 
+ * These are preserved in src/legacy/v0_pipeline/legacySessionTypes.ts
+ */
 export interface SessionData {
   sessionId: string;
   caseId: string;
@@ -42,10 +52,7 @@ export interface SessionData {
   clientLabel: string;
   interactionType: string;
   timestamp: Date;
-  audioFile?: File;
   textNotes?: string;
-  transcript?: string;
-  minimizedTranscript?: string;
   generatedDraft?: string;
   timelines?: TimelineItem[];
   llmRequestCount: number;
@@ -57,14 +64,6 @@ export interface SessionData {
   isResumedSession?: boolean;
   previousResumeBundleId?: string;
   hasNewInputForRegeneration?: boolean;
-  // Verification review fields
-  verificationFailedCategories?: string[];
-  isReverifying?: boolean;
-  redactionStatus?: {
-    layer1?: { status: string; counts?: Record<string, number> };
-    layer2?: { status: string; counts?: Record<string, number>; method?: string; skipped_reason?: string };
-    layer3?: { status: string; categories?: string[] };
-  };
 }
 
 export interface TimelineItem {
@@ -95,39 +94,8 @@ export interface ResumeBundle {
   unknown_fields: string[]; // Placeholder for unfilled fields
 }
 
-// Mock data - policy-derived timeline events
-const MOCK_TRANSCRIPT = `Client A. J. discussed housing instability and upcoming follow-up needs. They mentioned receiving an eviction notice last week and are concerned about finding affordable housing options. Client expressed interest in emergency shelter placement if needed. They also mentioned needing help with utility assistance programs. A follow-up appointment was scheduled to review available resources.`;
-
-const MOCK_MINIMIZED_TRANSCRIPT = `Client discussed housing concerns including recent eviction notice. Interested in emergency shelter options and utility assistance. Follow-up scheduled for resource review.`;
-
-const MOCK_GENERATED_DRAFT = `## Case Note Summary
-
-**Date:** ${new Date().toLocaleDateString()}
-**Interaction Type:** Phone Call
-**Client:** A. J.
-
-### Presenting Concerns
-- Housing instability due to recent eviction notice
-- Need for emergency housing options
-- Utility assistance requirements
-
-### Discussion Summary
-Client reported receiving an eviction notice within the past week. They expressed significant concern regarding their ability to secure affordable housing alternatives. Emergency shelter placement was discussed as a potential interim solution.
-
-### Action Items
-1. Research available emergency shelter options in client's area
-2. Connect client with utility assistance programs
-3. Schedule follow-up appointment to review housing resources
-
-### Follow-Up Required
-- **Next Appointment:** Within 7 days
-- **Priority:** High
-- **Notes:** Ensure client has emergency contact information for housing crisis line
-
-### Compliance Notes
-- Client consent obtained for documentation
-- PHI minimized per agency policy
-- Session notes reviewed for accuracy`;
+// V1: Mock timeline events for demo (transcription/draft mocks removed)
+// V0 mock data moved to src/legacy/v0_pipeline/
 
 // Mock policy-derived timeline events (merged from previous timelines and follow-ups)
 const MOCK_TIMELINES: TimelineItem[] = [
@@ -167,8 +135,6 @@ interface UseSessionMachineProps {
   clientLabel: string;
   interactionType: string;
   resumeBundle?: ResumeBundle;
-  transcriptionModel?: TranscriptionModel;
-  useRealTranscription?: boolean; // Toggle for real vs mock transcription
 }
 
 export function useSessionMachine({
@@ -177,8 +143,6 @@ export function useSessionMachine({
   clientLabel,
   interactionType,
   resumeBundle,
-  transcriptionModel = "gpt-4o-mini-transcribe",
-  useRealTranscription = true,
 }: UseSessionMachineProps) {
   const [state, setState] = useState<SessionState>("NEW");
   const [data, setData] = useState<SessionData>({
@@ -207,11 +171,6 @@ export function useSessionMachine({
     return actionRequestIdRef.current;
   }, []);
   
-  // Real transcription hooks
-  const transcription = useTranscription({ 
-    model: transcriptionModel, 
-    autoRedact: true 
-  });
   const sessionApi = useSessionApi();
 
   // Helper to simulate async operations
@@ -227,8 +186,7 @@ export function useSessionMachine({
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
-    transcription.reset();
-  }, [transcription]);
+  }, []);
 
   // START_SESSION: NEW → READY_FOR_INPUT (or DRAFT_READY if resuming)
   const startSession = useCallback(async () => {
@@ -290,29 +248,15 @@ export function useSessionMachine({
     }
   }, [state, generateRequestId, resumeBundle, sessionApi, caseId, caseLabel, clientLabel, interactionType]);
 
-  // UPLOAD_AUDIO: READY_FOR_INPUT → AUDIO_UPLOADED
-  const uploadAudio = useCallback(
-    async (file: File) => {
-      if (state !== "READY_FOR_INPUT") return;
-      setData((prev) => ({ 
-        ...prev, 
-        audioFile: file,
-        hasNewInputForRegeneration: true, // New input provided
-      }));
-      await simulateAsync(500);
-      setState("AUDIO_UPLOADED");
-    },
-    [state, simulateAsync]
-  );
-
-  // PASTE_TEXT_NOTES: READY_FOR_INPUT → TEXT_PROVIDED
+  // V1: PASTE_TEXT_NOTES: READY_FOR_INPUT → TEXT_PROVIDED
+  // In v1, this is the primary input method (no audio upload/transcription)
   const pasteTextNotes = useCallback(
     async (text: string) => {
       if (state !== "READY_FOR_INPUT") return;
       setData((prev) => ({ 
         ...prev, 
         textNotes: text,
-        hasNewInputForRegeneration: true, // New input provided
+        hasNewInputForRegeneration: true,
       }));
       await simulateAsync(300);
       setState("TEXT_PROVIDED");
@@ -320,84 +264,18 @@ export function useSessionMachine({
     [state, simulateAsync]
   );
 
-  // V1 PIVOT: START_TRANSCRIPTION disabled
-  // Original: AUDIO_UPLOADED → TRANSCRIBING → TRANSCRIBED
-  const startTranscription = useCallback(async () => {
-    if (!V1_ENABLE_TRANSCRIPTION) {
-      console.warn("[V1 Pivot] startTranscription called but feature is disabled");
-      setData((prev) => ({
-        ...prev,
-        errorMessage: "Transcription is disabled in v1",
-        previousStateBeforeError: state,
-      }));
-      setState("ERROR");
-      return;
-    }
-    // V1: Unreachable code preserved for future use
-    if (state !== "AUDIO_UPLOADED") return;
-    setState("TRANSCRIBING");
-  }, [state]);
-
-  // V1 PIVOT: START_REDACTION disabled
-  // Original: TRANSCRIBED/TEXT_PROVIDED → REDACTING → INPUT_READY or VERIFICATION_REVIEW
-  const startRedaction = useCallback(async () => {
-    if (!V1_ENABLE_REDACTION) {
-      console.warn("[V1 Pivot] startRedaction called but feature is disabled");
-      setData((prev) => ({
-        ...prev,
-        errorMessage: "Redaction is disabled in v1",
-        previousStateBeforeError: state,
-      }));
-      setState("ERROR");
-      return;
-    }
-    // V1: Unreachable code preserved for future use
-    if (state !== "TRANSCRIBED" && state !== "TEXT_PROVIDED") return;
-    setState("REDACTING");
-  }, [state]);
-
-  // V1 PIVOT: REVERIFY_TEXT disabled (depends on redaction)
-  const reverifyText = useCallback(async (_editedText: string) => {
-    if (!V1_ENABLE_REDACTION) {
-      console.warn("[V1 Pivot] reverifyText called but redaction is disabled");
-      return;
-    }
-  }, []);
-
-  // DISCARD_AND_START_OVER: VERIFICATION_REVIEW → CLOSING
-  const discardAndStartOver = useCallback(() => {
-    if (state !== "VERIFICATION_REVIEW") return;
-    setState("CLOSING");
-  }, [state]);
-
-  // V1 PIVOT: GENERATE_DRAFT partially disabled (generative AI)
-  const generateDraft = useCallback(async () => {
-    if (!V1_ENABLE_GENERATIVE_NOTE_GEN) {
-      console.warn("[V1 Pivot] generateDraft called but generative note gen is disabled");
-      setData((prev) => ({
-        ...prev,
-        errorMessage: "Generative note generation is disabled in v1",
-        previousStateBeforeError: state,
-      }));
-      setState("ERROR");
-      return;
-    }
-    // V1: Unreachable code preserved for future use
-    if (state !== "INPUT_READY") return;
-    setState("RETRIEVING_CONTEXT");
-    await simulateAsync(1200);
-    setState("GENERATING");
-    setData((prev) => ({ ...prev, llmRequestCount: prev.llmRequestCount + 1 }));
-    await simulateAsync(2500);
-    setState("VALIDATING_OUTPUT");
-    await simulateAsync(800);
+  // V1: Skip to DRAFT_READY from TEXT_PROVIDED
+  // In v1, user manually writes/edits the note - no generative pipeline
+  const proceedToDraft = useCallback(async () => {
+    if (state !== "TEXT_PROVIDED") return;
+    // Use the text notes as the initial draft
     setData((prev) => ({
       ...prev,
-      generatedDraft: MOCK_GENERATED_DRAFT,
-      timelines: MOCK_TIMELINES,
+      generatedDraft: prev.textNotes || "",
+      timelines: MOCK_TIMELINES, // Still provide timeline suggestions
     }));
     setState("DRAFT_READY");
-  }, [state, simulateAsync]);
+  }, [state]);
 
   // EDIT: DRAFT_READY → EDITING
   const startEditing = useCallback(() => {
@@ -415,35 +293,16 @@ export function useSessionMachine({
     [state]
   );
 
-  // REGENERATE_REQUEST: DRAFT_READY → RETRIEVING_CONTEXT (loop back)
-  // For resumed sessions, only allowed if new input was provided
+  // V1: No regeneration - generative pipeline is disabled
+  // User must manually edit the draft instead
   const regenerateDraft = useCallback(async () => {
-    if (state !== "DRAFT_READY") return;
-    if (data.llmRequestCount >= 3) {
-      setData((prev) => ({
-        ...prev,
-        errorMessage: "Maximum regeneration attempts reached (3)",
-      }));
-      return;
+    // V1: Regeneration disabled - just start editing instead
+    console.warn("[V1] regenerateDraft called but generative pipeline is disabled");
+    if (state === "DRAFT_READY") {
+      // Just go to editing mode
+      setState("EDITING");
     }
-    
-    // For resumed sessions without new input, regeneration is not allowed
-    if (data.isResumedSession && !data.hasNewInputForRegeneration) {
-      return; // Should not reach here if UI is correct
-    }
-    
-    setState("RETRIEVING_CONTEXT");
-    await simulateAsync(1200);
-    
-    setState("GENERATING");
-    setData((prev) => ({ ...prev, llmRequestCount: prev.llmRequestCount + 1 }));
-    await simulateAsync(2500);
-    
-    setState("VALIDATING_OUTPUT");
-    await simulateAsync(800);
-    
-    setState("DRAFT_READY");
-  }, [state, data.llmRequestCount, data.isResumedSession, data.hasNewInputForRegeneration, simulateAsync]);
+  }, [state]);
 
   // CONFIRM_TIMELINE: Set timeline status to CONFIRMED
   const confirmTimeline = useCallback(
@@ -653,17 +512,13 @@ export function useSessionMachine({
     state,
     data,
     actions: {
+      // V1 Session Actions (no transcription/redaction/generative pipeline)
       startSession,
-      uploadAudio,
       pasteTextNotes,
-      startTranscription,
-      startRedaction,
-      reverifyText,
-      discardAndStartOver,
-      generateDraft,
+      proceedToDraft,
       startEditing,
       saveEdit,
-      regenerateDraft,
+      regenerateDraft, // V1: Just switches to editing mode
       confirmTimeline,
       denyTimeline,
       resetTimeline,
