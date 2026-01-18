@@ -61,11 +61,16 @@ function ResultIcon({ result, muted }: { result: string; muted?: boolean }) {
   }
 }
 
+// Legacy v0 pipeline event prefixes (not emitting in v1)
+const LEGACY_EVENT_PREFIXES = ["TRANSCRIPTION_", "REDACTION_", "VERIFICATION_", "AUDIO_UPLOAD", "AUDIO_UPLOADED"];
+
 function formatEventType(type: string): string {
-  return type
+  const isLegacy = LEGACY_EVENT_PREFIXES.some(prefix => type.startsWith(prefix));
+  const formatted = type
     .replace(/_/g, " ")
     .toLowerCase()
     .replace(/\b\w/g, (l) => l.toUpperCase());
+  return isLegacy ? `${formatted} (Legacy)` : formatted;
 }
 
 export function EventFeed({ events, onEventClick, selectedEventId }: EventFeedProps) {

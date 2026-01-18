@@ -1,11 +1,32 @@
 /**
- * The Eye Event Taxonomy v0
+ * The Eye Event Taxonomy
  * 
  * Design Goals:
  * 1. No PHI in The Eye. Ever.
  * 2. Events are append-only (immutable); corrections happen via new events.
  * 3. Every event supports: who / what / when / where / why (as metadata).
  * 4. Events are scoped: tenant → user → case → session → artifact.
+ * 
+ * ============================================================================
+ * ⚠️  V1 PIVOT NOTE
+ * ============================================================================
+ * AidMind v1 does NOT use transcription, redaction, or automated note generation.
+ * 
+ * Events related to these features are LEGACY (v0 pipeline) and are disabled
+ * in v1. They are preserved in this taxonomy for:
+ *   • Historical audit data continuity
+ *   • Forward compatibility if features are re-enabled
+ *   • Reference documentation for the v0 architecture
+ * 
+ * Legacy event categories:
+ *   • TRANSCRIPTION_* — Audio-to-text pipeline (v0 only)
+ *   • REDACTION_* — PHI minimization pipeline (v0 only)  
+ *   • VERIFICATION_* — Human review of redacted text (v0 only)
+ *   • AUDIO_* — Audio upload/storage (v0 only)
+ * 
+ * These events will NOT fire in v1 sessions. Their absence is expected
+ * and is NOT an error.
+ * ============================================================================
  */
 
 // ============================================================
@@ -133,21 +154,27 @@ export type EyeEventType =
   | "SESSION_LINKED"
   | "RESUME_REQUIRES_NEW_INPUT"
 
-  // C) Ingest: Uploads & Object Storage
-  | "AUDIO_UPLOAD_URL_ISSUED"
-  | "AUDIO_UPLOADED"
-  | "AUDIO_UPLOAD_FAILED"
+  // -------------------------------------------------------------------------
+  // LEGACY (v0 PIPELINE) EVENTS — C through E
+  // Disabled in v1. Retained for audit/history compatibility.
+  // -------------------------------------------------------------------------
+
+  // C) Ingest: Uploads & Object Storage (Legacy – v0 pipeline)
+  | "AUDIO_UPLOAD_URL_ISSUED"      // Legacy – v0 pipeline
+  | "AUDIO_UPLOADED"               // Legacy – v0 pipeline
+  | "AUDIO_UPLOAD_FAILED"          // Legacy – v0 pipeline
   | "OBJECT_TTL_SET"
   | "OBJECT_TTL_EXPIRED"
   | "OBJECT_ENCRYPTION_VERIFIED"
 
-  // D) Transcription Pipeline
-  | "TRANSCRIPTION_JOB_QUEUED"
-  | "TRANSCRIPTION_STARTED"
-  | "TRANSCRIPTION_COMPLETED"
-  | "TRANSCRIPTION_FAILED"
+  // D) Transcription Pipeline (Legacy – v0 pipeline)
+  | "TRANSCRIPTION_JOB_QUEUED"     // Legacy – v0 pipeline
+  | "TRANSCRIPTION_STARTED"        // Legacy – v0 pipeline
+  | "TRANSCRIPTION_COMPLETED"      // Legacy – v0 pipeline
+  | "TRANSCRIPTION_FAILED"         // Legacy – v0 pipeline
   /**
    * TRANSCRIPTION_PROVIDER_USED: Observability event for audit visibility.
+   * (Legacy – v0 pipeline)
    * 
    * Emitted once per transcription job to record which AI provider processed data.
    * This is NOT a generative AI event and does NOT require supervisor approval.
@@ -160,15 +187,19 @@ export type EyeEventType =
    * 
    * Never includes: audio, transcript text, filenames, object keys
    */
-  | "TRANSCRIPTION_PROVIDER_USED"
+  | "TRANSCRIPTION_PROVIDER_USED"  // Legacy – v0 pipeline
 
-  // E) Redaction & Minimization
-  | "REDACTION_STARTED"
-  | "REDACTION_COMPLETED"
-  | "REDACTION_FAILED"
-  | "REDACTION_LAYER_COMPLETED"
-  | "VERIFICATION_PASSED"
-  | "VERIFICATION_FAILED"
+  // E) Redaction & Minimization (Legacy – v0 pipeline)
+  | "REDACTION_STARTED"            // Legacy – v0 pipeline
+  | "REDACTION_COMPLETED"          // Legacy – v0 pipeline
+  | "REDACTION_FAILED"             // Legacy – v0 pipeline
+  | "REDACTION_LAYER_COMPLETED"    // Legacy – v0 pipeline
+  | "VERIFICATION_PASSED"          // Legacy – v0 pipeline
+  | "VERIFICATION_FAILED"          // Legacy – v0 pipeline
+
+  // -------------------------------------------------------------------------
+  // END LEGACY (v0 PIPELINE) EVENTS
+  // -------------------------------------------------------------------------
 
   // F) Knowledge Base Retrieval (Future - scaffolded)
   | "KB_QUERY_STARTED"
@@ -300,7 +331,11 @@ export const ALL_EYE_EVENT_TYPES: EyeEventType[] = [
   "SESSION_LINKED",
   "RESUME_REQUIRES_NEW_INPUT",
 
-  // C) Ingest
+  // -------------------------------------------------------------------------
+  // LEGACY (v0 PIPELINE) EVENTS — C through E
+  // -------------------------------------------------------------------------
+
+  // C) Ingest (Legacy – v0 pipeline: AUDIO_* events)
   "AUDIO_UPLOAD_URL_ISSUED",
   "AUDIO_UPLOADED",
   "AUDIO_UPLOAD_FAILED",
@@ -308,20 +343,24 @@ export const ALL_EYE_EVENT_TYPES: EyeEventType[] = [
   "OBJECT_TTL_EXPIRED",
   "OBJECT_ENCRYPTION_VERIFIED",
 
-  // D) Transcription
+  // D) Transcription (Legacy – v0 pipeline)
   "TRANSCRIPTION_JOB_QUEUED",
   "TRANSCRIPTION_STARTED",
   "TRANSCRIPTION_COMPLETED",
   "TRANSCRIPTION_FAILED",
   "TRANSCRIPTION_PROVIDER_USED",
 
-  // E) Redaction
+  // E) Redaction (Legacy – v0 pipeline)
   "REDACTION_STARTED",
   "REDACTION_COMPLETED",
   "REDACTION_FAILED",
   "REDACTION_LAYER_COMPLETED",
   "VERIFICATION_PASSED",
   "VERIFICATION_FAILED",
+
+  // -------------------------------------------------------------------------
+  // END LEGACY (v0 PIPELINE) EVENTS
+  // -------------------------------------------------------------------------
 
   // F) Knowledge Base
   "KB_QUERY_STARTED",
@@ -783,19 +822,19 @@ export const IMPLEMENTED_EVENTS: EyeEventType[] = [
   "WIP_BUNDLE_IMPORTED",
   "SESSION_LINKED",
 
-  // Ingest & storage
-  "AUDIO_UPLOADED",
+  // Ingest & storage (AUDIO_* are Legacy – v0 pipeline)
+  "AUDIO_UPLOADED",               // Legacy – v0 pipeline
   "OBJECT_TTL_SET",
-  "OBJECT_TTL_EXPIRED", // mocked
+  "OBJECT_TTL_EXPIRED",           // mocked
 
-  // Transcription
+  // Transcription (Legacy – v0 pipeline — NOT emitting in v1)
   "TRANSCRIPTION_JOB_QUEUED",
   "TRANSCRIPTION_STARTED",
   "TRANSCRIPTION_COMPLETED",
   "TRANSCRIPTION_FAILED",
   "TRANSCRIPTION_PROVIDER_USED",
 
-  // Redaction
+  // Redaction (Legacy – v0 pipeline — NOT emitting in v1)
   "REDACTION_STARTED",
   "REDACTION_COMPLETED",
   "REDACTION_FAILED",
