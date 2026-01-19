@@ -48,6 +48,13 @@ export const V1_SHOW_PLACEHOLDER_TASKS = false;
  */
 export const V1_SHOW_PLACEHOLDER_SCHEDULE = false;
 
+/**
+ * Use the v1 dashboard redesign (Signals Hub layout).
+ * When true: Shows Work Radar, Active Sessions, Session History panels.
+ * When false: Shows legacy TaskList + NotesPanel layout.
+ */
+export const V1_DASHBOARD_REDESIGN = true;
+
 // ============================================================================
 // Helper
 // ============================================================================
@@ -61,6 +68,7 @@ export const FEATURES = {
   generativeNoteGen: V1_ENABLE_GENERATIVE_NOTE_GEN,
   showPlaceholderTasks: V1_SHOW_PLACEHOLDER_TASKS,
   showPlaceholderSchedule: V1_SHOW_PLACEHOLDER_SCHEDULE,
+  dashboardRedesign: V1_DASHBOARD_REDESIGN,
 } as const;
 
 /**
