@@ -1,6 +1,7 @@
 // Dashboard context for task and search state management
 import { createContext, useContext, useState, ReactNode, useCallback, useMemo } from "react";
 import { toast } from "@/hooks/use-toast";
+import { V1_SHOW_PLACEHOLDER_TASKS } from "@/config/features";
 
 export interface Task {
   id: string;
@@ -28,12 +29,19 @@ interface DashboardContextType {
   restoreTask: (taskId: string) => void;
   activeTasks: Task[];
   completedTasks: Task[];
+  isPlaceholderMode: boolean;
 }
 
 const DashboardContext = createContext<DashboardContextType | undefined>(undefined);
 
-// Initial mock tasks
-const initialTasks: Task[] = [
+/**
+ * Initial placeholder tasks (DEV / Placeholder data)
+ * 
+ * V1 placeholder: These are hardcoded demo tasks until the platform
+ * task system is connected. When V1_SHOW_PLACEHOLDER_TASKS is false,
+ * this data is not used.
+ */
+const placeholderTasks: Task[] = [
   {
     id: "1",
     title: "Follow up on housing assistance intake",
@@ -91,9 +99,15 @@ const initialTasks: Task[] = [
   },
 ];
 
+// Use placeholder tasks if flag is enabled, otherwise start empty
+const getInitialTasks = (): Task[] => {
+  return V1_SHOW_PLACEHOLDER_TASKS ? placeholderTasks : [];
+};
+
 export function DashboardProvider({ children }: { children: ReactNode }) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
+  const [tasks, setTasks] = useState<Task[]>(getInitialTasks);
+  const isPlaceholderMode = V1_SHOW_PLACEHOLDER_TASKS;
 
   const clearSearch = useCallback(() => {
     setSearchQuery("");
@@ -250,6 +264,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         restoreTask,
         activeTasks,
         completedTasks,
+        isPlaceholderMode,
       }}
     >
       {children}

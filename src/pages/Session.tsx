@@ -472,8 +472,9 @@ export default function Session() {
     }
   };
 
-  const canRegenerate = data.llmRequestCount < 3 && 
-    (!data.isResumedSession || data.hasNewInputForRegeneration);
+  // V1: Regeneration is disabled - no LLM usage tracking needed
+  // const canRegenerate = data.llmRequestCount < 3 && 
+  //   (!data.isResumedSession || data.hasNewInputForRegeneration);
 
   return (
     <div className="min-h-screen bg-background">
@@ -540,17 +541,17 @@ export default function Session() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* New Input Dialog for Regeneration (Resumed Sessions) */}
+      {/* New Input Dialog for Editing (Resumed Sessions) */}
       <AlertDialog open={showNewInputDialog} onOpenChange={setShowNewInputDialog}>
         <AlertDialogContent className="max-w-lg">
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
               <AlertCircle className="h-5 w-5 text-amber-500" />
-              Regeneration requires new input
+              Additional context needed
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Since this is a resumed session, the original audio and transcript have been purged. 
-              To regenerate the draft, please provide new notes or context.
+              Previous session artifacts were purged per retention policy. 
+              Please provide additional notes or context to continue editing.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="py-4">
@@ -567,7 +568,7 @@ export default function Session() {
               onClick={handleSubmitNewInput}
               disabled={!newInputText.trim()}
             >
-              Regenerate with new input
+              Continue with new input
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -694,7 +695,7 @@ export default function Session() {
                         This is a resumed session
                       </p>
                       <p className="text-sm text-amber-700 mt-1">
-                        Original audio and transcript were securely purged. Regeneration requires new input.
+                        Previous session artifacts were purged. You can continue editing safely.
                         {data.previousResumeBundleId && (
                           <span className="block mt-1 text-xs text-amber-600">
                             Previous bundle ID: {data.previousResumeBundleId.slice(0, 8)}...
@@ -731,20 +732,10 @@ export default function Session() {
                       variant="outline" 
                       size="sm"
                       onClick={handleRequestRegeneration}
-                      disabled={data.llmRequestCount >= 3}
-                      title={
-                        data.isResumedSession && !data.hasNewInputForRegeneration
-                          ? "Regeneration requires new input"
-                          : undefined
-                      }
+                      title="In v1, revisions are manual. Automated rewriting is disabled."
                     >
                       <RefreshCw className="h-4 w-4 mr-1" />
-                      {canRegenerate 
-                        ? `Regenerate (${3 - data.llmRequestCount} left)`
-                        : data.isResumedSession && !data.hasNewInputForRegeneration
-                        ? "New input required"
-                        : "Regenerate (0 left)"
-                      }
+                      Continue editing
                     </Button>
                   </div>
                 </div>

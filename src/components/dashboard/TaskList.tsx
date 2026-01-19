@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Plus, ChevronDown, Circle, Check, ListTodo, CheckCircle2 } from "lucide-react";
+import { Plus, ChevronDown, Circle, Check, ListTodo, CheckCircle2, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -13,6 +13,7 @@ import { AddTaskModal } from "./AddTaskModal";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useDashboard, Task } from "@/contexts/DashboardContext";
 import { cn } from "@/lib/utils";
+import { V1_SHOW_PLACEHOLDER_TASKS } from "@/config/features";
 
 type SortMode = "dueDate" | "priority" | "created";
 type PriorityFilter = "all" | "high" | "normal";
@@ -349,11 +350,27 @@ export function TaskList() {
             {/* Empty state for active tasks */}
             {filteredActiveTasks.length === 0 && !searchQuery.trim() && (
               <div className="flex flex-col items-center justify-center py-16 text-center">
-                <ListTodo className="h-12 w-12 text-muted-foreground/30 mb-4" />
-                <p className="text-sm text-muted-foreground">No active tasks</p>
-                <p className="text-xs text-muted-foreground/70 mt-1">
-                  Click "Add Task" to create a new task
-                </p>
+                {V1_SHOW_PLACEHOLDER_TASKS ? (
+                  <>
+                    <ListTodo className="h-12 w-12 text-muted-foreground/30 mb-4" />
+                    <p className="text-sm text-muted-foreground">No active tasks</p>
+                    <p className="text-xs text-muted-foreground/70 mt-1">
+                      Click "Add Task" to create a new task
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-12 h-12 rounded-lg bg-muted/50 flex items-center justify-center mb-4">
+                      <Info className="h-6 w-6 text-muted-foreground/50" />
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Platform signals will appear here when connected.
+                    </p>
+                    <p className="text-xs text-muted-foreground/70 mt-1">
+                      Tasks from confirmed timeline events will show here
+                    </p>
+                  </>
+                )}
               </div>
             )}
           </>
