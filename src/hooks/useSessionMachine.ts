@@ -76,7 +76,14 @@ export interface TimelineItem {
   createdTaskId?: string; // Track if this already created a task (for resume deduplication)
 }
 
-// Resume bundle structure (for Save for Later)
+/**
+ * Resume bundle structure (for Save for Later)
+ * 
+ * V1 placeholder notes:
+ * - template_ids, policy_pack_ids, unknown_fields are placeholders until
+ *   templates/policy packs are implemented in a future version.
+ * - No audio/transcript/redaction references - v1 is text-only.
+ */
 export interface ResumeBundle {
   version: "1.0";
   resume_bundle_id: string;
@@ -89,40 +96,43 @@ export interface ResumeBundle {
   };
   draft_content: string;
   timeline_events: TimelineItem[];
-  template_ids: string[]; // Dummy placeholder
-  policy_pack_ids: string[]; // Dummy placeholder
-  unknown_fields: string[]; // Placeholder for unfilled fields
+  // V1 placeholder until templates/policy packs are implemented
+  placeholder_data: true;
+  template_ids: string[];
+  policy_pack_ids: string[];
+  unknown_fields: string[];
 }
 
 // V1: Mock timeline events for demo (transcription/draft mocks removed)
 // V0 mock data moved to src/legacy/v0_pipeline/
 
-// Mock policy-derived timeline events (merged from previous timelines and follow-ups)
-const MOCK_TIMELINES: TimelineItem[] = [
+/**
+ * Timeline suggestions (placeholder)
+ * 
+ * These are hardcoded placeholder suggestions until the policy engine
+ * is implemented. In production, these would be derived from:
+ * - Case context
+ * - Agency policy packs
+ * - Deadline templates
+ */
+const PLACEHOLDER_TIMELINE_SUGGESTIONS: TimelineItem[] = [
   {
     id: "1",
-    title: "Schedule housing resource review appointment",
+    title: "Schedule follow-up appointment",
     date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString(),
     priority: "HIGH",
     status: "PENDING",
   },
   {
     id: "2",
-    title: "Send utility assistance program information",
+    title: "Send resource information to client",
     date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toLocaleDateString(),
     priority: "MEDIUM",
     status: "PENDING",
   },
   {
     id: "3",
-    title: "Document eviction notice receipt",
-    date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toLocaleDateString(),
-    priority: "HIGH",
-    status: "PENDING",
-  },
-  {
-    id: "4",
-    title: "Update case file with consultation notes",
+    title: "Document case notes",
     date: new Date().toLocaleDateString(),
     priority: "LOW",
     status: "PENDING",
@@ -272,7 +282,7 @@ export function useSessionMachine({
     setData((prev) => ({
       ...prev,
       generatedDraft: prev.textNotes || "",
-      timelines: MOCK_TIMELINES, // Still provide timeline suggestions
+      timelines: PLACEHOLDER_TIMELINE_SUGGESTIONS, // Placeholder suggestions
     }));
     setState("DRAFT_READY");
   }, [state]);
@@ -377,6 +387,8 @@ export function useSessionMachine({
   const saveForLater = useCallback((): ResumeBundle | null => {
     if (state !== "DRAFT_READY") return null;
     
+    // V1 placeholder: template_ids, policy_pack_ids, unknown_fields are
+    // placeholders until templates/policy packs are implemented.
     const bundle: ResumeBundle = {
       version: "1.0",
       resume_bundle_id: crypto.randomUUID(),
@@ -389,9 +401,10 @@ export function useSessionMachine({
       },
       draft_content: data.generatedDraft || "",
       timeline_events: data.timelines || [],
-      template_ids: ["template_housing_v1", "template_general_v1"], // Dummy
-      policy_pack_ids: ["policy_state_abc_2024", "policy_agency_default"], // Dummy
-      unknown_fields: ["supervisor_signature", "follow_up_outcome"], // Dummy placeholder
+      placeholder_data: true,
+      template_ids: [],
+      policy_pack_ids: [],
+      unknown_fields: [],
     };
 
     // Log events (internal only)

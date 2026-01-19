@@ -15,17 +15,24 @@ export interface RecentNote {
 
 type SessionRow = Tables<"sessions">;
 
-// Map session state to UI status
-function mapStateToStatus(session: SessionRow): NoteStatus {
+/**
+ * Map session state to UI status
+ * Priority: cancelled_at > closed_at > state-based mapping
+ */
+export function mapStateToStatus(session: SessionRow): NoteStatus {
+  // Check timestamps first (most authoritative)
   if (session.cancelled_at) return "cancelled";
   if (session.closed_at) return "exported";
   
+  // Then check state field
   switch (session.state) {
     case "EXPORTED":
     case "PURGED":
       return "exported";
     case "CANCELLED":
       return "cancelled";
+    case "ABANDONED":
+      return "cancelled"; // Treat abandoned as cancelled for UI purposes
     case "SAVED_FOR_LATER":
       return "saved";
     default:
@@ -33,7 +40,9 @@ function mapStateToStatus(session: SessionRow): NoteStatus {
   }
 }
 
-// Map interaction_type to display format
+/**
+ * Map interaction_type to display format
+ */
 function normalizeInteractionType(type: string | null): string {
   if (!type) return "other";
   
@@ -41,11 +50,44 @@ function normalizeInteractionType(type: string | null): string {
   return type.toLowerCase().replace(/_/g, "-").replace(/\s+/g, "-");
 }
 
-// Generate title from session data
-function generateTitle(session: SessionRow): string {
-  if (session.case_label) return session.case_label;
-  if (session.client_label) return `Session with ${session.client_label}`;
-  return `Session ${session.session_id.slice(0, 8)}`;
+/**
+ * Humanize interaction type for display
+ */
+export function humanizeInteractionType(type: string | null): string {
+  if (!type) return "Note";
+  
+  const typeMap: Record<string, string> = {
+    phone_call: "Phone call note",
+    "phone-call": "Phone call note",
+    visit: "Visit note",
+    meeting: "Meeting note",
+    email: "Email note",
+    other: "Note",
+  };
+  
+  const normalized = type.toLowerCase().replace(/_/g, "-");
+  return typeMap[normalized] || `${type.charAt(0).toUpperCase() + type.slice(1)} note`;
+}
+
+/**
+ * Generate title from session data
+ * Priority: case_label > humanized interaction_type > "Untitled session"
+ * 
+ * Note: Never use hardcoded defaults like "Housing Assistance"
+ */
+export function generateTitle(session: SessionRow): string {
+  // Priority 1: Use case_label if it exists and is non-empty
+  if (session.case_label && session.case_label.trim()) {
+    return session.case_label.trim();
+  }
+  
+  // Priority 2: Use humanized interaction type
+  if (session.interaction_type && session.interaction_type.trim()) {
+    return humanizeInteractionType(session.interaction_type);
+  }
+  
+  // Priority 3: Fallback to untitled
+  return "Untitled session";
 }
 
 // Transform a session row to RecentNote

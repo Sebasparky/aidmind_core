@@ -32,6 +32,23 @@ export const V1_ENABLE_REDACTION = false;
 export const V1_ENABLE_GENERATIVE_NOTE_GEN = false;
 
 // ============================================================================
+// V1 PLACEHOLDER UI FLAGS
+// These control visibility of mock/placeholder UI elements
+// ============================================================================
+
+/**
+ * Show placeholder task list with mock data.
+ * When false: Shows empty state with "Platform signals will appear here when connected."
+ */
+export const V1_SHOW_PLACEHOLDER_TASKS = false;
+
+/**
+ * Show placeholder schedule sidebar with mock data.
+ * When false: Shows empty state with "Platform signals will appear here when connected."
+ */
+export const V1_SHOW_PLACEHOLDER_SCHEDULE = false;
+
+// ============================================================================
 // Helper
 // ============================================================================
 
@@ -42,6 +59,8 @@ export const FEATURES = {
   transcription: V1_ENABLE_TRANSCRIPTION,
   redaction: V1_ENABLE_REDACTION,
   generativeNoteGen: V1_ENABLE_GENERATIVE_NOTE_GEN,
+  showPlaceholderTasks: V1_SHOW_PLACEHOLDER_TASKS,
+  showPlaceholderSchedule: V1_SHOW_PLACEHOLDER_SCHEDULE,
 } as const;
 
 /**
