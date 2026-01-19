@@ -11,10 +11,13 @@ import { cn } from "@/lib/utils";
 /**
  * Active Sessions: Access points to Generate Guidance and Run Reviewer tools.
  * 
- * IMPORTANT: Sessions are NOT document lifecycles.
+ * IMPORTANT: Sessions are containers, NOT workflows.
  * - No stage pills (drafting, editing, exporting)
  * - No lifecycle language
  * - Two explicit actions: Generate Guidance, Run Reviewer
+ * - Progress indicator: 0/2, 1/2, 2/2 (tools used)
+ * 
+ * "New Session" creates a card on the dashboard, NOT a navigation event.
  */
 
 interface ActiveSession {
@@ -23,6 +26,9 @@ interface ActiveSession {
   caseLabel: string;
   interactionType: string;
   lastAccessed: Date;
+  createdAt: Date;
+  guidanceUsed: boolean;
+  reviewerUsed: boolean;
 }
 
 function formatRelativeTime(date: Date): string {
@@ -39,6 +45,18 @@ function formatRelativeTime(date: Date): string {
   return `${diffDays}d ago`;
 }
 
+function getProgressLabel(guidanceUsed: boolean, reviewerUsed: boolean): string {
+  const count = (guidanceUsed ? 1 : 0) + (reviewerUsed ? 1 : 0);
+  return `${count} / 2`;
+}
+
+function getProgressColor(guidanceUsed: boolean, reviewerUsed: boolean): string {
+  const count = (guidanceUsed ? 1 : 0) + (reviewerUsed ? 1 : 0);
+  if (count === 0) return "bg-muted text-muted-foreground";
+  if (count === 1) return "bg-primary/20 text-primary";
+  return "bg-primary text-primary-foreground";
+}
+
 interface ActiveSessionsPanelProps {
   className?: string;
 }
@@ -50,6 +68,7 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Filter to only active sessions (not completed, not cancelled)
+  // TODO: Replace with real tool usage tracking from database
   const activeSessions: ActiveSession[] = notes
     .filter((note) => note.status === "in_progress" || note.status === "saved")
     .map((note) => ({
@@ -58,6 +77,10 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
       caseLabel: note.title,
       interactionType: note.interactionType || "Documentation",
       lastAccessed: note.updatedAt,
+      createdAt: note.updatedAt, // Use updatedAt as fallback since createdAt may not exist
+      // Placeholder: will be replaced with real tracking
+      guidanceUsed: false,
+      reviewerUsed: false,
     }));
 
   const handleRefresh = async () => {
@@ -98,7 +121,7 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
           </Button>
         </div>
         <p className="text-sm text-muted-foreground mt-1">
-          Sessions in progress
+          Access guidance and review tools
         </p>
       </div>
 
@@ -145,11 +168,23 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
               >
                 {/* Session info */}
                 <div className="mb-3">
-                  <p className="text-sm font-medium text-foreground">
-                    {session.caseLabel}
-                  </p>
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-sm font-medium text-foreground">
+                      {session.caseLabel}
+                    </p>
+                    {/* Progress indicator */}
+                    <Badge 
+                      variant="secondary"
+                      className={cn(
+                        "text-xs font-mono shrink-0",
+                        getProgressColor(session.guidanceUsed, session.reviewerUsed)
+                      )}
+                    >
+                      {getProgressLabel(session.guidanceUsed, session.reviewerUsed)}
+                    </Badge>
+                  </div>
                   <div className="flex items-center gap-2 mt-1">
-                    <Badge variant="secondary" className="text-xs">
+                    <Badge variant="outline" className="text-xs">
                       {session.interactionType}
                     </Badge>
                     <span className="text-xs text-muted-foreground">
@@ -161,7 +196,7 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
                 {/* Two explicit actions - NOT lifecycle stages */}
                 <div className="flex flex-wrap gap-2">
                   <Button
-                    variant="outline"
+                    variant={session.guidanceUsed ? "secondary" : "outline"}
                     size="sm"
                     className="gap-1.5 text-xs"
                     onClick={() => handleGenerateGuidance(session)}
@@ -170,7 +205,7 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
                     Generate Guidance
                   </Button>
                   <Button
-                    variant="outline"
+                    variant={session.reviewerUsed ? "secondary" : "outline"}
                     size="sm"
                     className="gap-1.5 text-xs"
                     onClick={() => handleRunReviewer(session)}
@@ -185,7 +220,7 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
         )}
       </div>
 
-      {/* Start Session Modal */}
+      {/* Start Session Modal - creates card, doesn't navigate to session page */}
       <StartNoteModal open={startSessionOpen} onOpenChange={setStartSessionOpen} />
     </div>
   );

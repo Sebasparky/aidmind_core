@@ -18,22 +18,23 @@ import { V1_DASHBOARD_REDESIGN } from "@/config/features";
  */
 const Index = () => {
   // V1 Dashboard Redesign: Signals Hub layout
+  // 3-column equal-weight layout (no schedule column)
   if (V1_DASHBOARD_REDESIGN) {
     return (
       <DashboardLayout>
-        <div className="flex h-full min-h-0 gap-4">
-          {/* Left Panel: Work Radar */}
-          <div className="w-[320px] flex-shrink-0">
-            <WorkRadarPanel />
+        <div className="grid grid-cols-3 gap-4 h-full min-h-0">
+          {/* Left Panel: Work Radar - derived documentation obligations */}
+          <div className="min-h-0">
+            <WorkRadarPanel className="h-full" />
           </div>
           
-          {/* Center Panel: Active Sessions */}
-          <div className="flex-1 min-w-0">
+          {/* Center Panel: Active Sessions - tool access points */}
+          <div className="min-h-0">
             <ActiveSessionsPanel className="h-full" />
           </div>
           
-          {/* Right Panel: Session History */}
-          <div className="w-[340px] flex-shrink-0">
+          {/* Right Panel: Session History - read-only */}
+          <div className="min-h-0">
             <SessionHistoryPanel className="h-full" />
           </div>
         </div>

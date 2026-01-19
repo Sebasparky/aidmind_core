@@ -71,9 +71,9 @@ describe("V1 Dashboard Components", () => {
       expect(screen.getByText("Active Sessions")).toBeInTheDocument();
     });
 
-    it("displays 'Sessions in progress' subtitle", () => {
+    it("displays 'Access guidance and review tools' subtitle", () => {
       renderWithRouter(<ActiveSessionsPanel />);
-      expect(screen.getByText("Sessions in progress")).toBeInTheDocument();
+      expect(screen.getByText("Access guidance and review tools")).toBeInTheDocument();
     });
 
     it("uses 'New Session' button text", () => {
@@ -109,9 +109,9 @@ describe("V1 Dashboard Components", () => {
       expect(screen.getByText("Session History")).toBeInTheDocument();
     });
 
-    it("displays 'Completed and closed sessions' subtitle", () => {
+    it("displays 'Closed sessions (read-only)' subtitle", () => {
       renderWithRouter(<SessionHistoryPanel />);
-      expect(screen.getByText("Completed and closed sessions")).toBeInTheDocument();
+      expect(screen.getByText("Closed sessions (read-only)")).toBeInTheDocument();
     });
 
     it("shows correct empty state", () => {
