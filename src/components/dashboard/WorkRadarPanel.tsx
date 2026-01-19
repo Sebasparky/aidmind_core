@@ -28,6 +28,7 @@ export interface WorkRadarItem {
 }
 
 interface WorkRadarPanelProps {
+  className?: string;
   items?: WorkRadarItem[];
   onItemClick?: (item: WorkRadarItem) => void;
 }
@@ -95,12 +96,12 @@ function getSourceBadgeVariant(type: WorkRadarItem["source"]["type"]) {
   }
 }
 
-export function WorkRadarPanel({ items, onItemClick }: WorkRadarPanelProps) {
+export function WorkRadarPanel({ className, items, onItemClick }: WorkRadarPanelProps) {
   // Use placeholder data for v1, will be replaced with derived data later
   const displayItems = items ?? placeholderItems;
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-card rounded-xl border border-border">
+    <div className={cn("flex flex-col h-full overflow-hidden bg-card rounded-xl border border-border", className)}>
       {/* Header */}
       <div className="p-5 border-b border-border">
         <h2 className="text-lg font-semibold text-foreground">Work Radar</h2>

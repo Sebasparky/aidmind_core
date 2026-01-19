@@ -179,3 +179,32 @@ export function Sidebar() {
   );
 }
 
+/**
+ * Minimal Sidebar: V1 Dashboard - No schedule column.
+ * Only shows user info and settings at bottom.
+ */
+export function MinimalSidebar() {
+  return (
+    <aside className="w-[72px] bg-sidebar flex flex-col h-full self-stretch flex-shrink-0 border-r border-border">
+      {/* Spacer */}
+      <div className="flex-1" />
+      
+      {/* Bottom: User - Pinned */}
+      <div className="p-3 mt-auto flex-shrink-0">
+        <div className="flex flex-col items-center gap-2">
+          <div className="w-10 h-10 rounded-full bg-sidebar-primary flex items-center justify-center text-sm font-medium text-sidebar-primary-foreground">
+            JS
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-sidebar-muted hover:text-sidebar-accent-foreground"
+            aria-label="Settings"
+          >
+            <Settings className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+    </aside>
+  );
+}
