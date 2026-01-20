@@ -15,6 +15,23 @@ vi.mock("@/hooks/useRecentNotes", () => ({
   }),
 }));
 
+// Mock supabase
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: {
+    from: () => ({
+      insert: () => Promise.resolve({ error: null }),
+      update: () => ({
+        eq: () => Promise.resolve({ error: null }),
+      }),
+      select: () => ({
+        eq: () => ({
+          maybeSingle: () => Promise.resolve({ data: null, error: null }),
+        }),
+      }),
+    }),
+  },
+}));
+
 const renderWithRouter = (component: React.ReactNode) => {
   return render(<BrowserRouter>{component}</BrowserRouter>);
 };
@@ -101,6 +118,11 @@ describe("V1 Dashboard Components", () => {
       expect(screen.queryByText(/^exporting$/i)).not.toBeInTheDocument();
       expect(screen.queryByText(/^approved$/i)).not.toBeInTheDocument();
     });
+
+    it("does NOT display 'Progress' label (uses 'Tools Used' instead)", () => {
+      renderWithRouter(<ActiveSessionsPanel />);
+      expect(screen.queryByText(/^Progress:/i)).not.toBeInTheDocument();
+    });
   });
 
   describe("SessionHistoryPanel", () => {
@@ -125,6 +147,11 @@ describe("V1 Dashboard Components", () => {
       const exportButtons = screen.queryAllByRole("button", { name: /export/i });
       expect(exportButtons.length).toBe(0);
     });
+
+    it("does NOT display 'Resume' action", () => {
+      renderWithRouter(<SessionHistoryPanel />);
+      expect(screen.queryByRole("button", { name: /resume/i })).not.toBeInTheDocument();
+    });
   });
 });
 
@@ -147,5 +174,25 @@ describe("V1 Dashboard Language Compliance", () => {
     // Should not imply storing final documents
     expect(screen.queryByText(/final document/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/stored record/i)).not.toBeInTheDocument();
+  });
+
+  it("ActiveSessionsPanel does NOT use draft/export language", () => {
+    renderWithRouter(<ActiveSessionsPanel />);
+    expect(screen.queryByText(/draft/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/export/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/finalize/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("V1 Routing Constraints", () => {
+  it("ActiveSessionsPanel does NOT contain links to /session", () => {
+    renderWithRouter(<ActiveSessionsPanel />);
+    const sessionLinks = document.querySelectorAll('a[href*="/session"]');
+    // Filter out /guidance and /reviewer links
+    const invalidLinks = Array.from(sessionLinks).filter(
+      (link) => !link.getAttribute("href")?.includes("/guidance") && 
+                !link.getAttribute("href")?.includes("/reviewer")
+    );
+    expect(invalidLinks.length).toBe(0);
   });
 });
