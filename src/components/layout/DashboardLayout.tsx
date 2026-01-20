@@ -1,21 +1,23 @@
 import { ReactNode } from "react";
 import { Header } from "./Header";
-import { Sidebar, MinimalSidebar } from "./Sidebar";
-import { V1_DASHBOARD_REDESIGN } from "@/config/features";
 
 interface DashboardLayoutProps {
   children: ReactNode;
 }
 
+/**
+ * Dashboard Layout - Full width, no sidebar.
+ * 
+ * V1 Pivot: AidMind is a readiness surface, not an app shell.
+ * No persistent sidebar, no navigation hierarchy.
+ */
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">
       <Header />
-      <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* V1 Dashboard uses minimal sidebar (no schedule column) */}
-        {V1_DASHBOARD_REDESIGN ? <MinimalSidebar /> : <Sidebar />}
-        <main className="flex-1 overflow-y-auto p-6 bg-[hsl(var(--canvas))]">{children}</main>
-      </div>
+      <main className="flex-1 overflow-y-auto p-6 bg-[hsl(var(--canvas))]">
+        {children}
+      </main>
     </div>
   );
 }

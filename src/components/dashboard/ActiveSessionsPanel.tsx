@@ -1,23 +1,35 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Sparkles, CheckSquare, Clock, RefreshCw } from "lucide-react";
+import { Plus, Sparkles, Shield, Clock, RefreshCw, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StartNoteModal } from "./StartNoteModal";
 import { useRecentNotes } from "@/hooks/useRecentNotes";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "@/hooks/use-toast";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 /**
  * Active Sessions: Access points to Generate Guidance and Run Reviewer tools.
  * 
- * IMPORTANT: Sessions are containers, NOT workflows.
+ * V1 CONSTRAINTS:
+ * - Sessions are containers, NOT workflows
  * - No stage pills (drafting, editing, exporting)
  * - No lifecycle language
  * - Two explicit actions: Generate Guidance, Run Reviewer
- * - Progress indicator: 0/2, 1/2, 2/2 (tools used)
- * 
- * "New Session" creates a card on the dashboard, NOT a navigation event.
+ * - "Tools Used: X of 2" (display-only, NOT a workflow state)
+ * - Sessions move to History when BOTH tools used AND user closes session
  */
 
 interface ActiveSession {
@@ -45,12 +57,12 @@ function formatRelativeTime(date: Date): string {
   return `${diffDays}d ago`;
 }
 
-function getProgressLabel(guidanceUsed: boolean, reviewerUsed: boolean): string {
+function getToolsUsedLabel(guidanceUsed: boolean, reviewerUsed: boolean): string {
   const count = (guidanceUsed ? 1 : 0) + (reviewerUsed ? 1 : 0);
-  return `${count} / 2`;
+  return `Tools Used: ${count} of 2`;
 }
 
-function getProgressColor(guidanceUsed: boolean, reviewerUsed: boolean): string {
+function getToolsUsedColor(guidanceUsed: boolean, reviewerUsed: boolean): string {
   const count = (guidanceUsed ? 1 : 0) + (reviewerUsed ? 1 : 0);
   if (count === 0) return "bg-muted text-muted-foreground";
   if (count === 1) return "bg-primary/20 text-primary";
@@ -66,6 +78,8 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
   const { notes, loading, error, refresh } = useRecentNotes(20);
   const [startSessionOpen, setStartSessionOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
+  const [sessionToClose, setSessionToClose] = useState<ActiveSession | null>(null);
 
   // Filter to only active sessions (not completed, not cancelled)
   // TODO: Replace with real tool usage tracking from database
@@ -77,7 +91,7 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
       caseLabel: note.title,
       interactionType: note.interactionType || "Documentation",
       lastAccessed: note.updatedAt,
-      createdAt: note.updatedAt, // Use updatedAt as fallback since createdAt may not exist
+      createdAt: note.updatedAt,
       // Placeholder: will be replaced with real tracking
       guidanceUsed: false,
       reviewerUsed: false,
@@ -90,15 +104,74 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
   };
 
   const handleGenerateGuidance = (session: ActiveSession) => {
-    navigate(`/session?sessionId=${session.sessionId}&action=guidance`);
+    // Navigate to standalone Guidance tool page
+    navigate(`/guidance/${session.sessionId}`);
   };
 
   const handleRunReviewer = (session: ActiveSession) => {
-    navigate(`/session?sessionId=${session.sessionId}&action=reviewer`);
+    // Navigate to standalone Reviewer tool page
+    navigate(`/reviewer/${session.sessionId}`);
+  };
+
+  const handleCloseSessionClick = (session: ActiveSession) => {
+    setSessionToClose(session);
+  };
+
+  const handleConfirmCloseSession = async () => {
+    if (!sessionToClose) return;
+    
+    setClosingSessionId(sessionToClose.sessionId);
+    
+    try {
+      const { error } = await supabase
+        .from("sessions")
+        .update({ 
+          state: "CLOSING",
+          closed_at: new Date().toISOString(),
+        })
+        .eq("session_id", sessionToClose.sessionId);
+
+      if (error) throw error;
+
+      toast({
+        title: "Session closed",
+        description: "Session moved to history.",
+      });
+
+      await refresh();
+    } catch (err) {
+      console.error("Failed to close session:", err);
+      toast({
+        title: "Failed to close session",
+        description: "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setClosingSessionId(null);
+      setSessionToClose(null);
+    }
   };
 
   return (
     <div className={cn("flex flex-col h-full overflow-hidden bg-card rounded-xl border border-border", className)}>
+      {/* Close Session Confirmation Dialog */}
+      <AlertDialog open={!!sessionToClose} onOpenChange={(open) => !open && setSessionToClose(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Close this session?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will move the session to history. You won't be able to use the tools on this session anymore.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep open</AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirmCloseSession}>
+              Close session
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Header */}
       <div className="p-5 border-b border-border">
         <div className="flex items-center justify-between">
@@ -172,15 +245,15 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
                     <p className="text-sm font-medium text-foreground">
                       {session.caseLabel}
                     </p>
-                    {/* Progress indicator */}
+                    {/* Tools used indicator - display only, NOT workflow */}
                     <Badge 
                       variant="secondary"
                       className={cn(
-                        "text-xs font-mono shrink-0",
-                        getProgressColor(session.guidanceUsed, session.reviewerUsed)
+                        "text-xs shrink-0",
+                        getToolsUsedColor(session.guidanceUsed, session.reviewerUsed)
                       )}
                     >
-                      {getProgressLabel(session.guidanceUsed, session.reviewerUsed)}
+                      {getToolsUsedLabel(session.guidanceUsed, session.reviewerUsed)}
                     </Badge>
                   </div>
                   <div className="flex items-center gap-2 mt-1">
@@ -193,8 +266,8 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
                   </div>
                 </div>
 
-                {/* Two explicit actions - NOT lifecycle stages */}
-                <div className="flex flex-wrap gap-2">
+                {/* Two explicit tool actions - independent, non-sequential */}
+                <div className="flex flex-wrap items-center gap-2">
                   <Button
                     variant={session.guidanceUsed ? "secondary" : "outline"}
                     size="sm"
@@ -202,7 +275,8 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
                     onClick={() => handleGenerateGuidance(session)}
                   >
                     <Sparkles className="h-3.5 w-3.5" />
-                    Generate Guidance
+                    Guidance
+                    {session.guidanceUsed && <Check className="h-3 w-3 ml-0.5" />}
                   </Button>
                   <Button
                     variant={session.reviewerUsed ? "secondary" : "outline"}
@@ -210,8 +284,21 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
                     className="gap-1.5 text-xs"
                     onClick={() => handleRunReviewer(session)}
                   >
-                    <CheckSquare className="h-3.5 w-3.5" />
-                    Run Reviewer
+                    <Shield className="h-3.5 w-3.5" />
+                    Reviewer
+                    {session.reviewerUsed && <Check className="h-3 w-3 ml-0.5" />}
+                  </Button>
+                  
+                  {/* Close session action */}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 text-xs text-muted-foreground hover:text-foreground ml-auto"
+                    onClick={() => handleCloseSessionClick(session)}
+                    disabled={closingSessionId === session.sessionId}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    Close
                   </Button>
                 </div>
               </div>
@@ -220,8 +307,12 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
         )}
       </div>
 
-      {/* Start Session Modal - creates card, doesn't navigate to session page */}
-      <StartNoteModal open={startSessionOpen} onOpenChange={setStartSessionOpen} />
+      {/* Start Session Modal - creates card, NEVER navigates */}
+      <StartNoteModal 
+        open={startSessionOpen} 
+        onOpenChange={setStartSessionOpen}
+        onSessionCreated={handleRefresh}
+      />
     </div>
   );
 }

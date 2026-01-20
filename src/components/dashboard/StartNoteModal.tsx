@@ -1,10 +1,10 @@
-import { useState, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState } from "react";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -16,19 +16,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { ResumeBundle } from "@/hooks/useSessionMachine";
 import { toast } from "@/hooks/use-toast";
-import { ChevronDown, Plus, FileUp } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { Loader2 } from "lucide-react";
+
+/**
+ * Start Session Modal
+ * 
+ * V1 CONSTRAINTS:
+ * - Creates a session card on the dashboard ONLY
+ * - NEVER navigates away from the dashboard
+ * - Minimal metadata collection (case label, interaction type)
+ * - Session is a container for tool access, not a workflow
+ */
 
 interface StartNoteModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onSessionCreated?: () => void;
 }
 
 const interactionTypes = [
@@ -38,131 +43,100 @@ const interactionTypes = [
   { value: "other", label: "Other" },
 ];
 
-export function StartNoteModal({ open, onOpenChange }: StartNoteModalProps) {
-  const navigate = useNavigate();
-  const [noteTitle, setNoteTitle] = useState("");
+export function StartNoteModal({ open, onOpenChange, onSessionCreated }: StartNoteModalProps) {
+  const [caseLabel, setCaseLabel] = useState("");
   const [interactionType, setInteractionType] = useState("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isCreating, setIsCreating] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!noteTitle.trim() || !interactionType) {
+    if (!caseLabel.trim()) {
+      toast({
+        title: "Case name required",
+        description: "Please enter a case name to create a session.",
+        variant: "destructive",
+      });
       return;
     }
 
-    // Navigate to session page with prefilled data
-    const params = new URLSearchParams({
-      noteTitle: noteTitle.trim(),
-      interactionType: interactionType,
-    });
+    setIsCreating(true);
 
-    // Reset and close
-    setNoteTitle("");
-    setInteractionType("");
-    onOpenChange(false);
+    try {
+      const sessionId = crypto.randomUUID();
+      const caseId = crypto.randomUUID().slice(0, 8);
+      
+      const { error } = await supabase.from("sessions").insert({
+        session_id: sessionId,
+        case_id: caseId,
+        case_label: caseLabel.trim(),
+        interaction_type: interactionType || null,
+        state: "READY_FOR_INPUT",
+      });
 
-    // Navigate to session page
-    navigate(`/session?${params.toString()}`);
+      if (error) throw error;
+
+      toast({
+        title: "Session created",
+        description: "Your session is ready. Access Guidance or Reviewer tools from the dashboard.",
+      });
+
+      // Reset and close - DO NOT NAVIGATE
+      setCaseLabel("");
+      setInteractionType("");
+      onOpenChange(false);
+      
+      // Trigger refresh of session list
+      onSessionCreated?.();
+    } catch (error) {
+      console.error("Failed to create session:", error);
+      toast({
+        title: "Failed to create session",
+        description: "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   const handleClose = () => {
-    setNoteTitle("");
+    if (isCreating) return;
+    setCaseLabel("");
     setInteractionType("");
     onOpenChange(false);
   };
 
-  const handleResumeClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Validate file type
-    if (!file.name.endsWith('.json')) {
-      toast({
-        title: "Invalid file type",
-        description: "Please upload a .json resume bundle file.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const content = event.target?.result as string;
-        const bundle: ResumeBundle = JSON.parse(content);
-
-        // Validate bundle structure
-        if (!bundle.version || !bundle.resume_bundle_id || !bundle.case_reference || !bundle.draft_content) {
-          throw new Error("Invalid bundle structure");
-        }
-
-        // Navigate to session with resume bundle
-        const params = new URLSearchParams({
-          resumeBundle: encodeURIComponent(JSON.stringify(bundle)),
-        });
-
-        // Reset and close
-        setNoteTitle("");
-        setInteractionType("");
-        onOpenChange(false);
-
-        // Navigate to session page
-        navigate(`/session?${params.toString()}`);
-
-      } catch (error) {
-        toast({
-          title: "Invalid resume bundle",
-          description: "The file could not be parsed as a valid AidMind resume bundle.",
-          variant: "destructive",
-        });
-      }
-    };
-
-    reader.onerror = () => {
-      toast({
-        title: "Error reading file",
-        description: "Could not read the selected file.",
-        variant: "destructive",
-      });
-    };
-
-    reader.readAsText(file);
-
-    // Reset the input so the same file can be selected again
-    e.target.value = "";
-  };
-
-  const isValid = noteTitle.trim() && interactionType;
+  const isValid = caseLabel.trim().length > 0;
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-[400px]">
         <DialogHeader>
-          <DialogTitle>Start Note</DialogTitle>
+          <DialogTitle>New Session</DialogTitle>
+          <DialogDescription>
+            Create a session to access Guidance and Reviewer tools.
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4 pt-2">
           <div className="space-y-2">
-            <Label htmlFor="note-title">Note Title</Label>
+            <Label htmlFor="case-label">Case Name <span className="text-destructive">*</span></Label>
             <Input
-              id="note-title"
+              id="case-label"
               type="text"
-              placeholder="e.g. Phone call re housing assistance"
-              value={noteTitle}
-              onChange={(e) => setNoteTitle(e.target.value)}
-              required
+              placeholder="e.g. Smith family intake"
+              value={caseLabel}
+              onChange={(e) => setCaseLabel(e.target.value)}
+              disabled={isCreating}
+              autoFocus
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="interaction-type">Interaction type</Label>
-            <Select value={interactionType} onValueChange={setInteractionType}>
+            <Label htmlFor="interaction-type">Interaction Type</Label>
+            <Select value={interactionType} onValueChange={setInteractionType} disabled={isCreating}>
               <SelectTrigger id="interaction-type">
-                <SelectValue placeholder="Select type" />
+                <SelectValue placeholder="Select type (optional)" />
               </SelectTrigger>
               <SelectContent>
                 {interactionTypes.map((type) => (
@@ -175,151 +149,22 @@ export function StartNoteModal({ open, onOpenChange }: StartNoteModalProps) {
           </div>
 
           <div className="flex justify-end gap-2 pt-4">
-            <Button type="button" variant="outline" onClick={handleClose}>
+            <Button type="button" variant="outline" onClick={handleClose} disabled={isCreating}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!isValid}>
-              Start Session
+            <Button type="submit" disabled={!isValid || isCreating}>
+              {isCreating ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                "Create Session"
+              )}
             </Button>
           </div>
         </form>
-
-        {/* Divider */}
-        <div className="relative mt-2">
-          <div className="absolute inset-0 flex items-center">
-            <span className="w-full border-t" />
-          </div>
-          <div className="relative flex justify-center text-xs uppercase">
-            <span className="bg-background px-2 text-muted-foreground">
-              or
-            </span>
-          </div>
-        </div>
-
-        {/* Resume Draft Option */}
-        <div className="pt-2">
-          <Button 
-            type="button" 
-            variant="outline" 
-            className="w-full"
-            onClick={handleResumeClick}
-          >
-            <FileUp className="h-4 w-4 mr-2" />
-            Resume draft from file
-          </Button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".json"
-            onChange={handleFileChange}
-            className="hidden"
-          />
-          <p className="text-xs text-muted-foreground text-center mt-2">
-            Upload a previously saved draft bundle (.json)
-          </p>
-        </div>
       </DialogContent>
     </Dialog>
-  );
-}
-
-// Dropdown button component for the dashboard
-interface StartNoteDropdownProps {
-  onNewNote: () => void;
-}
-
-export function StartNoteDropdown({ onNewNote }: StartNoteDropdownProps) {
-  const navigate = useNavigate();
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleResumeClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Validate file type
-    if (!file.name.endsWith('.json')) {
-      toast({
-        title: "Invalid file type",
-        description: "Please upload a .json resume bundle file.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const content = event.target?.result as string;
-        const bundle: ResumeBundle = JSON.parse(content);
-
-        // Validate bundle structure
-        if (!bundle.version || !bundle.resume_bundle_id || !bundle.case_reference || !bundle.draft_content) {
-          throw new Error("Invalid bundle structure");
-        }
-
-        // Navigate to session with resume bundle
-        const params = new URLSearchParams({
-          resumeBundle: encodeURIComponent(JSON.stringify(bundle)),
-        });
-
-        // Navigate to session page
-        navigate(`/session?${params.toString()}`);
-
-      } catch (error) {
-        toast({
-          title: "Invalid resume bundle",
-          description: "The file could not be parsed as a valid AidMind resume bundle.",
-          variant: "destructive",
-        });
-      }
-    };
-
-    reader.onerror = () => {
-      toast({
-        title: "Error reading file",
-        description: "Could not read the selected file.",
-        variant: "destructive",
-      });
-    };
-
-    reader.readAsText(file);
-
-    // Reset the input so the same file can be selected again
-    e.target.value = "";
-  };
-
-  return (
-    <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button className="gap-2">
-            <Plus className="h-4 w-4" />
-            Start Note
-            <ChevronDown className="h-4 w-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem onClick={onNewNote}>
-            <Plus className="h-4 w-4 mr-2" />
-            Start new note
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={handleResumeClick}>
-            <FileUp className="h-4 w-4 mr-2" />
-            Resume draft
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".json"
-        onChange={handleFileChange}
-        className="hidden"
-      />
-    </>
   );
 }
