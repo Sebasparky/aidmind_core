@@ -12,6 +12,7 @@ import Guidance from "./pages/Guidance";
 import Reviewer from "./pages/Reviewer";
 import Supervisor from "./pages/Supervisor";
 import Auditor from "./pages/Auditor";
+import Platform from "./pages/Platform";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -21,6 +22,8 @@ const queryClient = new QueryClient();
  * - /dashboard: Main dashboard (Work Radar, Active Sessions, Session History)
  * - /guidance/:sessionId: Standalone Guidance tool
  * - /reviewer/:sessionId: Standalone Reviewer tool
+ * - /platform/*: Human Services Coordination Layer (The Platform)
+ * - /supervisor: The Eye - Supervisor event viewer
  * 
  * REMOVED: /session route (sessions are containers, not pages)
  */
@@ -40,6 +43,8 @@ const App = () => (
                 {/* Tool-specific routes (independent, non-sequential) */}
                 <Route path="/guidance/:sessionId" element={<Guidance />} />
                 <Route path="/reviewer/:sessionId" element={<Reviewer />} />
+                {/* Platform routes (Human Services Coordination Layer) */}
+                <Route path="/platform/*" element={<Platform />} />
                 {/* Admin routes */}
                 <Route path="/supervisor" element={<Supervisor />} />
                 <Route path="/auditor" element={<Auditor />} />
