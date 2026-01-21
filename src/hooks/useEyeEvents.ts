@@ -1,11 +1,14 @@
 /**
  * Hook to fetch real Eye events from Supabase
  * Replaces mock data with real database queries
+ * 
+ * Also injects mock coordination events from The Platform for prototype.
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { EyeEvent, EyeEventType, EventSeverity, EventCategory, EVENT_SEVERITY_MAP } from "@/lib/eye/types";
+import { generateMockCoordinationEvents } from "@/lib/platform/coordination-events";
 
 interface RawEyeEvent {
   id: string;
@@ -60,6 +63,9 @@ function transformEvent(raw: RawEyeEvent): EyeEvent {
   };
 }
 
+// Generate mock coordination events once on module load
+const MOCK_COORDINATION_EVENTS = generateMockCoordinationEvents();
+
 export interface UseEyeEventsOptions {
   timeRangeHours?: number;
   sessionId?: string;
@@ -110,7 +116,12 @@ export function useEyeEvents(options: UseEyeEventsOptions = {}) {
       
       // Transform raw events to EyeEvent shape
       const transformedEvents = (data || []).map(transformEvent);
-      setEvents(transformedEvents);
+      
+      // Merge with mock coordination events (prototype only)
+      const allEvents = [...transformedEvents, ...MOCK_COORDINATION_EVENTS]
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      
+      setEvents(allEvents);
       setLastRefresh(new Date());
       
     } catch (err) {

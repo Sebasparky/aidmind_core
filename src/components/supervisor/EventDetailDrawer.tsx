@@ -3,9 +3,13 @@
  * 
  * IMPORTANT: This component NEVER displays PHI.
  * Only metadata fields from The Eye event schema are shown.
+ * 
+ * Includes coordination-specific context for Platform events.
  */
 
+import { Link } from "react-router-dom";
 import { EyeEvent, EVENT_CATEGORY_MAP, EventTag, getEventCategory, getEventSeverity } from "@/lib/eye/types";
+import { isCoordinationEvent, getCoordinationContext } from "@/lib/platform/coordination-events";
 import {
   Sheet,
   SheetContent,
@@ -14,8 +18,10 @@ import {
   SheetDescription,
 } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import {
@@ -31,6 +37,9 @@ import {
   Shield,
   Timer,
   Hash,
+  ArrowLeftRight,
+  ExternalLink,
+  Info,
 } from "lucide-react";
 
 interface EventDetailDrawerProps {
@@ -107,25 +116,88 @@ function ResultBadge({ result }: { result: string }) {
   }
 }
 
+// Coordination Context Card
+function CoordinationContextCard({ event }: { event: EyeEvent }) {
+  const context = getCoordinationContext(event);
+  
+  return (
+    <Card className="border-primary/20 bg-primary/5">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <ArrowLeftRight className="h-4 w-4 text-primary" />
+          Coordination Context
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {context.caseId && (
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">Case ID</span>
+            <span className="font-mono text-sm">{context.caseId}</span>
+          </div>
+        )}
+        {context.referralId && (
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">Referral ID</span>
+            <span className="font-mono text-sm">{context.referralId}</span>
+          </div>
+        )}
+        {context.cboName && (
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">CBO</span>
+            <span className="text-sm">{context.cboName}</span>
+          </div>
+        )}
+        {context.program && (
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">Program</span>
+            <Badge variant="outline" className="text-xs">{context.program}</Badge>
+          </div>
+        )}
+        
+        {context.platformLink && (
+          <Link to={context.platformLink}>
+            <Button variant="outline" size="sm" className="w-full mt-2 gap-2">
+              <ExternalLink className="h-3 w-3" />
+              View in Platform
+            </Button>
+          </Link>
+        )}
+        
+        <div className="flex items-start gap-2 p-2 rounded bg-muted/50 mt-2">
+          <Info className="h-3 w-3 text-muted-foreground mt-0.5 flex-shrink-0" />
+          <p className="text-xs text-muted-foreground">
+            This is a coordination signal from The Platform. No PHI is exposed.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function EventDetailDrawer({ event, onClose }: EventDetailDrawerProps) {
   if (!event) return null;
 
   const category = getEventCategory(event);
   const severity = getEventSeverity(event);
+  const isCoordination = isCoordinationEvent(event);
 
   return (
     <Sheet open={!!event} onOpenChange={(open) => !open && onClose()}>
       <SheetContent className="w-[400px] sm:w-[450px] p-0">
         <SheetHeader className="p-6 pb-4">
           <div className="flex items-center gap-2 mb-2">
-            <Badge variant="outline" className="text-xs">
+            <Badge variant="outline" className={cn(
+              "text-xs",
+              isCoordination && "bg-[hsl(217_91%_60%/0.15)] text-primary border-primary/30"
+            )}>
               {category}
             </Badge>
             <Badge className={cn("text-xs", SEVERITY_STYLES[severity])}>
               {severity}
             </Badge>
           </div>
-          <SheetTitle className="text-lg">
+          <SheetTitle className="text-lg flex items-center gap-2">
+            {isCoordination && <ArrowLeftRight className="h-5 w-5 text-primary" />}
             {event.event_type.replace(/_/g, " ")}
           </SheetTitle>
           <SheetDescription className="flex items-center gap-2">
@@ -142,6 +214,14 @@ export function EventDetailDrawer({ event, onClose }: EventDetailDrawerProps) {
 
         <ScrollArea className="h-[calc(100vh-180px)]">
           <div className="p-6 space-y-4">
+            {/* Coordination Context (for Platform events) */}
+            {isCoordination && (
+              <>
+                <CoordinationContextCard event={event} />
+                <Separator />
+              </>
+            )}
+
             {/* Tags */}
             {event.tags && event.tags.length > 0 && (
               <div className="space-y-2">
@@ -161,7 +241,7 @@ export function EventDetailDrawer({ event, onClose }: EventDetailDrawerProps) {
               </div>
             )}
 
-            <Separator />
+            {event.tags && event.tags.length > 0 && <Separator />}
 
             {/* Timing */}
             <div className="space-y-1">

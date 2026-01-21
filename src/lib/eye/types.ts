@@ -93,7 +93,11 @@ export type EventCategory =
   | "PURGE"
   | "CONFIG"
   | "ANOMALY"
-  | "GOVERNANCE";
+  | "GOVERNANCE"
+  | "COORDINATION";
+
+// Event source for filtering (used by Platform coordination signals)
+export type EventSource = "system" | "policy" | "legacy" | "coordination";
 
 // Tags for event classification
 export type EventTag =
@@ -285,7 +289,13 @@ export type EyeEventType =
 
   // P) Compliance Export
   | "COMPLIANCE_EXPORT_GENERATED"
-  | "COMPLIANCE_EXPORT_DOWNLOADED";
+  | "COMPLIANCE_EXPORT_DOWNLOADED"
+
+  // Q) Coordination Events (from The Platform)
+  | "COORDINATION_REFERRAL_STALLED"
+  | "COORDINATION_SLA_BREACHED"
+  | "COORDINATION_EXTERNAL_ACK_DELAYED"
+  | "COORDINATION_REPEATED_HANDOFF_FAILURE";
 
 /**
  * Exhaustive list of all EyeEventType values.
@@ -442,6 +452,12 @@ export const ALL_EYE_EVENT_TYPES: EyeEventType[] = [
   // P) Compliance Export
   "COMPLIANCE_EXPORT_GENERATED",
   "COMPLIANCE_EXPORT_DOWNLOADED",
+
+  // Q) Coordination Events (from The Platform)
+  "COORDINATION_REFERRAL_STALLED",
+  "COORDINATION_SLA_BREACHED",
+  "COORDINATION_EXTERNAL_ACK_DELAYED",
+  "COORDINATION_REPEATED_HANDOFF_FAILURE",
 ];
 
 // ============================================================
@@ -656,6 +672,12 @@ export const EVENT_CATEGORY_MAP: Record<EyeEventType, EventCategory> = {
   // Compliance Export
   COMPLIANCE_EXPORT_GENERATED: "EXPORT",
   COMPLIANCE_EXPORT_DOWNLOADED: "EXPORT",
+
+  // Coordination (The Platform)
+  COORDINATION_REFERRAL_STALLED: "COORDINATION",
+  COORDINATION_SLA_BREACHED: "COORDINATION",
+  COORDINATION_EXTERNAL_ACK_DELAYED: "COORDINATION",
+  COORDINATION_REPEATED_HANDOFF_FAILURE: "COORDINATION",
 };
 
 // ============================================================
@@ -800,6 +822,12 @@ export const EVENT_SEVERITY_MAP: Record<EyeEventType, EventSeverity> = {
   // Compliance Export
   COMPLIANCE_EXPORT_GENERATED: "NOTICE",
   COMPLIANCE_EXPORT_DOWNLOADED: "INFO",
+
+  // Coordination (The Platform)
+  COORDINATION_REFERRAL_STALLED: "HIGH",
+  COORDINATION_SLA_BREACHED: "HIGH",
+  COORDINATION_EXTERNAL_ACK_DELAYED: "WARN",
+  COORDINATION_REPEATED_HANDOFF_FAILURE: "WARN",
 };
 
 // ============================================================
