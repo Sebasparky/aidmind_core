@@ -32,9 +32,10 @@ interface EventFiltersPanelProps {
 const IMPLEMENTED_CATEGORIES: { value: EventCategory; label: string }[] = [
   { value: "SESSION", label: "Session" },
   { value: "INGEST", label: "Ingest" },
-  { value: "TRANSCRIPTION", label: "Transcription" },
-  { value: "REDACTION", label: "Redaction" },
+  { value: "TRANSCRIPTION", label: "Transcription (Legacy)" },
+  { value: "REDACTION", label: "Redaction (Legacy)" },
   { value: "PURGE", label: "Purge" },
+  { value: "COORDINATION", label: "Coordination" },
 ];
 
 // Future categories - collapsed by default
@@ -46,6 +47,7 @@ const FUTURE_CATEGORIES: { value: EventCategory; label: string }[] = [
   { value: "EXPORT", label: "Export" },
   { value: "CONFIG", label: "Config" },
   { value: "ANOMALY", label: "Anomaly" },
+  { value: "GOVERNANCE", label: "Governance" },
 ];
 
 const SEVERITIES: { value: EventSeverity; label: string; color: string }[] = [
