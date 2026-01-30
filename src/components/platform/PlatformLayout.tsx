@@ -19,6 +19,7 @@ import {
   ScrollText,
   Info,
   Eye,
+  ClipboardList,
 } from "lucide-react";
 
 interface PlatformLayoutProps {
@@ -32,7 +33,16 @@ const NAV_ITEMS = [
   { path: "/platform/providers", label: "Providers (CBOs)", icon: Building2 },
   { path: "/platform/documents", label: "Documents", icon: FileText },
   { path: "/platform/events", label: "Events & Audit", icon: ScrollText },
+  { path: "/platform/progress", label: "Progress", icon: ClipboardList, internal: true },
 ];
+
+interface NavItem {
+  path: string;
+  label: string;
+  icon: typeof LayoutDashboard;
+  end?: boolean;
+  internal?: boolean;
+}
 
 export function PlatformLayout({ children }: PlatformLayoutProps) {
   const location = useLocation();
@@ -66,12 +76,18 @@ export function PlatformLayout({ children }: PlatformLayoutProps) {
                   "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors",
                   isActive
                     ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                    : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                    : "text-sidebar-foreground hover:bg-sidebar-accent/50",
+                  item.internal && "border-t border-sidebar-border mt-3 pt-3"
                 )
               }
             >
               <item.icon className="h-4 w-4" />
               {item.label}
+              {item.internal && (
+                <Badge variant="outline" className="ml-auto text-[10px] px-1.5 py-0 bg-muted text-muted-foreground">
+                  Internal
+                </Badge>
+              )}
             </NavLink>
           ))}
         </nav>
