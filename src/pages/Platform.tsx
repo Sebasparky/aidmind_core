@@ -12,6 +12,7 @@ import { PlatformReferrals } from "@/components/platform/PlatformReferrals";
 import { PlatformProviders } from "@/components/platform/PlatformProviders";
 import { PlatformDocuments } from "@/components/platform/PlatformDocuments";
 import { PlatformEvents } from "@/components/platform/PlatformEvents";
+import { PlatformProgress } from "@/components/platform/PlatformProgress";
 
 export default function Platform() {
   return (
@@ -23,6 +24,7 @@ export default function Platform() {
         <Route path="providers" element={<PlatformProviders />} />
         <Route path="documents" element={<PlatformDocuments />} />
         <Route path="events" element={<PlatformEvents />} />
+        <Route path="progress" element={<PlatformProgress />} />
         <Route path="*" element={<Navigate to="/platform" replace />} />
       </Routes>
     </PlatformLayout>
