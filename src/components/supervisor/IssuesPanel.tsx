@@ -2,7 +2,7 @@
  * Issues Panel - Combined errors and warnings view with local acknowledgment
  * 
  * Reframed around supervisor intent: "What needs attention?"
- * Badge shows unacknowledged count only to reduce "issue count anxiety"
+ * Badge shows unseen count only to reduce "issue count anxiety"
  * 
  * IMPORTANT: Acknowledgment is local to the browser session.
  * It does NOT change system state, persist, or imply audit action.
@@ -41,7 +41,7 @@ interface IssuesPanelProps {
   onAcknowledgeAll: () => void;
 }
 
-type FilterMode = "all" | "new" | "acknowledged";
+type FilterMode = "all" | "new" | "seen";
 
 // Get all events with warnings or errors
 function getIssueEvents(events: EyeEvent[]): EyeEvent[] {
@@ -100,7 +100,7 @@ export function IssuesPanel({ events, onEventClick, acknowledgedIds = new Set(),
   
   const filteredIssues = useMemo(() => {
     if (filterMode === "all") return issueEvents;
-    if (filterMode === "acknowledged") return issueEvents.filter(e => acknowledgedIds.has(e.event_id));
+    if (filterMode === "seen") return issueEvents.filter(e => acknowledgedIds.has(e.event_id));
     return issueEvents.filter(e => !acknowledgedIds.has(e.event_id));
   }, [issueEvents, acknowledgedIds, filterMode]);
   
@@ -112,18 +112,15 @@ export function IssuesPanel({ events, onEventClick, acknowledgedIds = new Set(),
     [issueEvents, acknowledgedIds]
   );
 
-  // All issues acknowledged state
+  // All issues seen — calm empty state
   if (issueEvents.length > 0 && newCount === 0 && filterMode === "new") {
     return (
       <Card className="h-full flex items-center justify-center">
         <div className="text-center text-muted-foreground p-8">
-          <CheckCircle2 className="h-12 w-12 mx-auto mb-4 text-[hsl(var(--status-success))] opacity-70" />
-          <p className="text-sm font-medium">All issues acknowledged</p>
+          <Circle className="h-12 w-12 mx-auto mb-4 text-muted-foreground/30" />
+          <p className="text-sm font-medium">No new issues.</p>
           <p className="text-xs mt-1 mb-4">
-            New issues will appear here automatically.
-          </p>
-          <p className="text-[10px] text-muted-foreground/50 mb-4">
-            Acknowledgment is local to your session and does not change system state.
+            Seen state is local to your session.
           </p>
           <Button
             variant="outline"
@@ -141,7 +138,7 @@ export function IssuesPanel({ events, onEventClick, acknowledgedIds = new Set(),
     return (
       <Card className="h-full flex items-center justify-center">
         <div className="text-center text-muted-foreground p-8">
-          <CheckCircle2 className="h-12 w-12 mx-auto mb-4 text-[hsl(var(--status-success))] opacity-70" />
+          <Circle className="h-12 w-12 mx-auto mb-4 text-muted-foreground/30" />
           <p className="text-sm font-medium">No issues at this time</p>
           <p className="text-xs mt-1">
             All operations completed successfully
@@ -168,7 +165,7 @@ export function IssuesPanel({ events, onEventClick, acknowledgedIds = new Set(),
                 </Badge>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Issues not yet acknowledged in this session</p>
+                <p>Issues not yet seen in this session</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -200,13 +197,13 @@ export function IssuesPanel({ events, onEventClick, acknowledgedIds = new Set(),
               New
             </Button>
             <Button
-              variant={filterMode === "acknowledged" ? "secondary" : "ghost"}
+              variant={filterMode === "seen" ? "secondary" : "ghost"}
               size="sm"
               className="h-7 text-xs"
-              onClick={() => setFilterMode("acknowledged")}
+              onClick={() => setFilterMode("seen")}
             >
               <CheckCircle className="h-3 w-3 mr-1" />
-              Acknowledged
+              Seen
             </Button>
           </div>
           {newCount > 0 && (
@@ -219,7 +216,7 @@ export function IssuesPanel({ events, onEventClick, acknowledgedIds = new Set(),
                     className="h-7 text-xs text-muted-foreground"
                     onClick={onAcknowledgeAll}
                   >
-                    Acknowledge all
+                    Mark all as seen
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
@@ -282,7 +279,7 @@ export function IssuesPanel({ events, onEventClick, acknowledgedIds = new Set(),
                                     ? "text-muted-foreground" 
                                     : "text-muted-foreground/30 hover:text-muted-foreground hover:bg-muted"
                                 )}
-                                aria-label={isAcknowledged ? "Remove acknowledgment" : "Acknowledge locally"}
+                                aria-label={isAcknowledged ? "Mark as unseen" : "Mark as seen"}
                               >
                                 {isAcknowledged ? (
                                   <CheckCircle className="h-4 w-4" />
