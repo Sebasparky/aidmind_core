@@ -93,7 +93,7 @@ function getIssueDisplayName(eventType: string): string {
   return names[eventType] || eventType.replace(/_/g, " ");
 }
 
-export function IssuesPanel({ events, onEventClick, acknowledgedIds, onToggleAcknowledged, onAcknowledgeAll }: IssuesPanelProps) {
+export function IssuesPanel({ events, onEventClick, acknowledgedIds = new Set(), onToggleAcknowledged, onAcknowledgeAll }: IssuesPanelProps) {
   const [filterMode, setFilterMode] = useState<FilterMode>("new");
   
   const issueEvents = useMemo(() => getIssueEvents(events), [events]);
