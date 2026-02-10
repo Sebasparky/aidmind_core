@@ -7,6 +7,7 @@ import { DashboardProvider } from "@/contexts/DashboardContext";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { NavigationGuardProvider } from "@/contexts/NavigationGuardContext";
 import { DevRoleToggle } from "@/components/dev/DevRoleToggle";
+import { DevRlsCheck } from "@/components/dev/DevRlsCheck";
 import { RouteGuard } from "@/components/auth/RouteGuard";
 import { WelcomeModal, useOnboardingState } from "@/components/onboarding/WelcomeModal";
 import Login from "./pages/Login";
@@ -122,6 +123,7 @@ const App = () => (
             </DashboardProvider>
           </NavigationGuardProvider>
           <DevRoleToggle />
+          <DevRlsCheck />
         </BrowserRouter>
       </TooltipProvider>
     </AuthProvider>
