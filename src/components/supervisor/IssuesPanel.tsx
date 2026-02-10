@@ -1,10 +1,10 @@
 /**
- * Issues Panel - Combined errors and warnings view with local acknowledgment
+ * Issues Panel - Combined errors and warnings view with local "seen" tracking
  * 
  * Reframed around supervisor intent: "What needs attention?"
  * Badge shows unseen count only to reduce "issue count anxiety"
  * 
- * IMPORTANT: Acknowledgment is local to the browser session.
+ * IMPORTANT: Seen state is local to the browser session.
  * It does NOT change system state, persist, or imply audit action.
  */
 
@@ -220,7 +220,7 @@ export function IssuesPanel({ events, onEventClick, acknowledgedIds = new Set(),
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  <p className="max-w-[200px] text-xs">Acknowledgment is local to your session and does not change system state.</p>
+                  <p className="max-w-[200px] text-xs">Seen state is local to your session and does not change system state.</p>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -264,7 +264,7 @@ export function IssuesPanel({ events, onEventClick, acknowledgedIds = new Set(),
                           isAcknowledged ? "opacity-50 bg-muted/20" : "hover:bg-muted/30"
                         )}
                       >
-                        {/* Acknowledgment toggle */}
+                        {/* Seen toggle */}
                         <TooltipProvider>
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -290,7 +290,7 @@ export function IssuesPanel({ events, onEventClick, acknowledgedIds = new Set(),
                             </TooltipTrigger>
                             <TooltipContent side="right">
                               <p className="max-w-[200px] text-xs">
-                                Acknowledgment is local to your session and does not change system state.
+                                Seen state is local to your session and does not change system state.
                               </p>
                             </TooltipContent>
                           </Tooltip>
