@@ -94,7 +94,7 @@ export default function Supervisor() {
     setFilters({});
   };
 
-  // Local acknowledgment handlers (session-only, not persisted)
+  // Local seen-state handlers (session-only, not persisted)
   const handleToggleAcknowledged = useCallback((eventId: string) => {
     setAcknowledgedIds(prev => {
       const next = new Set(prev);
@@ -112,8 +112,8 @@ export default function Supervisor() {
     setAcknowledgedIds(new Set(issueIds));
   }, [errorEvents]);
 
-  // Unacknowledged count for badge
-  const unacknowledgedCount = useMemo(() => 
+  // Unseen count for badge
+  const unacknowledgedCount = useMemo(() =>
     errorEvents.filter(e => !acknowledgedIds.has(e.event_id)).length,
     [errorEvents, acknowledgedIds]
   );
