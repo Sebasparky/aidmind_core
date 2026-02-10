@@ -1,7 +1,7 @@
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { TaskList } from "@/components/dashboard/TaskList";
 import { NotesPanel } from "@/components/dashboard/NotesPanel";
-import { WorkRadarPanel } from "@/components/dashboard/WorkRadarPanel";
+import { DerivedSignalsPanel } from "@/components/dashboard/WorkRadarPanel";
 import { ActiveSessionsPanel } from "@/components/dashboard/ActiveSessionsPanel";
 import { SessionHistoryPanel } from "@/components/dashboard/SessionHistoryPanel";
 import { V1_DASHBOARD_REDESIGN } from "@/config/features";
@@ -10,7 +10,7 @@ import { V1_DASHBOARD_REDESIGN } from "@/config/features";
  * Dashboard Page (Signals Hub)
  * 
  * V1 Redesign: Three-panel layout focused on situational awareness.
- * - Work Radar: Derived documentation obligations with provenance
+ * - Derived Signals: Informational indicators from policy/session context
  * - Active Sessions: Access points to Guidance and Reviewer tools
  * - Session History: Completed/closed sessions (read-only)
  * 
@@ -23,9 +23,9 @@ const Index = () => {
     return (
       <DashboardLayout>
         <div className="grid grid-cols-3 gap-4 h-full min-h-0">
-          {/* Left Panel: Work Radar - derived documentation obligations */}
+          {/* Left Panel: Derived Signals - informational indicators */}
           <div className="min-h-0">
-            <WorkRadarPanel className="h-full" />
+            <DerivedSignalsPanel className="h-full" />
           </div>
           
           {/* Center Panel: Active Sessions - tool access points */}
