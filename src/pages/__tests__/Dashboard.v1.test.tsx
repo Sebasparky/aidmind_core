@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { BrowserRouter } from "react-router-dom";
-import { WorkRadarPanel } from "@/components/dashboard/WorkRadarPanel";
+import { DerivedSignalsPanel, WorkRadarPanel } from "@/components/dashboard/WorkRadarPanel";
 import { ActiveSessionsPanel } from "@/components/dashboard/ActiveSessionsPanel";
 import { SessionHistoryPanel } from "@/components/dashboard/SessionHistoryPanel";
 
@@ -41,44 +41,57 @@ describe("V1 Dashboard Components", () => {
     vi.clearAllMocks();
   });
 
-  describe("WorkRadarPanel", () => {
-    it("displays 'Work Radar' section title", () => {
-      renderWithRouter(<WorkRadarPanel />);
-      expect(screen.getByText("Work Radar")).toBeInTheDocument();
+  describe("DerivedSignalsPanel", () => {
+    it("displays 'Derived Signals' section title", () => {
+      renderWithRouter(<DerivedSignalsPanel />);
+      expect(screen.getByText("Derived Signals")).toBeInTheDocument();
     });
 
-    it("displays 'Documentation obligations requiring attention' subtitle", () => {
-      renderWithRouter(<WorkRadarPanel />);
+    it("displays correct subtitle about policy and session context", () => {
+      renderWithRouter(<DerivedSignalsPanel />);
       expect(
-        screen.getByText("Documentation obligations requiring attention")
+        screen.getByText("Signals derived from available policy and session context to support documentation readiness.")
       ).toBeInTheDocument();
     });
 
     it("does NOT use task-manager language", () => {
-      renderWithRouter(<WorkRadarPanel />);
+      renderWithRouter(<DerivedSignalsPanel />);
       expect(screen.queryByText(/my tasks/i)).not.toBeInTheDocument();
       expect(screen.queryByText(/add task/i)).not.toBeInTheDocument();
       expect(screen.queryByText(/to-do/i)).not.toBeInTheDocument();
     });
 
+    it("does NOT use prohibited language", () => {
+      renderWithRouter(<DerivedSignalsPanel />);
+      expect(screen.queryByText(/prototype/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/demo/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/compliance status/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/task list/i)).not.toBeInTheDocument();
+    });
+
     it("displays source badges with provenance information (placeholder data)", () => {
-      renderWithRouter(<WorkRadarPanel />);
+      renderWithRouter(<DerivedSignalsPanel />);
       expect(screen.getByText("Intake session #4821")).toBeInTheDocument();
       expect(screen.getByText("Policy threshold reached")).toBeInTheDocument();
       expect(screen.getByText("Timeline event confirmed")).toBeInTheDocument();
     });
 
     it("shows obligation text clearly", () => {
-      renderWithRouter(<WorkRadarPanel />);
+      renderWithRouter(<DerivedSignalsPanel />);
       expect(screen.getByText("Consent form still missing")).toBeInTheDocument();
       expect(screen.getByText("Supervisor sign-off required")).toBeInTheDocument();
       expect(screen.getByText("Follow-up documentation due")).toBeInTheDocument();
     });
 
     it("shows correct empty state when no items", () => {
-      renderWithRouter(<WorkRadarPanel items={[]} />);
-      expect(screen.getByText("No outstanding obligations")).toBeInTheDocument();
-      expect(screen.getByText("Documentation is up to date")).toBeInTheDocument();
+      renderWithRouter(<DerivedSignalsPanel items={[]} />);
+      expect(screen.getByText("No derived signals at this time.")).toBeInTheDocument();
+      expect(screen.getByText("Available policy context does not indicate outstanding documentation considerations.")).toBeInTheDocument();
+    });
+
+    it("provides info tooltip about non-authoritative nature", () => {
+      renderWithRouter(<DerivedSignalsPanel />);
+      expect(screen.getByLabelText("About derived signals")).toBeInTheDocument();
     });
   });
 
@@ -156,8 +169,8 @@ describe("V1 Dashboard Components", () => {
 });
 
 describe("V1 Dashboard Language Compliance", () => {
-  it("WorkRadarPanel does NOT use calendar language", () => {
-    renderWithRouter(<WorkRadarPanel />);
+  it("DerivedSignalsPanel does NOT use calendar language", () => {
+    renderWithRouter(<DerivedSignalsPanel />);
     expect(screen.queryByText(/calendar/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/schedule/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/appointment/i)).not.toBeInTheDocument();
