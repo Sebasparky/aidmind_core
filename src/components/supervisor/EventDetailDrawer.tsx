@@ -7,7 +7,7 @@
  * Includes coordination-specific context for Platform events.
  */
 
-import { Link } from "react-router-dom";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EyeEvent, EVENT_CATEGORY_MAP, EventTag, getEventCategory, getEventSeverity } from "@/lib/eye/types";
 import { isCoordinationEvent, getCoordinationContext } from "@/lib/platform/coordination-events";
 import {
@@ -155,12 +155,30 @@ function CoordinationContextCard({ event }: { event: EyeEvent }) {
         )}
         
         {context.platformLink && (
-          <Link to={context.platformLink}>
-            <Button variant="outline" size="sm" className="w-full mt-2 gap-2">
-              <ExternalLink className="h-3 w-3" />
-              View in Platform
-            </Button>
-          </Link>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                role="button"
+                aria-disabled="true"
+                tabIndex={0}
+                className="inline-flex w-full mt-2"
+              >
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full gap-2 opacity-50 cursor-not-allowed pointer-events-none"
+                  tabIndex={-1}
+                  disabled
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  View in Platform
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p className="text-xs">Platform integration coming later.</p>
+            </TooltipContent>
+          </Tooltip>
         )}
         
         <div className="flex items-start gap-2 p-2 rounded bg-muted/50 mt-2">
