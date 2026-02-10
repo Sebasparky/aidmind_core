@@ -58,7 +58,7 @@ export default function Supervisor() {
   const [selectedEvent, setSelectedEvent] = useState<EyeEvent | null>(null);
   const [activeTab, setActiveTab] = useState("daily-assurance");
   const [showFilters, setShowFilters] = useState(false);
-  const [reviewedIds, setReviewedIds] = useState<Set<string>>(new Set());
+  const [acknowledgedIds, setAcknowledgedIds] = useState<Set<string>>(new Set());
 
   // Apply filters
   const filteredEvents = useMemo(() => 
@@ -94,9 +94,9 @@ export default function Supervisor() {
     setFilters({});
   };
 
-  // Issues review handlers
-  const handleMarkReviewed = useCallback((eventId: string) => {
-    setReviewedIds(prev => {
+  // Local acknowledgment handlers (session-only, not persisted)
+  const handleToggleAcknowledged = useCallback((eventId: string) => {
+    setAcknowledgedIds(prev => {
       const next = new Set(prev);
       if (next.has(eventId)) {
         next.delete(eventId);
@@ -107,15 +107,15 @@ export default function Supervisor() {
     });
   }, []);
 
-  const handleMarkAllReviewed = useCallback(() => {
+  const handleAcknowledgeAll = useCallback(() => {
     const issueIds = errorEvents.map(e => e.event_id);
-    setReviewedIds(new Set(issueIds));
+    setAcknowledgedIds(new Set(issueIds));
   }, [errorEvents]);
 
-  // Unreviewed count for badge
-  const unreviewedCount = useMemo(() => 
-    errorEvents.filter(e => !reviewedIds.has(e.event_id)).length,
-    [errorEvents, reviewedIds]
+  // Unacknowledged count for badge
+  const unacknowledgedCount = useMemo(() => 
+    errorEvents.filter(e => !acknowledgedIds.has(e.event_id)).length,
+    [errorEvents, acknowledgedIds]
   );
 
   return (
@@ -178,9 +178,9 @@ export default function Supervisor() {
                   <TabsTrigger value="issues" className="gap-2">
                     <AlertTriangle className="h-4 w-4" />
                     System Issues
-                    {unreviewedCount > 0 && (
+                    {unacknowledgedCount > 0 && (
                       <Badge variant="destructive" className="ml-1 text-xs">
-                        {unreviewedCount}
+                        {unacknowledgedCount}
                       </Badge>
                     )}
                   </TabsTrigger>
@@ -234,7 +234,7 @@ export default function Supervisor() {
             <TabsContent value="daily-assurance" className="flex-1 mt-0">
               <DailyAssurancePanel
                 allEvents={allEvents}
-                issueCount={unreviewedCount}
+                issueCount={unacknowledgedCount}
                 onNavigateToTab={setActiveTab}
               />
             </TabsContent>
@@ -251,9 +251,9 @@ export default function Supervisor() {
               <IssuesPanel
                 events={filteredEvents}
                 onEventClick={setSelectedEvent}
-                reviewedIds={reviewedIds}
-                onMarkReviewed={handleMarkReviewed}
-                onMarkAllReviewed={handleMarkAllReviewed}
+                acknowledgedIds={acknowledgedIds}
+                onToggleAcknowledged={handleToggleAcknowledged}
+                onAcknowledgeAll={handleAcknowledgeAll}
               />
             </TabsContent>
 
