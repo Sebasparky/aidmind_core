@@ -2,11 +2,15 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { DashboardProvider } from "@/contexts/DashboardContext";
-import { AuthProvider } from "@/contexts/AuthContext";
+import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { NavigationGuardProvider } from "@/contexts/NavigationGuardContext";
 import { DevRoleToggle } from "@/components/dev/DevRoleToggle";
+import { RouteGuard } from "@/components/auth/RouteGuard";
+import { WelcomeModal, useOnboardingState } from "@/components/onboarding/WelcomeModal";
+import Login from "./pages/Login";
+import AccessPending from "./pages/AccessPending";
 import Index from "./pages/Index";
 import Calendar from "./pages/Calendar";
 import Guidance from "./pages/Guidance";
@@ -15,19 +19,42 @@ import Supervisor from "./pages/Supervisor";
 import Auditor from "./pages/Auditor";
 import Platform from "./pages/Platform";
 import NotFound from "./pages/NotFound";
+import { Loader2 } from "lucide-react";
 
 const queryClient = new QueryClient();
 
-/**
- * V1 Routing Structure:
- * - /dashboard: Main dashboard (Work Radar, Active Sessions, Session History)
- * - /guidance/:sessionId: Standalone Guidance tool
- * - /reviewer/:sessionId: Standalone Reviewer tool
- * - /platform/*: Human Services Coordination Layer (The Platform)
- * - /supervisor: The Eye - Supervisor event viewer
- * 
- * REMOVED: /session route (sessions are containers, not pages)
- */
+/** Root redirect based on role */
+function RoleRedirect() {
+  const { loading, isAuthenticated, status, role } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (status !== "active" || !role) return <Navigate to="/access-pending" replace />;
+
+  switch (role) {
+    case "supervisor": return <Navigate to="/supervisor" replace />;
+    case "auditor": return <Navigate to="/auditor" replace />;
+    default: return <Navigate to="/dashboard" replace />;
+  }
+}
+
+/** Onboarding overlay — renders welcome modal when appropriate */
+function OnboardingLayer() {
+  const { isAuthenticated, status, role } = useAuth();
+  const { showWelcome, dismiss } = useOnboardingState();
+
+  if (!isAuthenticated || status !== "active" || !role) return null;
+
+  return <WelcomeModal open={showWelcome} onDismiss={dismiss} />;
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <AuthProvider>
@@ -38,20 +65,60 @@ const App = () => (
           <NavigationGuardProvider>
             <DashboardProvider>
               <Routes>
-                <Route path="/" element={<Index />} />
-                <Route path="/dashboard" element={<Index />} />
-                <Route path="/calendar" element={<Calendar />} />
-                {/* Tool-specific routes (independent, non-sequential) */}
-                <Route path="/guidance/:sessionId" element={<Guidance />} />
-                <Route path="/reviewer/:sessionId" element={<Reviewer />} />
-                {/* Platform routes (Human Services Coordination Layer) */}
-                <Route path="/platform/*" element={<Platform />} />
-                {/* Admin routes */}
-                <Route path="/supervisor" element={<Supervisor />} />
-                <Route path="/auditor" element={<Auditor />} />
-                {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+                {/* Public routes */}
+                <Route path="/login" element={<Login />} />
+                <Route path="/access-pending" element={<AccessPending />} />
+
+                {/* Root redirect */}
+                <Route path="/" element={<RoleRedirect />} />
+
+                {/* Caseworker routes */}
+                <Route path="/dashboard" element={
+                  <RouteGuard allowedRoles={["caseworker"]}>
+                    <Index />
+                  </RouteGuard>
+                } />
+                <Route path="/calendar" element={
+                  <RouteGuard allowedRoles={["caseworker"]}>
+                    <Calendar />
+                  </RouteGuard>
+                } />
+                <Route path="/guidance/:sessionId" element={
+                  <RouteGuard allowedRoles={["caseworker"]}>
+                    <Guidance />
+                  </RouteGuard>
+                } />
+                <Route path="/reviewer/:sessionId" element={
+                  <RouteGuard allowedRoles={["caseworker"]}>
+                    <Reviewer />
+                  </RouteGuard>
+                } />
+                <Route path="/platform/*" element={
+                  <RouteGuard allowedRoles={["caseworker"]}>
+                    <Platform />
+                  </RouteGuard>
+                } />
+
+                {/* Supervisor route */}
+                <Route path="/supervisor" element={
+                  <RouteGuard allowedRoles={["supervisor"]}>
+                    <Supervisor />
+                  </RouteGuard>
+                } />
+
+                {/* Auditor route */}
+                <Route path="/auditor" element={
+                  <RouteGuard allowedRoles={["auditor"]}>
+                    <Auditor />
+                  </RouteGuard>
+                } />
+
+                {/* Catch-all */}
                 <Route path="*" element={<NotFound />} />
               </Routes>
+
+              {/* Onboarding overlay */}
+              <OnboardingLayer />
             </DashboardProvider>
           </NavigationGuardProvider>
           <DevRoleToggle />

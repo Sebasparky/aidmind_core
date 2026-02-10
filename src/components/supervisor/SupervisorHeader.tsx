@@ -1,31 +1,32 @@
 /**
  * Supervisor Header Component
+ * 
+ * Updated for real auth — no more mock user prop.
  */
 
 import { GuardedLink } from "@/components/navigation/GuardedLink";
-import { MockUser, ROLE_DISPLAY_NAMES, ROLE_COLORS } from "@/lib/rbac/types";
+import { useAuth } from "@/contexts/AuthContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { 
   Eye, 
   ChevronLeft, 
   Shield,
-  User,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { UserSwitcher } from "./UserSwitcher";
 import { OrphanCleanupButton } from "./OrphanCleanupButton";
 
-interface SupervisorHeaderProps {
-  user: MockUser | null;
-}
+export function SupervisorHeader() {
+  const { profile } = useAuth();
+  
+  const initials = profile?.display_name
+    ? profile.display_name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)
+    : "?";
 
-export function SupervisorHeader({ user }: SupervisorHeaderProps) {
   return (
     <header className="h-14 border-b border-border bg-card px-4 flex items-center justify-between flex-shrink-0">
       <div className="flex items-center gap-4">
-        {/* Back to Dashboard */}
         <GuardedLink to="/dashboard">
           <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground">
             <ChevronLeft className="h-4 w-4" />
@@ -35,7 +36,6 @@ export function SupervisorHeader({ user }: SupervisorHeaderProps) {
 
         <Separator orientation="vertical" className="h-6" />
 
-        {/* Eye Logo & Title */}
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-[hsl(var(--status-info)/0.12)] flex items-center justify-center">
             <Eye className="h-5 w-5 text-[hsl(var(--status-info))]" />
@@ -46,17 +46,14 @@ export function SupervisorHeader({ user }: SupervisorHeaderProps) {
           </div>
         </div>
 
-        {/* Environment Badge */}
-        <Badge variant="outline" className="text-xs font-normal">
-          DEV
-        </Badge>
+        {import.meta.env.DEV && (
+          <Badge variant="outline" className="text-xs font-normal">DEV</Badge>
+        )}
       </div>
 
       <div className="flex items-center gap-4">
-        {/* DEV Cleanup Button */}
         <OrphanCleanupButton />
         
-        {/* No PHI Indicator */}
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Shield className="h-4 w-4 text-[hsl(var(--status-success))]" />
           <span>No PHI Zone</span>
@@ -64,8 +61,14 @@ export function SupervisorHeader({ user }: SupervisorHeaderProps) {
 
         <Separator orientation="vertical" className="h-6" />
 
-        {/* User Info & Switcher */}
-        <UserSwitcher currentUser={user} />
+        <div className="flex items-center gap-2">
+          <Avatar className="h-7 w-7">
+            <AvatarFallback className="bg-primary text-primary-foreground text-xs font-medium">
+              {initials}
+            </AvatarFallback>
+          </Avatar>
+          <span className="text-sm font-medium text-foreground">{profile?.display_name}</span>
+        </div>
       </div>
     </header>
   );

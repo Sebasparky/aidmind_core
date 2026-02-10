@@ -1,15 +1,10 @@
 /**
  * Supervisor UI - The Eye Event Viewer
  * 
- * A trust, audit, and safety surface for supervisors to view
- * Eye events without any PHI exposure.
- * 
- * Now using REAL Supabase data instead of mock events.
+ * Updated for real auth — route guard handles access control.
  */
 
 import { useState, useMemo, useCallback } from "react";
-import { Navigate } from "react-router-dom";
-import { useAuth } from "@/contexts/AuthContext";
 import { useEyeEvents, filterEvents, getPurgeProofEvents, getErrorEvents, EventFilters } from "@/hooks/useEyeEvents";
 import { EyeEvent } from "@/lib/eye/types";
 import { SupervisorHeader } from "@/components/supervisor/SupervisorHeader";
@@ -22,6 +17,7 @@ import { PurgeProofPanel } from "@/components/supervisor/PurgeProofPanel";
 import { AIAuthorizationPanel } from "@/components/supervisor/AIAuthorizationPanel";
 import { ComplianceExportPanel } from "@/components/supervisor/ComplianceExportPanel";
 import { SecurityDashboardPanel } from "@/components/supervisor/SecurityDashboardPanel";
+import { ContextualTooltips } from "@/components/onboarding/ContextualTooltips";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,18 +35,11 @@ import {
 import { cn } from "@/lib/utils";
 
 export default function Supervisor() {
-  const { currentUser, canAccessSupervisor } = useAuth();
-  
-  // Redirect if user doesn't have supervisor access
-  if (!canAccessSupervisor) {
-    return <Navigate to="/dashboard" replace />;
-  }
-
   // Fetch REAL eye events from Supabase
   const { events: allEvents, loading, error, refresh, lastRefresh } = useEyeEvents({
     timeRangeHours: 24,
     autoRefresh: true,
-    refreshIntervalMs: 30000, // 30 seconds
+    refreshIntervalMs: 30000,
   });
   
   // Filter state
@@ -60,24 +49,10 @@ export default function Supervisor() {
   const [showFilters, setShowFilters] = useState(false);
   const [acknowledgedIds, setAcknowledgedIds] = useState<Set<string>>(new Set());
 
-  // Apply filters
-  const filteredEvents = useMemo(() => 
-    filterEvents(allEvents, filters),
-    [allEvents, filters]
-  );
+  const filteredEvents = useMemo(() => filterEvents(allEvents, filters), [allEvents, filters]);
+  const purgeProofEvents = useMemo(() => getPurgeProofEvents(allEvents), [allEvents]);
+  const errorEvents = useMemo(() => getErrorEvents(allEvents), [allEvents]);
 
-  // Get specialized views
-  const purgeProofEvents = useMemo(() => 
-    getPurgeProofEvents(allEvents),
-    [allEvents]
-  );
-  
-  const errorEvents = useMemo(() => 
-    getErrorEvents(allEvents),
-    [allEvents]
-  );
-
-  // Check if any filters are active
   const hasActiveFilters = 
     (filters.categories?.length ?? 0) > 0 ||
     (filters.severities?.length ?? 0) > 0 ||
@@ -85,24 +60,17 @@ export default function Supervisor() {
     filters.caseId ||
     filters.operatorId;
 
-  // Handle filter changes
   const handleFilterChange = (newFilters: Partial<EventFilters>) => {
     setFilters((prev) => ({ ...prev, ...newFilters }));
   };
 
-  const clearFilters = () => {
-    setFilters({});
-  };
+  const clearFilters = () => setFilters({});
 
-  // Local seen-state handlers (session-only, not persisted)
   const handleToggleAcknowledged = useCallback((eventId: string) => {
     setAcknowledgedIds(prev => {
       const next = new Set(prev);
-      if (next.has(eventId)) {
-        next.delete(eventId);
-      } else {
-        next.add(eventId);
-      }
+      if (next.has(eventId)) next.delete(eventId);
+      else next.add(eventId);
       return next;
     });
   }, []);
@@ -112,7 +80,6 @@ export default function Supervisor() {
     setAcknowledgedIds(new Set(issueIds));
   }, [errorEvents]);
 
-  // Unseen count for badge
   const unacknowledgedCount = useMemo(() =>
     errorEvents.filter(e => !acknowledgedIds.has(e.event_id)).length,
     [errorEvents, acknowledgedIds]
@@ -120,12 +87,9 @@ export default function Supervisor() {
 
   return (
     <div className="min-h-screen bg-canvas flex flex-col">
-      {/* Header */}
-      <SupervisorHeader user={currentUser} />
+      <SupervisorHeader />
 
-      {/* Main Content */}
       <div className="flex-1 flex">
-        {/* Collapsible Filters Sidebar */}
         <aside 
           className={cn(
             "border-r border-border bg-card flex-shrink-0 transition-all duration-200 overflow-hidden",
@@ -141,11 +105,12 @@ export default function Supervisor() {
           )}
         </aside>
 
-        {/* Main Panel */}
         <main className="flex-1 p-6 overflow-auto">
+          {/* Contextual tooltips for supervisor */}
+          <ContextualTooltips role="supervisor" />
+          
           <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
             <div className="flex items-center justify-between mb-4">
-              {/* Filters toggle + Tabs */}
               <div className="flex items-center gap-3">
                 <Button
                   variant={showFilters ? "secondary" : "outline"}
@@ -153,78 +118,54 @@ export default function Supervisor() {
                   onClick={() => setShowFilters(!showFilters)}
                   className="gap-2"
                 >
-                  {showFilters ? (
-                    <X className="h-4 w-4" />
-                  ) : (
-                    <Filter className="h-4 w-4" />
-                  )}
+                  {showFilters ? <X className="h-4 w-4" /> : <Filter className="h-4 w-4" />}
                   Filters
                   {hasActiveFilters && (
-                    <Badge variant="secondary" className="ml-1 text-xs bg-primary text-primary-foreground">
-                      Active
-                    </Badge>
+                    <Badge variant="secondary" className="ml-1 text-xs bg-primary text-primary-foreground">Active</Badge>
                   )}
                 </Button>
 
-              <TabsList className="bg-muted/50">
+                <TabsList className="bg-muted/50">
                   <TabsTrigger value="daily-assurance" className="gap-2">
-                    <Gauge className="h-4 w-4" />
-                    Daily Assurance
+                    <Gauge className="h-4 w-4" />Daily Assurance
                   </TabsTrigger>
                   <TabsTrigger value="sessions" className="gap-2">
-                    <LayoutList className="h-4 w-4" />
-                    Sessions
+                    <LayoutList className="h-4 w-4" />Sessions
                   </TabsTrigger>
                   <TabsTrigger value="issues" className="gap-2">
-                    <AlertTriangle className="h-4 w-4" />
-                    System Issues
+                    <AlertTriangle className="h-4 w-4" />System Issues
                     {unacknowledgedCount > 0 && (
-                      <Badge variant="destructive" className="ml-1 text-xs">
-                        {unacknowledgedCount}
-                      </Badge>
+                      <Badge variant="destructive" className="ml-1 text-xs">{unacknowledgedCount}</Badge>
                     )}
                   </TabsTrigger>
-                <TabsTrigger value="deletion-proof" className="gap-2">
-                    <ShieldCheck className="h-4 w-4" />
-                    Data Deletion Proof
+                  <TabsTrigger value="deletion-proof" className="gap-2">
+                    <ShieldCheck className="h-4 w-4" />Data Deletion Proof
                   </TabsTrigger>
                   <TabsTrigger value="governance" className="gap-2">
-                    <Settings2 className="h-4 w-4" />
-                    Governance
+                    <Settings2 className="h-4 w-4" />Governance
                   </TabsTrigger>
                 </TabsList>
               </div>
 
-              {/* Status indicators */}
               <div className="flex items-center gap-3">
                 {loading && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Loading...
+                    <Loader2 className="h-4 w-4 animate-spin" />Loading...
                   </div>
                 )}
-                
                 {error && (
                   <div className="flex items-center gap-2 text-sm text-destructive">
-                    <AlertTriangle className="h-4 w-4" />
-                    {error}
+                    <AlertTriangle className="h-4 w-4" />{error}
                   </div>
                 )}
-                
                 {!loading && !error && (
                   <div className="flex items-center gap-3 text-sm text-muted-foreground">
                     <span>
                       {allEvents.length} events
                       {hasActiveFilters && ` (${filteredEvents.length} filtered)`}
                     </span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={refresh}
-                      className="gap-1 h-8"
-                    >
-                      <RefreshCw className="h-3 w-3" />
-                      Refresh
+                    <Button variant="ghost" size="sm" onClick={refresh} className="gap-1 h-8">
+                      <RefreshCw className="h-3 w-3" />Refresh
                     </Button>
                   </div>
                 )}
@@ -232,39 +173,17 @@ export default function Supervisor() {
             </div>
 
             <TabsContent value="daily-assurance" className="flex-1 mt-0">
-              <DailyAssurancePanel
-                allEvents={allEvents}
-                issueCount={unacknowledgedCount}
-                onNavigateToTab={setActiveTab}
-              />
+              <DailyAssurancePanel allEvents={allEvents} issueCount={unacknowledgedCount} onNavigateToTab={setActiveTab} />
             </TabsContent>
-
             <TabsContent value="sessions" className="flex-1 mt-0">
-              <SessionsPanel
-                events={filteredEvents}
-                onEventClick={setSelectedEvent}
-                selectedEventId={selectedEvent?.event_id}
-              />
+              <SessionsPanel events={filteredEvents} onEventClick={setSelectedEvent} selectedEventId={selectedEvent?.event_id} />
             </TabsContent>
-
             <TabsContent value="issues" className="flex-1 mt-0">
-              <IssuesPanel
-                events={filteredEvents}
-                onEventClick={setSelectedEvent}
-                acknowledgedIds={acknowledgedIds}
-                onToggleAcknowledged={handleToggleAcknowledged}
-                onAcknowledgeAll={handleAcknowledgeAll}
-              />
+              <IssuesPanel events={filteredEvents} onEventClick={setSelectedEvent} acknowledgedIds={acknowledgedIds} onToggleAcknowledged={handleToggleAcknowledged} onAcknowledgeAll={handleAcknowledgeAll} />
             </TabsContent>
-
             <TabsContent value="deletion-proof" className="flex-1 mt-0">
-              <PurgeProofPanel
-                events={purgeProofEvents}
-                allEvents={allEvents}
-                onEventClick={setSelectedEvent}
-              />
+              <PurgeProofPanel events={purgeProofEvents} allEvents={allEvents} onEventClick={setSelectedEvent} />
             </TabsContent>
-
             <TabsContent value="governance" className="flex-1 mt-0">
               <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
                 <AIAuthorizationPanel />
@@ -276,11 +195,7 @@ export default function Supervisor() {
         </main>
       </div>
 
-      {/* Event Detail Drawer */}
-      <EventDetailDrawer
-        event={selectedEvent}
-        onClose={() => setSelectedEvent(null)}
-      />
+      <EventDetailDrawer event={selectedEvent} onClose={() => setSelectedEvent(null)} />
     </div>
   );
 }

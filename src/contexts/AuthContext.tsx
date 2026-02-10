@@ -1,52 +1,136 @@
 /**
- * Mock Auth Context for RBAC
- * 
- * This provides a simple mock authentication context for development.
- * In production, this would integrate with Supabase Auth.
+ * AuthContext — Real Supabase Auth + Profile Resolution
+ *
+ * Handles:
+ * - Supabase session lifecycle (onAuthStateChange → getSession)
+ * - Profile + role resolution via get_my_profile() RPC
+ * - Dev-mode role override (no backend writes)
+ * - Loading state gating (nothing renders before profile resolves)
  */
 
-import React, { createContext, useContext, useState, useCallback } from "react";
-import { MockUser, MOCK_USERS, UserRole, canAccessSupervisorUI } from "@/lib/rbac/types";
+import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { Session, User } from "@supabase/supabase-js";
+import { supabase } from "@/integrations/supabase/client";
+
+export type AppRole = "caseworker" | "supervisor" | "auditor";
+export type ProfileStatus = "active" | "pending" | "disabled";
+
+export interface UserProfile {
+  user_id: string;
+  display_name: string;
+  status: ProfileStatus;
+  role: AppRole | null;
+}
 
 interface AuthContextType {
-  currentUser: MockUser | null;
+  /** Supabase user object (null if not authenticated) */
+  user: User | null;
+  /** Resolved profile from get_my_profile RPC */
+  profile: UserProfile | null;
+  /** Effective role (may be overridden in dev mode) */
+  role: AppRole | null;
+  /** Profile status */
+  status: ProfileStatus | null;
+  /** True while initial auth/profile check is in progress */
+  loading: boolean;
+  /** Whether a real Supabase session exists */
   isAuthenticated: boolean;
-  switchUser: (userId: string) => void;
-  logout: () => void;
-  canAccessSupervisor: boolean;
+  /** Sign out and clear state */
+  signOut: () => Promise<void>;
+  /** Dev-only: override displayed role without touching backend */
+  devRoleOverride: AppRole | null;
+  setDevRoleOverride: (role: AppRole | null) => void;
+  /** Re-fetch profile from backend */
+  refreshProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  // Default to caseworker — no localStorage persistence
-  const [currentUser, setCurrentUser] = useState<MockUser | null>(
-    () => MOCK_USERS.caseworker_1
-  );
+  const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [devRoleOverride, setDevRoleOverride] = useState<AppRole | null>(null);
 
-  const switchUser = useCallback((userId: string) => {
-    const user = Object.values(MOCK_USERS).find((u) => u.id === userId);
-    if (user) {
-      setCurrentUser(user);
+  const fetchProfile = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.rpc("get_my_profile");
+      if (error) {
+        console.error("[AuthContext] get_my_profile error:", error.message);
+        setProfile(null);
+        return;
+      }
+      if (data) {
+        // RPC returns JSON — parse if string
+        const parsed = typeof data === "string" ? JSON.parse(data) : data;
+        setProfile({
+          user_id: parsed.user_id,
+          display_name: parsed.display_name ?? "",
+          status: parsed.status ?? "pending",
+          role: parsed.role ?? null,
+        });
+      } else {
+        setProfile(null);
+      }
+    } catch (err) {
+      console.error("[AuthContext] Profile fetch failed:", err);
+      setProfile(null);
     }
   }, []);
 
-  const logout = useCallback(() => {
-    setCurrentUser(null);
+  useEffect(() => {
+    // 1. Set up auth state listener FIRST
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (session?.user) {
+          setUser(session.user);
+          // Defer profile fetch to avoid Supabase client deadlock
+          setTimeout(() => fetchProfile().finally(() => setLoading(false)), 0);
+        } else {
+          setUser(null);
+          setProfile(null);
+          setLoading(false);
+        }
+      }
+    );
+
+    // 2. Then check existing session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        setUser(session.user);
+        fetchProfile().finally(() => setLoading(false));
+      } else {
+        setLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [fetchProfile]);
+
+  const signOut = useCallback(async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    setProfile(null);
+    setDevRoleOverride(null);
   }, []);
 
-  const canAccessSupervisor = currentUser 
-    ? canAccessSupervisorUI(currentUser.role)
-    : false;
+  const effectiveRole = import.meta.env.DEV && devRoleOverride
+    ? devRoleOverride
+    : profile?.role ?? null;
 
   return (
     <AuthContext.Provider
       value={{
-        currentUser,
-        isAuthenticated: currentUser !== null,
-        switchUser,
-        logout,
-        canAccessSupervisor,
+        user,
+        profile,
+        role: effectiveRole,
+        status: profile?.status ?? null,
+        loading,
+        isAuthenticated: user !== null,
+        signOut,
+        devRoleOverride,
+        setDevRoleOverride,
+        refreshProfile: fetchProfile,
       }}
     >
       {children}
@@ -62,18 +146,8 @@ export function useAuth() {
   return context;
 }
 
-// Hook to check current user's role
-export function useRole(): UserRole | null {
-  const { currentUser } = useAuth();
-  return currentUser?.role ?? null;
-}
-
-// Hook to check if current user can access a resource
-export function useCanAccess(action: string, resource: string): boolean {
-  const { currentUser } = useAuth();
-  if (!currentUser) return false;
-  
-  // Import hasPermission dynamically to avoid circular deps
-  const { hasPermission } = require("@/lib/rbac/types");
-  return hasPermission(currentUser.role, action, resource);
+/** Convenience: get effective role */
+export function useRole(): AppRole | null {
+  const { role } = useAuth();
+  return role;
 }
