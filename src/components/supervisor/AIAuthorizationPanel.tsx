@@ -15,17 +15,17 @@ import { ShieldCheck, ShieldAlert, ShieldOff, Loader2, Info } from "lucide-react
 import { format } from "date-fns";
 
 export function AIAuthorizationPanel() {
-  const { currentUser } = useAuth();
+  const { user } = useAuth();
   const { status, approval, loading, error, approve, revoke } = useAIAuthorization();
 
   const handleApprove = async () => {
-    if (!currentUser) return;
-    await approve(currentUser.id, "default_policy");
+    if (!user) return;
+    await approve(user.id, "default_policy");
   };
 
   const handleRevoke = async () => {
-    if (!currentUser) return;
-    await revoke(currentUser.id);
+    if (!user) return;
+    await revoke(user.id);
   };
 
   return (

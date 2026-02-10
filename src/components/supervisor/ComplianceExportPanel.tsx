@@ -52,26 +52,26 @@ function getTimeRange(range: TimeRange): { start: Date; end: Date; label: string
 }
 
 export function ComplianceExportPanel() {
-  const { currentUser } = useAuth();
+  const { user, role } = useAuth();
   const { generating, error, lastExport, generateExport, downloadExport } = useComplianceExport();
   const [selectedRange, setSelectedRange] = useState<TimeRange>("last30d");
 
   const handleGenerate = async () => {
-    if (!currentUser) return;
+    if (!user || !role) return;
     const { start, end } = getTimeRange(selectedRange);
     await generateExport(
-      currentUser.id,
-      currentUser.role as "supervisor" | "auditor",
+      user.id,
+      role as "supervisor" | "auditor",
       start,
       end
     );
   };
 
   const handleDownload = async () => {
-    if (!currentUser || !lastExport) return;
+    if (!user || !lastExport) return;
     const { start, end } = getTimeRange(selectedRange);
     await downloadExport(
-      currentUser.id,
+      user.id,
       lastExport.id,
       lastExport.export_hash,
       start,

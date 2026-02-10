@@ -2,29 +2,21 @@
  * Auditor Mode UI
  * 
  * Read-only, time-bounded access for external auditors.
- * Shows ONLY:
- * - Eye event timelines
- * - Deletion proof (purge + scan events)
- * - Compliance posture
- * 
- * Does NOT show:
- * - Caseworker UI
- * - Drafts, notes, transcripts
- * - Any PHI-adjacent content
+ * Updated for real auth — route guard handles access control.
  */
 
 import { useMemo } from "react";
-import { Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useEyeEvents, getPurgeProofEvents } from "@/hooks/useEyeEvents";
 import { useAIAuthorization } from "@/hooks/useAIAuthorization";
 import { computeComplianceStatus } from "@/lib/eye/verdict";
 import { EventFeed } from "@/components/supervisor/EventFeed";
 import { PurgeProofPanel } from "@/components/supervisor/PurgeProofPanel";
-import { UserSwitcher } from "@/components/supervisor/UserSwitcher";
+import { ContextualTooltips } from "@/components/onboarding/ContextualTooltips";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { 
   Eye, 
   ShieldCheck, 
@@ -39,27 +31,21 @@ import {
 import { format } from "date-fns";
 
 export default function Auditor() {
-  const { currentUser } = useAuth();
-  
-  // Restrict to auditor role only
-  if (!currentUser || currentUser.role !== "auditor") {
-    return <Navigate to="/dashboard" replace />;
-  }
+  const { profile } = useAuth();
 
   const { events: allEvents, loading, error, lastRefresh } = useEyeEvents({
-    timeRangeHours: 168, // 7 days for auditors
+    timeRangeHours: 168,
     autoRefresh: true,
-    refreshIntervalMs: 60000, // 1 minute
+    refreshIntervalMs: 60000,
   });
 
   const { status: aiAuthStatus, loading: aiAuthLoading } = useAIAuthorization();
-  
   const purgeProofEvents = useMemo(() => getPurgeProofEvents(allEvents), [allEvents]);
-  
-  const complianceStatus = useMemo(
-    () => computeComplianceStatus(allEvents),
-    [allEvents]
-  );
+  const complianceStatus = useMemo(() => computeComplianceStatus(allEvents), [allEvents]);
+
+  const initials = profile?.display_name
+    ? profile.display_name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)
+    : "?";
 
   return (
     <div className="min-h-screen bg-canvas flex flex-col">
@@ -71,21 +57,24 @@ export default function Auditor() {
             <span className="font-semibold text-[hsl(var(--status-warning-muted-foreground))]">
               AUDITOR MODE
             </span>
-            <Badge variant="outline" className="text-xs">
-              Read-Only Access
-            </Badge>
+            <Badge variant="outline" className="text-xs">Read-Only Access</Badge>
           </div>
           <div className="flex items-center gap-3 text-sm text-[hsl(var(--status-warning-muted-foreground))]">
-            <span>{currentUser.name}</span>
-            <span>•</span>
-            <span>{currentUser.email}</span>
-            <UserSwitcher currentUser={currentUser} />
+            <Avatar className="h-6 w-6">
+              <AvatarFallback className="bg-primary text-primary-foreground text-xs">
+                {initials}
+              </AvatarFallback>
+            </Avatar>
+            <span>{profile?.display_name}</span>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
       <main className="flex-1 container py-6">
+        {/* Contextual tooltips */}
+        <ContextualTooltips role="auditor" />
+
         <div className="mb-6">
           <h1 className="text-2xl font-bold mb-2">Compliance Audit View</h1>
           <p className="text-muted-foreground">
@@ -101,19 +90,12 @@ export default function Auditor() {
 
         {/* Compliance Status Cards */}
         <div className="grid gap-4 md:grid-cols-3 mb-6">
-          {/* AI Authorization Status */}
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
-                {aiAuthStatus === "approved" && (
-                  <ShieldCheck className="h-4 w-4 text-[hsl(var(--status-success))]" />
-                )}
-                {aiAuthStatus === "missing" && (
-                  <ShieldOff className="h-4 w-4 text-muted-foreground" />
-                )}
-                {aiAuthStatus === "revoked" && (
-                  <ShieldAlert className="h-4 w-4 text-destructive" />
-                )}
+                {aiAuthStatus === "approved" && <ShieldCheck className="h-4 w-4 text-[hsl(var(--status-success))]" />}
+                {aiAuthStatus === "missing" && <ShieldOff className="h-4 w-4 text-muted-foreground" />}
+                {aiAuthStatus === "revoked" && <ShieldAlert className="h-4 w-4 text-destructive" />}
                 AI Authorization
               </CardTitle>
             </CardHeader>
@@ -139,12 +121,10 @@ export default function Auditor() {
             </CardContent>
           </Card>
 
-          {/* LLM Compliance Status */}
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
-                <FileText className="h-4 w-4" />
-                LLM Compliance
+                <FileText className="h-4 w-4" />LLM Compliance
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -165,12 +145,10 @@ export default function Auditor() {
             </CardContent>
           </Card>
 
-          {/* Deletion Proof Status */}
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
-                <ShieldCheck className="h-4 w-4" />
-                Deletion Proof
+                <ShieldCheck className="h-4 w-4" />Deletion Proof
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -191,30 +169,24 @@ export default function Auditor() {
           </Card>
         </div>
 
-        {/* Loading/Error States */}
         {loading && (
           <div className="flex items-center gap-2 text-muted-foreground mb-4">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading events...
+            <Loader2 className="h-4 w-4 animate-spin" />Loading events...
           </div>
         )}
         {error && (
           <div className="text-sm text-destructive mb-4 flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4" />
-            {error}
+            <AlertTriangle className="h-4 w-4" />{error}
           </div>
         )}
 
-        {/* Tabs for Event Views */}
         <Tabs defaultValue="timeline" className="space-y-4">
           <TabsList>
             <TabsTrigger value="timeline" className="gap-2">
-              <Clock className="h-4 w-4" />
-              Event Timeline
+              <Clock className="h-4 w-4" />Event Timeline
             </TabsTrigger>
             <TabsTrigger value="deletion-proof" className="gap-2">
-              <ShieldCheck className="h-4 w-4" />
-              Deletion Proof
+              <ShieldCheck className="h-4 w-4" />Deletion Proof
             </TabsTrigger>
           </TabsList>
 
@@ -222,29 +194,19 @@ export default function Auditor() {
             <Card>
               <CardHeader>
                 <CardTitle>Eye Event Timeline</CardTitle>
-                <CardDescription>
-                  Immutable audit trail of all system events (read-only)
-                </CardDescription>
+                <CardDescription>Immutable audit trail of all system events (read-only)</CardDescription>
               </CardHeader>
               <CardContent>
-              <EventFeed
-                  events={allEvents}
-                  onEventClick={() => {}} // No-op in read-only auditor mode
-                />
+                <EventFeed events={allEvents} onEventClick={() => {}} />
               </CardContent>
             </Card>
           </TabsContent>
 
           <TabsContent value="deletion-proof">
-            <PurgeProofPanel
-              events={purgeProofEvents}
-              allEvents={allEvents}
-              onEventClick={() => {}} // No-op in auditor mode
-            />
+            <PurgeProofPanel events={purgeProofEvents} allEvents={allEvents} onEventClick={() => {}} />
           </TabsContent>
         </Tabs>
 
-        {/* Auditor Notice */}
         <div className="mt-8 p-4 rounded-lg bg-muted/50 text-sm text-muted-foreground">
           <p className="font-medium mb-1">Auditor Access Notice</p>
           <ul className="list-disc list-inside space-y-1 text-xs">

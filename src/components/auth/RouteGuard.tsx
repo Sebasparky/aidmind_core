@@ -1,0 +1,50 @@
+/**
+ * RouteGuard — Enforces auth, status, and role-based access.
+ *
+ * Rules:
+ * - Not authenticated → /login
+ * - Status !== active → /access-pending
+ * - Role mismatch → redirect to role's home
+ */
+
+import { Navigate } from "react-router-dom";
+import { useAuth, type AppRole } from "@/contexts/AuthContext";
+import { Loader2 } from "lucide-react";
+
+const ROLE_HOME: Record<AppRole, string> = {
+  caseworker: "/dashboard",
+  supervisor: "/supervisor",
+  auditor: "/auditor",
+};
+
+interface RouteGuardProps {
+  /** Which roles are allowed on this route */
+  allowedRoles: AppRole[];
+  children: React.ReactNode;
+}
+
+export function RouteGuard({ allowedRoles, children }: RouteGuardProps) {
+  const { isAuthenticated, loading, status, role } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (status !== "active" || !role) {
+    return <Navigate to="/access-pending" replace />;
+  }
+
+  if (!allowedRoles.includes(role)) {
+    return <Navigate to={ROLE_HOME[role] ?? "/access-pending"} replace />;
+  }
+
+  return <>{children}</>;
+}
