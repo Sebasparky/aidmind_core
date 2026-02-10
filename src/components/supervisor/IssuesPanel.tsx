@@ -1,11 +1,14 @@
 /**
- * Issues Panel - Combined errors and warnings view with "Reviewed" state
+ * Issues Panel - Combined errors and warnings view with local acknowledgment
  * 
  * Reframed around supervisor intent: "What needs attention?"
- * Badge shows unreviewed count only to reduce "issue count anxiety"
+ * Badge shows unacknowledged count only to reduce "issue count anxiety"
+ * 
+ * IMPORTANT: Acknowledgment is local to the browser session.
+ * It does NOT change system state, persist, or imply audit action.
  */
 
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState } from "react";
 import { EyeEvent, getEventSeverity } from "@/lib/eye/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -24,22 +27,21 @@ import {
   FileText,
   Trash2,
   CheckCircle2,
-  Check,
-  Eye,
+  Circle,
+  CheckCircle,
   EyeOff,
-  CheckCheck,
   Info,
 } from "lucide-react";
 
 interface IssuesPanelProps {
   events: EyeEvent[];
   onEventClick: (event: EyeEvent) => void;
-  reviewedIds: Set<string>;
-  onMarkReviewed: (eventId: string) => void;
-  onMarkAllReviewed: () => void;
+  acknowledgedIds: Set<string>;
+  onToggleAcknowledged: (eventId: string) => void;
+  onAcknowledgeAll: () => void;
 }
 
-type FilterMode = "all" | "unreviewed" | "reviewed";
+type FilterMode = "all" | "new" | "acknowledged";
 
 // Get all events with warnings or errors
 function getIssueEvents(events: EyeEvent[]): EyeEvent[] {
@@ -91,34 +93,37 @@ function getIssueDisplayName(eventType: string): string {
   return names[eventType] || eventType.replace(/_/g, " ");
 }
 
-export function IssuesPanel({ events, onEventClick, reviewedIds, onMarkReviewed, onMarkAllReviewed }: IssuesPanelProps) {
-  const [filterMode, setFilterMode] = useState<FilterMode>("unreviewed");
+export function IssuesPanel({ events, onEventClick, acknowledgedIds, onToggleAcknowledged, onAcknowledgeAll }: IssuesPanelProps) {
+  const [filterMode, setFilterMode] = useState<FilterMode>("new");
   
   const issueEvents = useMemo(() => getIssueEvents(events), [events]);
   
   const filteredIssues = useMemo(() => {
     if (filterMode === "all") return issueEvents;
-    if (filterMode === "reviewed") return issueEvents.filter(e => reviewedIds.has(e.event_id));
-    return issueEvents.filter(e => !reviewedIds.has(e.event_id));
-  }, [issueEvents, reviewedIds, filterMode]);
+    if (filterMode === "acknowledged") return issueEvents.filter(e => acknowledgedIds.has(e.event_id));
+    return issueEvents.filter(e => !acknowledgedIds.has(e.event_id));
+  }, [issueEvents, acknowledgedIds, filterMode]);
   
   const groupedEvents = useMemo(() => groupByType(filteredIssues), [filteredIssues]);
   const eventTypes = Array.from(groupedEvents.keys()).sort();
   
-  const unreviewedCount = useMemo(() => 
-    issueEvents.filter(e => !reviewedIds.has(e.event_id)).length, 
-    [issueEvents, reviewedIds]
+  const newCount = useMemo(() => 
+    issueEvents.filter(e => !acknowledgedIds.has(e.event_id)).length, 
+    [issueEvents, acknowledgedIds]
   );
 
-  // All issues reviewed state
-  if (issueEvents.length > 0 && unreviewedCount === 0 && filterMode === "unreviewed") {
+  // All issues acknowledged state
+  if (issueEvents.length > 0 && newCount === 0 && filterMode === "new") {
     return (
       <Card className="h-full flex items-center justify-center">
         <div className="text-center text-muted-foreground p-8">
           <CheckCircle2 className="h-12 w-12 mx-auto mb-4 text-[hsl(var(--status-success))] opacity-70" />
-          <p className="text-sm font-medium">All issues reviewed</p>
+          <p className="text-sm font-medium">All issues acknowledged</p>
           <p className="text-xs mt-1 mb-4">
             New issues will appear here automatically.
+          </p>
+          <p className="text-[10px] text-muted-foreground/50 mb-4">
+            Acknowledgment is local to your session and does not change system state.
           </p>
           <Button
             variant="outline"
@@ -137,7 +142,7 @@ export function IssuesPanel({ events, onEventClick, reviewedIds, onMarkReviewed,
       <Card className="h-full flex items-center justify-center">
         <div className="text-center text-muted-foreground p-8">
           <CheckCircle2 className="h-12 w-12 mx-auto mb-4 text-[hsl(var(--status-success))] opacity-70" />
-          <p className="text-sm font-medium">No issues to review</p>
+          <p className="text-sm font-medium">No issues at this time</p>
           <p className="text-xs mt-1">
             All operations completed successfully
           </p>
@@ -159,11 +164,11 @@ export function IssuesPanel({ events, onEventClick, reviewedIds, onMarkReviewed,
             <Tooltip>
               <TooltipTrigger asChild>
                 <Badge variant="destructive" className="ml-auto cursor-help">
-                  {unreviewedCount}
+                  {newCount}
                 </Badge>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Badge shows unreviewed issues only</p>
+                <p>Issues not yet acknowledged in this session</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -186,34 +191,42 @@ export function IssuesPanel({ events, onEventClick, reviewedIds, onMarkReviewed,
               All
             </Button>
             <Button
-              variant={filterMode === "unreviewed" ? "secondary" : "ghost"}
+              variant={filterMode === "new" ? "secondary" : "ghost"}
               size="sm"
               className="h-7 text-xs"
-              onClick={() => setFilterMode("unreviewed")}
+              onClick={() => setFilterMode("new")}
             >
               <EyeOff className="h-3 w-3 mr-1" />
-              Unreviewed
+              New
             </Button>
             <Button
-              variant={filterMode === "reviewed" ? "secondary" : "ghost"}
+              variant={filterMode === "acknowledged" ? "secondary" : "ghost"}
               size="sm"
               className="h-7 text-xs"
-              onClick={() => setFilterMode("reviewed")}
+              onClick={() => setFilterMode("acknowledged")}
             >
-              <Eye className="h-3 w-3 mr-1" />
-              Reviewed
+              <CheckCircle className="h-3 w-3 mr-1" />
+              Acknowledged
             </Button>
           </div>
-          {unreviewedCount > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 text-xs text-muted-foreground"
-              onClick={onMarkAllReviewed}
-            >
-              <CheckCheck className="h-3 w-3 mr-1" />
-              Mark all reviewed
-            </Button>
+          {newCount > 0 && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs text-muted-foreground"
+                    onClick={onAcknowledgeAll}
+                  >
+                    Acknowledge all
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className="max-w-[200px] text-xs">Acknowledgment is local to your session and does not change system state.</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
         </div>
       </CardHeader>
@@ -244,38 +257,51 @@ export function IssuesPanel({ events, onEventClick, reviewedIds, onMarkReviewed,
                 <div className="divide-y divide-border">
                   {typeEvents.map((event) => {
                     const severity = getEventSeverity(event);
-                    const isReviewed = reviewedIds.has(event.event_id);
+                    const isAcknowledged = acknowledgedIds.has(event.event_id);
                     
                     return (
                       <div
                         key={event.event_id}
                         className={cn(
                           "flex items-center gap-3 p-3 cursor-pointer transition-colors group",
-                          isReviewed ? "opacity-60 bg-muted/20" : "hover:bg-muted/30"
+                          isAcknowledged ? "opacity-50 bg-muted/20" : "hover:bg-muted/30"
                         )}
                       >
-                        {/* Mark reviewed button */}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onMarkReviewed(event.event_id);
-                          }}
-                          className={cn(
-                            "flex-shrink-0 p-1 rounded transition-colors",
-                            isReviewed 
-                              ? "text-[hsl(var(--status-success))]" 
-                              : "text-muted-foreground/50 hover:text-foreground hover:bg-muted"
-                          )}
-                        >
-                          <Check className="h-4 w-4" />
-                        </button>
+                        {/* Acknowledgment toggle */}
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onToggleAcknowledged(event.event_id);
+                                }}
+                                className={cn(
+                                  "flex-shrink-0 p-0.5 rounded transition-colors",
+                                  isAcknowledged 
+                                    ? "text-muted-foreground" 
+                                    : "text-muted-foreground/30 hover:text-muted-foreground hover:bg-muted"
+                                )}
+                                aria-label={isAcknowledged ? "Remove acknowledgment" : "Acknowledge locally"}
+                              >
+                                {isAcknowledged ? (
+                                  <CheckCircle className="h-4 w-4" />
+                                ) : (
+                                  <Circle className="h-4 w-4" />
+                                )}
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent side="right">
+                              <p className="max-w-[200px] text-xs">
+                                Acknowledgment is local to your session and does not change system state.
+                              </p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                         
                         <div 
                           className="flex-1 min-w-0 flex items-center gap-3"
-                          onClick={() => {
-                            onEventClick(event);
-                            if (!isReviewed) onMarkReviewed(event.event_id);
-                          }}
+                          onClick={() => onEventClick(event)}
                         >
                           {event.result === "failure" ? (
                             <XCircle className="h-4 w-4 text-destructive flex-shrink-0" />
