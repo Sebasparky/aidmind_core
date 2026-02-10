@@ -18,30 +18,21 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const STORAGE_KEY = "aidmind_mock_user_id";
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  // Restore user from localStorage, default to supervisor for demo
-  const [currentUser, setCurrentUser] = useState<MockUser | null>(() => {
-    const savedUserId = localStorage.getItem(STORAGE_KEY);
-    if (savedUserId) {
-      const user = Object.values(MOCK_USERS).find((u) => u.id === savedUserId);
-      if (user) return user;
-    }
-    return MOCK_USERS.supervisor_1;
-  });
+  // Default to caseworker — no localStorage persistence
+  const [currentUser, setCurrentUser] = useState<MockUser | null>(
+    () => MOCK_USERS.caseworker_1
+  );
 
   const switchUser = useCallback((userId: string) => {
     const user = Object.values(MOCK_USERS).find((u) => u.id === userId);
     if (user) {
       setCurrentUser(user);
-      localStorage.setItem(STORAGE_KEY, userId);
     }
   }, []);
 
   const logout = useCallback(() => {
     setCurrentUser(null);
-    localStorage.removeItem(STORAGE_KEY);
   }, []);
 
   const canAccessSupervisor = currentUser 

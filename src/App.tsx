@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { DashboardProvider } from "@/contexts/DashboardContext";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { NavigationGuardProvider } from "@/contexts/NavigationGuardContext";
+import { DevRoleToggle } from "@/components/dev/DevRoleToggle";
 import Index from "./pages/Index";
 import Calendar from "./pages/Calendar";
 import Guidance from "./pages/Guidance";
@@ -53,6 +54,7 @@ const App = () => (
               </Routes>
             </DashboardProvider>
           </NavigationGuardProvider>
+          <DevRoleToggle />
         </BrowserRouter>
       </TooltipProvider>
     </AuthProvider>
