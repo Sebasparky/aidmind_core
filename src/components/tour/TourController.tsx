@@ -7,6 +7,7 @@
  * - Manages spotlight overlay + popover positioning
  * - Auto-switches tabs via activateTab on steps
  * - Repositions on scroll/resize
+ * - Supports instant replay via custom event (no page reload)
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -14,7 +15,7 @@ import { createPortal } from "react-dom";
 import { TourSpotlight } from "./TourSpotlight";
 import { TourPopover } from "./TourPopover";
 import { tourConfigs } from "./tour-steps";
-import { getTourCompletedKey, getTourProgressKey } from "./types";
+import { getTourCompletedKey, getTourProgressKey, TOUR_REPLAY_EVENT } from "./types";
 import type { AppRole } from "@/contexts/AuthContext";
 import type { TourStep } from "./types";
 
@@ -37,6 +38,7 @@ export function TourController({ role, onActivateTab }: TourControllerProps) {
   const [active, setActive] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [targetRect, setTargetRect] = useState<DOMRect | null>(null);
+  const [replayNonce, setReplayNonce] = useState(0);
   const rafRef = useRef<number>();
 
   const completedKey = getTourCompletedKey(role);
@@ -58,7 +60,29 @@ export function TourController({ role, onActivateTab }: TourControllerProps) {
     }, 800);
 
     return () => clearTimeout(timer);
-  }, [config, completedKey, progressKey, steps.length]);
+  }, [config, completedKey, progressKey, steps.length, replayNonce]);
+
+  // Listen for replay events
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.role !== role) return;
+
+      // Reset tour state without reload
+      setActive(false);
+      setCurrentIndex(0);
+      setTargetRect(null);
+      setReplayNonce((n) => n + 1);
+
+      // Re-enable on next frame so component fully resets
+      requestAnimationFrame(() => {
+        setActive(true);
+      });
+    };
+
+    window.addEventListener(TOUR_REPLAY_EVENT, handler);
+    return () => window.removeEventListener(TOUR_REPLAY_EVENT, handler);
+  }, [role]);
 
   // When step changes, activate the required tab then scroll element into view
   useEffect(() => {
