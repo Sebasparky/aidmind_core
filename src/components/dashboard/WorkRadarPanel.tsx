@@ -1,5 +1,5 @@
-import { useState, useMemo } from "react";
-import { AlertCircle, Clock, FileWarning, ChevronRight, Info } from "lucide-react";
+import { useState, useMemo, useCallback, useRef } from "react";
+import { AlertCircle, Clock, FileWarning, ChevronRight, ChevronDown, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import {
@@ -42,7 +42,6 @@ export interface DerivedSignalItem {
     };
     allowedActions?: {
       canOpenSession: boolean;
-      canMarkReviewed: boolean;
       canDismiss: boolean;
     };
   };
@@ -50,6 +49,13 @@ export interface DerivedSignalItem {
 
 /** @deprecated Use DerivedSignalItem instead */
 export type WorkRadarItem = DerivedSignalItem;
+
+interface ResolvedObligation {
+  id: string;
+  title: string;
+  relatedSessionLabel?: string;
+  resolvedAt: Date;
+}
 
 interface DerivedSignalsPanelProps {
   className?: string;
@@ -76,7 +82,6 @@ const placeholderItems: DerivedSignalItem[] = [
       },
       allowedActions: {
         canOpenSession: true,
-        canMarkReviewed: true,
         canDismiss: false,
       },
     },
@@ -91,7 +96,6 @@ const placeholderItems: DerivedSignalItem[] = [
       description: "A policy threshold has been reached that requires supervisor sign-off before the case can proceed. This is a mandatory compliance step under Policy 7.1.",
       allowedActions: {
         canOpenSession: false,
-        canMarkReviewed: true,
         canDismiss: false,
       },
     },
@@ -106,7 +110,6 @@ const placeholderItems: DerivedSignalItem[] = [
       description: "A scheduled follow-up is approaching. Documentation should be prepared to ensure continuity of care and compliance with the established timeline.",
       allowedActions: {
         canOpenSession: false,
-        canMarkReviewed: true,
         canDismiss: true,
       },
     },
@@ -163,16 +166,30 @@ function signalToObligation(item: DerivedSignalItem): ObligationData {
     triggeredAt: item.timeContext ?? "Unknown",
     allowedActions: item.obligationDetail?.allowedActions ?? {
       canOpenSession: false,
-      canMarkReviewed: true,
       canDismiss: false,
     },
   };
+}
+
+function formatResolvedTime(date: Date): string {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMinutes = Math.floor(diffMs / 1000 / 60);
+  const diffHours = Math.floor(diffMinutes / 60);
+
+  if (diffMinutes < 1) return "Resolved just now";
+  if (diffMinutes < 60) return `Resolved ${diffMinutes}m ago`;
+  if (diffHours < 24) return `Resolved ${diffHours}h ago`;
+  return `Resolved ${Math.floor(diffHours / 24)}d ago`;
 }
 
 export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSession, searchQuery = "" }: DerivedSignalsPanelProps) {
   const [allItems, setAllItems] = useState<DerivedSignalItem[]>(items ?? placeholderItems);
   const [selectedObligation, setSelectedObligation] = useState<ObligationData | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [resolvedItems, setResolvedItems] = useState<ResolvedObligation[]>([]);
+  const [resolvedExpanded, setResolvedExpanded] = useState(false);
+  const [fadingOutId, setFadingOutId] = useState<string | null>(null);
 
   const displayItems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -192,30 +209,57 @@ export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSessi
     setPanelOpen(true);
   };
 
-  const handleResolve = (id: string) => {
-    setAllItems((prev) => prev.filter((item) => item.id !== id));
+  const handleResolve = useCallback((id: string) => {
+    // Find the item before removing
+    const item = allItems.find((i) => i.id === id);
     setPanelOpen(false);
     setSelectedObligation(null);
-    toast({ title: "Obligation resolved", description: "Removed from Derived Signals." });
-  };
 
-  const handleMarkReviewed = (id: string) => {
+    // Fade out animation
+    setFadingOutId(id);
+    setTimeout(() => {
+      setAllItems((prev) => prev.filter((i) => i.id !== id));
+      setFadingOutId(null);
+
+      if (item) {
+        setResolvedItems((prev) => [
+          {
+            id: item.id,
+            title: item.obligation,
+            relatedSessionLabel: item.obligationDetail?.relatedSession?.label,
+            resolvedAt: new Date(),
+          },
+          ...prev,
+        ]);
+      }
+
+      toast({ title: "Obligation marked as resolved" });
+    }, 250);
+  }, [allItems]);
+
+  const handleDismiss = useCallback((id: string) => {
     setPanelOpen(false);
     setSelectedObligation(null);
-    toast({ title: "Marked as reviewed" });
-  };
 
-  const handleDismiss = (id: string) => {
-    setAllItems((prev) => prev.filter((item) => item.id !== id));
+    setFadingOutId(id);
+    setTimeout(() => {
+      setAllItems((prev) => prev.filter((i) => i.id !== id));
+      setFadingOutId(null);
+      toast({ title: "Obligation dismissed" });
+    }, 250);
+  }, []);
+
+  const handleOpenSession = useCallback((sessionId: string) => {
     setPanelOpen(false);
     setSelectedObligation(null);
-    toast({ title: "Obligation dismissed", description: "Removed from Derived Signals." });
-  };
 
-  const handleOpenSession = (sessionId: string) => {
-    setPanelOpen(false);
+    // Dispatch a custom event so ActiveSessionsPanel can highlight the card
+    window.dispatchEvent(
+      new CustomEvent("highlight-session", { detail: { sessionId } })
+    );
+
     onOpenSession?.(sessionId);
-  };
+  }, [onOpenSession]);
 
   return (
     <TooltipProvider>
@@ -223,7 +267,7 @@ export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSessi
         {/* Header */}
         <div className="p-5 border-b border-border">
           <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold text-foreground">Derived Signals</h2>
+            <h2 className="text-lg font-semibold text-foreground">Work Radar</h2>
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
@@ -242,13 +286,13 @@ export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSessi
             </Tooltip>
           </div>
           <p className="text-sm text-muted-foreground mt-1">
-            Signals derived from available policy and session context to support documentation readiness.
+            Active ({displayItems.length})
           </p>
         </div>
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-3">
-          {displayItems.length === 0 ? (
+          {displayItems.length === 0 && !fadingOutId ? (
             <div className="flex flex-col items-center justify-center py-12 text-center px-4">
               <div className="w-12 h-12 rounded-full bg-muted/50 flex items-center justify-center mb-4">
                 <AlertCircle className="h-6 w-6 text-muted-foreground/50" />
@@ -262,49 +306,96 @@ export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSessi
                   : "Available policy context does not indicate outstanding documentation considerations."}
               </p>
             </div>
-        ) : (
-          <div className="space-y-2">
-            {displayItems.map((item) => {
-              const SourceIcon = getSourceIcon(item.source.type);
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => handleCardClick(item)}
-                  className={cn(
-                    "w-full text-left p-4 rounded-lg border-l-4 transition-colors cursor-pointer",
-                    "hover:bg-accent/50 hover:shadow-sm",
-                    getUrgencyStyles(item.urgency)
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground">
-                        {item.obligation}
-                      </p>
-                      
-                      {/* Source provenance badge */}
-                      <div className="flex items-center gap-2 mt-2">
-                        <Badge 
-                          variant={getSourceBadgeVariant(item.source.type)}
-                          className="text-xs gap-1"
-                        >
-                          <SourceIcon className="h-3 w-3" />
-                          {item.source.label}
-                        </Badge>
-                      </div>
-                      
-                      {/* Time context */}
-                      {item.timeContext && (
-                        <p className="text-xs text-muted-foreground mt-2">
-                          {item.timeContext}
+          ) : (
+            <div className="space-y-2">
+              {displayItems.map((item) => {
+                const SourceIcon = getSourceIcon(item.source.type);
+                const isFading = fadingOutId === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => handleCardClick(item)}
+                    className={cn(
+                      "w-full text-left p-4 rounded-lg border-l-4 transition-all cursor-pointer",
+                      "hover:bg-accent/50 hover:shadow-sm",
+                      getUrgencyStyles(item.urgency),
+                      isFading && "opacity-0 max-h-0 overflow-hidden py-0 my-0 border-0"
+                    )}
+                    style={{
+                      transition: "opacity 250ms ease, max-height 250ms ease 100ms, padding 250ms ease 100ms, margin 250ms ease 100ms",
+                      maxHeight: isFading ? 0 : 200,
+                    }}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-foreground">
+                          {item.obligation}
                         </p>
-                      )}
+                        
+                        {/* Source provenance badge */}
+                        <div className="flex items-center gap-2 mt-2">
+                          <Badge 
+                            variant={getSourceBadgeVariant(item.source.type)}
+                            className="text-xs gap-1"
+                          >
+                            <SourceIcon className="h-3 w-3" />
+                            {item.source.label}
+                          </Badge>
+                        </div>
+                        
+                        {/* Time context */}
+                        {item.timeContext && (
+                          <p className="text-xs text-muted-foreground mt-2">
+                            {item.timeContext}
+                          </p>
+                        )}
+                      </div>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-0.5" />
                     </div>
-                    <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-0.5 transition-transform group-hover:translate-x-0.5" />
-                  </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Recently Resolved Section */}
+          {resolvedItems.length > 0 && (
+            <div className="mt-4">
+              <div className="border-t border-border pt-3">
+                <button
+                  onClick={() => setResolvedExpanded((v) => !v)}
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground/70 hover:text-muted-foreground transition-colors w-full text-left"
+                >
+                  <ChevronDown
+                    className={cn(
+                      "h-3 w-3 transition-transform",
+                      !resolvedExpanded && "-rotate-90"
+                    )}
+                  />
+                  Recently resolved ({resolvedItems.length})
                 </button>
-              );
-            })}
+
+                {resolvedExpanded && (
+                  <div className="mt-2 space-y-1.5">
+                    {resolvedItems.map((r) => (
+                      <div
+                        key={r.id}
+                        className="px-3 py-2 rounded-md bg-muted/30 text-xs text-muted-foreground"
+                      >
+                        <p className="font-medium text-muted-foreground/80">{r.title}</p>
+                        {r.relatedSessionLabel && (
+                          <p className="text-muted-foreground/60 mt-0.5">
+                            {r.relatedSessionLabel}
+                          </p>
+                        )}
+                        <p className="text-muted-foreground/50 mt-0.5">
+                          {formatResolvedTime(r.resolvedAt)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -317,7 +408,6 @@ export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSessi
         obligation={selectedObligation}
         onOpenSession={handleOpenSession}
         onResolve={handleResolve}
-        onMarkReviewed={handleMarkReviewed}
         onDismiss={handleDismiss}
       />
     </TooltipProvider>

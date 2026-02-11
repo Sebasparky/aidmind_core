@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Sparkles, Shield, Clock, RefreshCw, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -81,6 +81,30 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
   const [sessionToClose, setSessionToClose] = useState<ActiveSession | null>(null);
+  const [highlightedSessionId, setHighlightedSessionId] = useState<string | null>(null);
+  const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // Listen for highlight-session events from ObligationPanel
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const sessionId = (e as CustomEvent).detail?.sessionId;
+      if (!sessionId) return;
+
+      setHighlightedSessionId(sessionId);
+
+      // Scroll to the card
+      const card = cardRefs.current.get(sessionId);
+      if (card) {
+        card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+
+      // Remove highlight after 1.5s
+      setTimeout(() => setHighlightedSessionId(null), 1500);
+    };
+
+    window.addEventListener("highlight-session", handler);
+    return () => window.removeEventListener("highlight-session", handler);
+  }, []);
 
   // Filter to only active sessions (not completed, not cancelled)
   // TODO: Replace with real tool usage tracking from database
@@ -249,7 +273,14 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
             {filteredActiveSessions.map((session) => (
               <div
                 key={session.id}
-                className="p-4 rounded-lg border border-border bg-background hover:bg-accent/30 transition-colors"
+                ref={(el) => {
+                  if (el) cardRefs.current.set(session.sessionId, el);
+                  else cardRefs.current.delete(session.sessionId);
+                }}
+                className={cn(
+                  "p-4 rounded-lg border border-border bg-background hover:bg-accent/30 transition-all duration-300",
+                  highlightedSessionId === session.sessionId && "ring-2 ring-primary/40 bg-primary/5"
+                )}
               >
                 {/* Session info */}
                 <div className="mb-3">
