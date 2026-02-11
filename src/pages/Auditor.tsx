@@ -61,8 +61,8 @@ export default function Auditor() {
       <TourController role="auditor" />
 
       {/* Auditor Mode Banner */}
-      <header className="sticky top-0 z-50 bg-[hsl(var(--status-warning-muted))] border-b border-[hsl(var(--status-warning))]" data-tour="aud-banner">
-        <div className="container py-3 flex items-center justify-between">
+      <header className="sticky top-0 z-50 h-16 bg-[hsl(var(--status-warning-muted))] border-b border-[hsl(var(--status-warning))]" data-tour="aud-banner">
+        <div className="h-full container px-6 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <AidMindBrand size="md" showWordmark={false} href="/auditor" />
             <Separator orientation="vertical" className="h-5" />
