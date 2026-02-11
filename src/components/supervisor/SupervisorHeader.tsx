@@ -14,8 +14,10 @@ import {
   Eye, 
   ChevronLeft, 
   Shield,
+  LogOut,
 } from "lucide-react";
 import { OrphanCleanupButton } from "./OrphanCleanupButton";
+import { supabase } from "@/integrations/supabase/client";
 
 export function SupervisorHeader() {
   const { profile } = useAuth();
@@ -69,6 +71,22 @@ export function SupervisorHeader() {
           </Avatar>
           <span className="text-sm font-medium text-foreground">{profile?.display_name}</span>
         </div>
+
+        <Separator orientation="vertical" className="h-6" />
+
+        <Button
+          variant="ghost"
+          size="sm"
+          className="gap-2 text-muted-foreground"
+          aria-label="Sign out"
+          onClick={async () => {
+            await supabase.auth.signOut();
+            window.location.href = "/login";
+          }}
+        >
+          <LogOut className="h-4 w-4" />
+          Sign out
+        </Button>
       </div>
     </header>
   );
