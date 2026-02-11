@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { AlertCircle, Clock, FileWarning, ChevronRight, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -7,15 +8,14 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { ObligationPanel, type ObligationData, type ObligationStatus } from "./ObligationPanel";
+import { toast } from "@/hooks/use-toast";
 
 /**
  * Derived Signals: Informational indicators derived from policy and session context.
  * 
- * IMPORTANT: This is NOT a task manager or compliance engine.
- * - Signals are DERIVED, not user-created
- * - Every signal must have a clear source/provenance
- * - No manual addition or dismissal of signals
- * - Informational only — does not replace professional judgment
+ * Clicking a signal opens the Obligation Detail Panel (right slide-over).
+ * Flow: Radar → Obligation → Action → Resolution
  */
 
 export interface DerivedSignalItem {
@@ -32,6 +32,20 @@ export interface DerivedSignalItem {
   timeContext?: string;
   /** Urgency level */
   urgency: "low" | "medium" | "high";
+  /** Extended obligation data for the detail panel */
+  obligationDetail?: {
+    description: string;
+    relatedSession?: {
+      label: string;
+      caseLabel?: string;
+      sessionId?: string;
+    };
+    allowedActions?: {
+      canOpenSession: boolean;
+      canMarkReviewed: boolean;
+      canDismiss: boolean;
+    };
+  };
 }
 
 /** @deprecated Use DerivedSignalItem instead */
@@ -41,6 +55,7 @@ interface DerivedSignalsPanelProps {
   className?: string;
   items?: DerivedSignalItem[];
   onItemClick?: (item: DerivedSignalItem) => void;
+  onOpenSession?: (sessionId: string) => void;
 }
 
 // Placeholder data for v1 demonstration
@@ -51,6 +66,19 @@ const placeholderItems: DerivedSignalItem[] = [
     source: { type: "session", label: "Intake session #4821", id: "4821" },
     timeContext: "Triggered 2 days ago",
     urgency: "high",
+    obligationDetail: {
+      description: "This intake session is missing a required consent form under Policy 4.2. Documentation cannot be finalized until consent is recorded.",
+      relatedSession: {
+        label: "Intake session #4821",
+        caseLabel: "Smith Family Intake",
+        sessionId: "4821",
+      },
+      allowedActions: {
+        canOpenSession: true,
+        canMarkReviewed: true,
+        canDismiss: false,
+      },
+    },
   },
   {
     id: "2",
@@ -58,6 +86,14 @@ const placeholderItems: DerivedSignalItem[] = [
     source: { type: "policy", label: "Policy threshold reached" },
     timeContext: "Due within 24 hours",
     urgency: "high",
+    obligationDetail: {
+      description: "A policy threshold has been reached that requires supervisor sign-off before the case can proceed. This is a mandatory compliance step under Policy 7.1.",
+      allowedActions: {
+        canOpenSession: false,
+        canMarkReviewed: true,
+        canDismiss: false,
+      },
+    },
   },
   {
     id: "3",
@@ -65,6 +101,14 @@ const placeholderItems: DerivedSignalItem[] = [
     source: { type: "timeline", label: "Timeline event confirmed" },
     timeContext: "Due in 48 hours",
     urgency: "medium",
+    obligationDetail: {
+      description: "A scheduled follow-up is approaching. Documentation should be prepared to ensure continuity of care and compliance with the established timeline.",
+      allowedActions: {
+        canOpenSession: false,
+        canMarkReviewed: true,
+        canDismiss: true,
+      },
+    },
   },
 ];
 
@@ -106,9 +150,59 @@ function getSourceBadgeVariant(type: DerivedSignalItem["source"]["type"]) {
   }
 }
 
-export function DerivedSignalsPanel({ className, items, onItemClick }: DerivedSignalsPanelProps) {
-  // Use placeholder data for v1, will be replaced with derived data later
-  const displayItems = items ?? placeholderItems;
+function signalToObligation(item: DerivedSignalItem): ObligationData {
+  return {
+    id: item.id,
+    title: item.obligation,
+    status: "open" as ObligationStatus,
+    severity: item.urgency,
+    description: item.obligationDetail?.description ?? item.obligation,
+    relatedSession: item.obligationDetail?.relatedSession,
+    policySource: item.source.label,
+    triggeredAt: item.timeContext ?? "Unknown",
+    allowedActions: item.obligationDetail?.allowedActions ?? {
+      canOpenSession: false,
+      canMarkReviewed: true,
+      canDismiss: false,
+    },
+  };
+}
+
+export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSession }: DerivedSignalsPanelProps) {
+  const [displayItems, setDisplayItems] = useState<DerivedSignalItem[]>(items ?? placeholderItems);
+  const [selectedObligation, setSelectedObligation] = useState<ObligationData | null>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
+
+  const handleCardClick = (item: DerivedSignalItem) => {
+    onItemClick?.(item);
+    setSelectedObligation(signalToObligation(item));
+    setPanelOpen(true);
+  };
+
+  const handleResolve = (id: string) => {
+    setDisplayItems((prev) => prev.filter((item) => item.id !== id));
+    setPanelOpen(false);
+    setSelectedObligation(null);
+    toast({ title: "Obligation resolved", description: "Removed from Derived Signals." });
+  };
+
+  const handleMarkReviewed = (id: string) => {
+    setPanelOpen(false);
+    setSelectedObligation(null);
+    toast({ title: "Marked as reviewed" });
+  };
+
+  const handleDismiss = (id: string) => {
+    setDisplayItems((prev) => prev.filter((item) => item.id !== id));
+    setPanelOpen(false);
+    setSelectedObligation(null);
+    toast({ title: "Obligation dismissed", description: "Removed from Derived Signals." });
+  };
+
+  const handleOpenSession = (sessionId: string) => {
+    setPanelOpen(false);
+    onOpenSession?.(sessionId);
+  };
 
   return (
     <TooltipProvider>
@@ -160,9 +254,10 @@ export function DerivedSignalsPanel({ className, items, onItemClick }: DerivedSi
               return (
                 <button
                   key={item.id}
-                  onClick={() => onItemClick?.(item)}
+                  onClick={() => handleCardClick(item)}
                   className={cn(
-                    "w-full text-left p-4 rounded-lg border-l-4 transition-colors hover:bg-accent/50",
+                    "w-full text-left p-4 rounded-lg border-l-4 transition-colors cursor-pointer",
+                    "hover:bg-accent/50 hover:shadow-sm",
                     getUrgencyStyles(item.urgency)
                   )}
                 >
@@ -172,7 +267,7 @@ export function DerivedSignalsPanel({ className, items, onItemClick }: DerivedSi
                         {item.obligation}
                       </p>
                       
-                      {/* Source provenance badge - answers "Why does this exist?" */}
+                      {/* Source provenance badge */}
                       <div className="flex items-center gap-2 mt-2">
                         <Badge 
                           variant={getSourceBadgeVariant(item.source.type)}
@@ -190,7 +285,7 @@ export function DerivedSignalsPanel({ className, items, onItemClick }: DerivedSi
                         </p>
                       )}
                     </div>
-                    <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-0.5" />
+                    <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-0.5 transition-transform group-hover:translate-x-0.5" />
                   </div>
                 </button>
               );
@@ -199,6 +294,17 @@ export function DerivedSignalsPanel({ className, items, onItemClick }: DerivedSi
           )}
         </div>
       </div>
+
+      {/* Obligation Detail Panel */}
+      <ObligationPanel
+        open={panelOpen}
+        onOpenChange={setPanelOpen}
+        obligation={selectedObligation}
+        onOpenSession={handleOpenSession}
+        onResolve={handleResolve}
+        onMarkReviewed={handleMarkReviewed}
+        onDismiss={handleDismiss}
+      />
     </TooltipProvider>
   );
 }
