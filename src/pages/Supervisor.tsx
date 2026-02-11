@@ -1,7 +1,5 @@
 /**
  * Supervisor UI - The Eye Event Viewer
- * 
- * Updated for real auth — route guard handles access control.
  */
 
 import { useState, useMemo, useCallback } from "react";
@@ -17,7 +15,7 @@ import { PurgeProofPanel } from "@/components/supervisor/PurgeProofPanel";
 import { AIAuthorizationPanel } from "@/components/supervisor/AIAuthorizationPanel";
 import { ComplianceExportPanel } from "@/components/supervisor/ComplianceExportPanel";
 import { SecurityDashboardPanel } from "@/components/supervisor/SecurityDashboardPanel";
-import { ContextualTooltips } from "@/components/onboarding/ContextualTooltips";
+import { TourController } from "@/components/tour/TourController";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,14 +33,12 @@ import {
 import { cn } from "@/lib/utils";
 
 export default function Supervisor() {
-  // Fetch REAL eye events from Supabase
   const { events: allEvents, loading, error, refresh, lastRefresh } = useEyeEvents({
     timeRangeHours: 24,
     autoRefresh: true,
     refreshIntervalMs: 30000,
   });
   
-  // Filter state
   const [filters, setFilters] = useState<EventFilters>({});
   const [selectedEvent, setSelectedEvent] = useState<EyeEvent | null>(null);
   const [activeTab, setActiveTab] = useState("daily-assurance");
@@ -88,6 +84,7 @@ export default function Supervisor() {
   return (
     <div className="min-h-screen bg-canvas flex flex-col">
       <SupervisorHeader />
+      <TourController role="supervisor" />
 
       <div className="flex-1 flex">
         <aside 
@@ -106,9 +103,6 @@ export default function Supervisor() {
         </aside>
 
         <main className="flex-1 p-6 overflow-auto">
-          {/* Contextual tooltips for supervisor */}
-          <ContextualTooltips role="supervisor" />
-          
           <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
@@ -117,6 +111,7 @@ export default function Supervisor() {
                   size="sm"
                   onClick={() => setShowFilters(!showFilters)}
                   className="gap-2"
+                  data-tour="filter-toggle"
                 >
                   {showFilters ? <X className="h-4 w-4" /> : <Filter className="h-4 w-4" />}
                   Filters
@@ -126,19 +121,19 @@ export default function Supervisor() {
                 </Button>
 
                 <TabsList className="bg-muted/50">
-                  <TabsTrigger value="daily-assurance" className="gap-2">
+                  <TabsTrigger value="daily-assurance" className="gap-2" data-tour="tab-daily-assurance">
                     <Gauge className="h-4 w-4" />Daily Assurance
                   </TabsTrigger>
                   <TabsTrigger value="sessions" className="gap-2">
                     <LayoutList className="h-4 w-4" />Sessions
                   </TabsTrigger>
-                  <TabsTrigger value="issues" className="gap-2">
+                  <TabsTrigger value="issues" className="gap-2" data-tour="tab-issues">
                     <AlertTriangle className="h-4 w-4" />System Issues
                     {unacknowledgedCount > 0 && (
                       <Badge variant="destructive" className="ml-1 text-xs">{unacknowledgedCount}</Badge>
                     )}
                   </TabsTrigger>
-                  <TabsTrigger value="deletion-proof" className="gap-2">
+                  <TabsTrigger value="deletion-proof" className="gap-2" data-tour="tab-deletion-proof">
                     <ShieldCheck className="h-4 w-4" />Data Deletion Proof
                   </TabsTrigger>
                   <TabsTrigger value="governance" className="gap-2">

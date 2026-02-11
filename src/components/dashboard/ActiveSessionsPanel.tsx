@@ -188,7 +188,7 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
               <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
             </Button>
           </div>
-          <Button onClick={() => setStartSessionOpen(true)} size="sm" className="gap-1.5">
+          <Button onClick={() => setStartSessionOpen(true)} size="sm" className="gap-1.5" data-tour="create-session">
             <Plus className="h-4 w-4" />
             New Session
           </Button>
@@ -273,6 +273,7 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
                     size="sm"
                     className="gap-1.5 text-xs"
                     onClick={() => handleGenerateGuidance(session)}
+                    data-tour="guidance-button"
                   >
                     <Sparkles className="h-3.5 w-3.5" />
                     Guidance
@@ -283,6 +284,7 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
                     size="sm"
                     className="gap-1.5 text-xs"
                     onClick={() => handleRunReviewer(session)}
+                    data-tour="reviewer-button"
                   >
                     <Shield className="h-3.5 w-3.5" />
                     Reviewer
@@ -296,6 +298,7 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
                     className="gap-1.5 text-xs text-muted-foreground hover:text-foreground ml-auto"
                     onClick={() => handleCloseSessionClick(session)}
                     disabled={closingSessionId === session.sessionId}
+                    data-tour="close-session"
                   >
                     <X className="h-3.5 w-3.5" />
                     Close

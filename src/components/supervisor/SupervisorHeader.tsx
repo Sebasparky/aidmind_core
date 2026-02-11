@@ -9,18 +9,23 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import { useTourReplay } from "@/components/tour/useTourReplay";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { 
   Eye, 
   ChevronLeft, 
   Shield,
   LogOut,
+  ChevronDown,
+  Map,
 } from "lucide-react";
 import { OrphanCleanupButton } from "./OrphanCleanupButton";
 import { supabase } from "@/integrations/supabase/client";
 
 export function SupervisorHeader() {
   const { profile } = useAuth();
+  const { replayTour } = useTourReplay("supervisor");
   
   const initials = profile?.display_name
     ? profile.display_name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)
@@ -63,30 +68,36 @@ export function SupervisorHeader() {
 
         <Separator orientation="vertical" className="h-6" />
 
-        <div className="flex items-center gap-2">
-          <Avatar className="h-7 w-7">
-            <AvatarFallback className="bg-primary text-primary-foreground text-xs font-medium">
-              {initials}
-            </AvatarFallback>
-          </Avatar>
-          <span className="text-sm font-medium text-foreground">{profile?.display_name}</span>
-        </div>
-
-        <Separator orientation="vertical" className="h-6" />
-
-        <Button
-          variant="ghost"
-          size="sm"
-          className="gap-2 text-muted-foreground"
-          aria-label="Sign out"
-          onClick={async () => {
-            await supabase.auth.signOut();
-            window.location.href = "/login";
-          }}
-        >
-          <LogOut className="h-4 w-4" />
-          Sign out
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" className="flex items-center gap-2 px-2" aria-label="User menu">
+              <Avatar className="h-7 w-7">
+                <AvatarFallback className="bg-primary text-primary-foreground text-xs font-medium">
+                  {initials}
+                </AvatarFallback>
+              </Avatar>
+              <span className="text-sm font-medium text-foreground">{profile?.display_name}</span>
+              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuItem onClick={replayTour} className="gap-2">
+              <Map className="h-3.5 w-3.5" />
+              Replay tour
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={async () => {
+                await supabase.auth.signOut();
+                window.location.href = "/login";
+              }}
+              className="gap-2"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              Sign out
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   );

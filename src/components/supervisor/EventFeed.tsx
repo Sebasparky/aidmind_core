@@ -193,6 +193,7 @@ export function EventFeed({ events, onEventClick, selectedEventId }: EventFeedPr
                         <Badge
                           variant="outline"
                           className={cn("text-xs flex-shrink-0", SOURCE_STYLES[source].bg, SOURCE_STYLES[source].text)}
+                          data-tour="event-source-badge"
                         >
                           {source === "coordination" ? "Coordination" : 
                            source === "legacy" ? "Legacy" :
