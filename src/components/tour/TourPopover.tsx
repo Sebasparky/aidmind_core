@@ -1,18 +1,17 @@
 /**
  * TourPopover — Anchored popover for a single tour step.
- * 
- * - Appears immediately with step content
+ *
+ * - Auto-flips placement to stay within viewport
+ * - Clamps position with padding so it's never off-screen
  * - "Next" button delayed by 1.2s to encourage reading
- * - Back / Skip always available
- * - Progress indicator top-right
  * - Keyboard navigable, aria-live
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { TourStep } from "./types";
+import type { TourStep, TourPlacement } from "./types";
 
 interface TourPopoverProps {
   step: TourStep;
@@ -26,55 +25,88 @@ interface TourPopoverProps {
   isLast: boolean;
 }
 
-type Placement = "bottom" | "top" | "left" | "right";
+const VIEWPORT_PAD = 16;
+const GAP = 12;
+const POPOVER_MAX_W = 360;
+const POPOVER_EST_H = 260;
 
-function computePlacement(rect: DOMRect | null): Placement {
+const FALLBACK_ORDER: TourPlacement[] = ["bottom", "right", "left", "top"];
+
+function pickPlacement(
+  rect: DOMRect | null,
+  preferred?: TourPlacement
+): TourPlacement {
   if (!rect) return "bottom";
-  const viewH = window.innerHeight;
-  const viewW = window.innerWidth;
-  const spaceBelow = viewH - rect.bottom;
-  const spaceAbove = rect.top;
-  const spaceRight = viewW - rect.right;
-  const spaceLeft = rect.left;
 
-  // Prefer below, then above, then right, then left
-  if (spaceBelow >= 220) return "bottom";
-  if (spaceAbove >= 220) return "top";
-  if (spaceRight >= 340) return "right";
-  if (spaceLeft >= 340) return "left";
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const popW = Math.min(POPOVER_MAX_W, vw - VIEWPORT_PAD * 2);
+
+  const fits = (p: TourPlacement): boolean => {
+    switch (p) {
+      case "bottom":
+        return vh - rect.bottom - GAP >= POPOVER_EST_H;
+      case "top":
+        return rect.top - GAP >= POPOVER_EST_H;
+      case "right":
+        return vw - rect.right - GAP >= popW;
+      case "left":
+        return rect.left - GAP >= popW;
+    }
+  };
+
+  if (preferred && fits(preferred)) return preferred;
+  for (const p of FALLBACK_ORDER) {
+    if (fits(p)) return p;
+  }
   return "bottom";
 }
 
-function computePosition(rect: DOMRect | null, placement: Placement) {
-  if (!rect) return { top: "50%", left: "50%", transform: "translate(-50%, -50%)" };
+function computeStyle(
+  rect: DOMRect | null,
+  placement: TourPlacement,
+  popoverEl: HTMLElement | null
+): React.CSSProperties {
+  if (!rect) return { position: "fixed", top: "50%", left: "50%", transform: "translate(-50%, -50%)" };
 
-  const gap = 12;
-  const style: React.CSSProperties = { position: "fixed" };
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const popW = Math.min(POPOVER_MAX_W, vw - VIEWPORT_PAD * 2);
+  const popH = popoverEl?.offsetHeight ?? POPOVER_EST_H;
+
+  let top = 0;
+  let left = 0;
 
   switch (placement) {
     case "bottom":
-      style.top = rect.bottom + gap;
-      style.left = rect.left + rect.width / 2;
-      style.transform = "translateX(-50%)";
+      top = rect.bottom + GAP;
+      left = rect.left + rect.width / 2 - popW / 2;
       break;
     case "top":
-      style.bottom = window.innerHeight - rect.top + gap;
-      style.left = rect.left + rect.width / 2;
-      style.transform = "translateX(-50%)";
+      top = rect.top - GAP - popH;
+      left = rect.left + rect.width / 2 - popW / 2;
       break;
     case "right":
-      style.top = rect.top + rect.height / 2;
-      style.left = rect.right + gap;
-      style.transform = "translateY(-50%)";
+      top = rect.top + rect.height / 2 - popH / 2;
+      left = rect.right + GAP;
       break;
     case "left":
-      style.top = rect.top + rect.height / 2;
-      style.right = window.innerWidth - rect.left + gap;
-      style.transform = "translateY(-50%)";
+      top = rect.top + rect.height / 2 - popH / 2;
+      left = rect.left - GAP - popW;
       break;
   }
 
-  return style;
+  // Clamp within viewport
+  left = Math.max(VIEWPORT_PAD, Math.min(left, vw - popW - VIEWPORT_PAD));
+  top = Math.max(VIEWPORT_PAD, Math.min(top, vh - popH - VIEWPORT_PAD));
+
+  return {
+    position: "fixed",
+    top,
+    left,
+    width: popW,
+    maxWidth: `min(${POPOVER_MAX_W}px, calc(100vw - ${VIEWPORT_PAD * 2}px))`,
+  };
 }
 
 export function TourPopover({
@@ -98,27 +130,25 @@ export function TourPopover({
     return () => clearTimeout(timer);
   }, [stepIndex]);
 
-  // Focus trap: focus popover on mount
+  // Focus popover on mount
   useEffect(() => {
     popoverRef.current?.focus();
   }, [stepIndex]);
 
-  // Keyboard handler
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onSkip();
-      } else if (e.key === "ArrowRight" && nextVisible) {
-        onNext();
-      } else if (e.key === "ArrowLeft" && !isFirst) {
-        onBack();
-      }
+      if (e.key === "Escape") onSkip();
+      else if (e.key === "ArrowRight" && nextVisible) onNext();
+      else if (e.key === "ArrowLeft" && !isFirst) onBack();
     },
     [onSkip, onNext, onBack, nextVisible, isFirst]
   );
 
-  const placement = computePlacement(targetRect);
-  const positionStyle = computePosition(targetRect, placement);
+  const placement = useMemo(() => pickPlacement(targetRect, step.placement), [targetRect, step.placement]);
+  const positionStyle = useMemo(
+    () => computeStyle(targetRect, placement, popoverRef.current),
+    [targetRect, placement]
+  );
 
   return (
     <div
@@ -129,13 +159,13 @@ export function TourPopover({
       tabIndex={-1}
       onKeyDown={handleKeyDown}
       className={cn(
-        "fixed z-[9999] w-80 rounded-xl border border-border bg-card p-5 shadow-lg",
+        "fixed z-[9999] rounded-xl border border-border bg-card p-5 shadow-lg",
         "animate-in fade-in-0 zoom-in-[0.98] duration-150",
         "focus:outline-none"
       )}
       style={positionStyle as React.CSSProperties}
     >
-      {/* Header: progress + close */}
+      {/* Header */}
       <div className="flex items-center justify-between mb-3">
         <span className="text-xs text-muted-foreground">
           Step {stepIndex + 1} of {totalSteps}
@@ -149,22 +179,18 @@ export function TourPopover({
         </button>
       </div>
 
-      {/* Title with accent underline */}
+      {/* Title */}
       <h3 className="text-sm font-semibold text-foreground mb-1">
         <span className="border-b-2 border-primary/40 pb-0.5">{step.title}</span>
       </h3>
 
       {/* Body */}
-      <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
-        {step.description}
-      </p>
+      <p className="text-xs text-muted-foreground mt-2 leading-relaxed">{step.description}</p>
       <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
         <span className="font-medium text-foreground/70">When to use:</span> {step.usage}
       </p>
       {step.boundaryNote && (
-        <p className="text-xs text-muted-foreground/80 mt-1.5 italic leading-relaxed">
-          {step.boundaryNote}
-        </p>
+        <p className="text-xs text-muted-foreground/80 mt-1.5 italic leading-relaxed">{step.boundaryNote}</p>
       )}
 
       {/* Progress dots */}
@@ -186,40 +212,15 @@ export function TourPopover({
 
       {/* Actions */}
       <div className="flex items-center justify-between">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onBack}
-          disabled={isFirst}
-          className="text-xs"
-          aria-label="Previous step"
-        >
+        <Button variant="ghost" size="sm" onClick={onBack} disabled={isFirst} className="text-xs" aria-label="Previous step">
           Back
         </Button>
-
         <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onSkip}
-            className="text-xs text-muted-foreground"
-            aria-label="Skip tour"
-          >
+          <Button variant="ghost" size="sm" onClick={onSkip} className="text-xs text-muted-foreground" aria-label="Skip tour">
             Skip tour
           </Button>
-
-          <div
-            className={cn(
-              "transition-opacity duration-200",
-              nextVisible ? "opacity-100" : "opacity-0 pointer-events-none"
-            )}
-          >
-            <Button
-              size="sm"
-              onClick={isLast ? onSkip : onNext}
-              className="text-xs"
-              aria-label={isLast ? "Finish tour" : "Next step"}
-            >
+          <div className={cn("transition-opacity duration-200", nextVisible ? "opacity-100" : "opacity-0 pointer-events-none")}>
+            <Button size="sm" onClick={isLast ? onSkip : onNext} className="text-xs" aria-label={isLast ? "Finish tour" : "Next step"}>
               {isLast ? "Done" : "Next"}
             </Button>
           </div>
