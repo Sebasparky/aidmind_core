@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 const sizeMap = {
   sm: "h-7 sm:h-8",
   md: "h-7 sm:h-8",
-  lg: "h-12",
+  lg: "h-16",
 } as const;
 
 interface AidMindBrandProps {
@@ -28,7 +28,7 @@ export function AidMindBrand({
       <img
         src={aidmindLogo}
         alt="AidMind"
-        className={cn(sizeMap[size], "w-auto object-contain")}
+        className={cn(sizeMap[size], "w-auto object-contain select-none pointer-events-none")}
         draggable={false}
       />
       {showWordmark && (
@@ -50,7 +50,7 @@ export function AidMindBrand({
     return (
       <Link
         to={href}
-        className="hover:opacity-80 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-lg"
+        className="hover:opacity-80 transition-opacity outline-none ring-0 border-0 shadow-none focus:outline-none focus-visible:outline-none rounded-lg"
         aria-label="AidMind home"
         onClick={onClick}
       >
@@ -63,7 +63,7 @@ export function AidMindBrand({
     return (
       <button
         onClick={onClick}
-        className="hover:opacity-80 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-lg"
+        className="hover:opacity-80 transition-opacity outline-none ring-0 border-0 shadow-none focus:outline-none focus-visible:outline-none rounded-lg"
         aria-label="AidMind home"
       >
         {content}

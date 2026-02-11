@@ -56,13 +56,10 @@ export default function Login() {
 
   return (
     <div className="min-h-screen bg-[hsl(222,47%,11%)] flex items-center justify-center px-4">
-      <div className="w-full max-w-sm space-y-8">
+      <div className="w-full max-w-sm space-y-6">
         {/* Branding */}
-        <div className="text-center space-y-3 flex flex-col items-center">
+        <div className="text-center flex flex-col items-center">
           <AidMindBrand size="lg" showWordmark={true} className="text-[hsl(210,40%,98%)]" />
-          <p className="text-sm text-[hsl(215,20%,55%)] leading-relaxed">
-            Policy-aware readiness tools for human service professionals.
-          </p>
         </div>
 
         {/* Form */}
