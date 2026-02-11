@@ -17,6 +17,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { 
   Eye, 
   ShieldCheck, 
@@ -27,7 +29,9 @@ import {
   AlertTriangle,
   CheckCircle2,
   Loader2,
+  LogOut,
 } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
 
 export default function Auditor() {
@@ -66,6 +70,22 @@ export default function Auditor() {
               </AvatarFallback>
             </Avatar>
             <span>{profile?.display_name}</span>
+
+            <Separator orientation="vertical" className="h-4" />
+
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-2 text-[hsl(var(--status-warning-muted-foreground))] hover:bg-[hsl(var(--status-warning)/0.15)]"
+              aria-label="Sign out"
+              onClick={async () => {
+                await supabase.auth.signOut();
+                window.location.href = "/login";
+              }}
+            >
+              <LogOut className="h-4 w-4" />
+              Sign out
+            </Button>
           </div>
         </div>
       </header>
