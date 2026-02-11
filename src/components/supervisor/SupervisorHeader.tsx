@@ -4,7 +4,7 @@
  * Updated for real auth — no more mock user prop.
  */
 
-import { GuardedLink } from "@/components/navigation/GuardedLink";
+import { AidMindBrand } from "@/components/brand/AidMindBrand";
 import { useAuth } from "@/contexts/AuthContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,6 @@ import { useTourReplay } from "@/components/tour/useTourReplay";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { 
   Eye, 
-  ChevronLeft, 
   Shield,
   LogOut,
   ChevronDown,
@@ -34,12 +33,7 @@ export function SupervisorHeader() {
   return (
     <header className="h-14 border-b border-border bg-card px-4 flex items-center justify-between flex-shrink-0">
       <div className="flex items-center gap-4">
-        <GuardedLink to="/dashboard">
-          <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground">
-            <ChevronLeft className="h-4 w-4" />
-            Dashboard
-          </Button>
-        </GuardedLink>
+        <AidMindBrand size="md" showWordmark={false} href="/supervisor" />
 
         <Separator orientation="vertical" className="h-6" />
 
