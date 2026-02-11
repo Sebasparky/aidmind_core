@@ -3,9 +3,9 @@ import aidmindLogo from "@/assets/aidmind_logo_transparent.png";
 import { cn } from "@/lib/utils";
 
 const sizeMap = {
-  sm: "h-5 min-h-[20px]",
-  md: "h-7 min-h-[20px]",
-  lg: "h-12 min-h-[20px]",
+  sm: "h-7 min-h-[20px]",
+  md: "h-9 min-h-[20px]",
+  lg: "h-14 min-h-[20px]",
 } as const;
 
 interface AidMindBrandProps {
@@ -35,9 +35,9 @@ export function AidMindBrand({
         <span
           className={cn(
             "font-semibold text-foreground tracking-tight",
-            size === "lg" && "text-2xl",
-            size === "md" && "text-xl",
-            size === "sm" && "text-base",
+            size === "lg" && "text-3xl",
+            size === "md" && "text-2xl",
+            size === "sm" && "text-xl",
           )}
         >
           AidMind
