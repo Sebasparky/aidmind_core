@@ -9,7 +9,7 @@
 
 import { Navigate } from "react-router-dom";
 import { useAuth, type AppRole } from "@/contexts/AuthContext";
-import { Loader2 } from "lucide-react";
+import { AuthLoadingScreen } from "./AuthLoadingScreen";
 
 const ROLE_HOME: Record<AppRole, string> = {
   caseworker: "/dashboard",
@@ -27,11 +27,7 @@ export function RouteGuard({ allowedRoles, children }: RouteGuardProps) {
   const { isAuthenticated, loading, status, role } = useAuth();
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
-    );
+    return <AuthLoadingScreen />;
   }
 
   if (!isAuthenticated) {

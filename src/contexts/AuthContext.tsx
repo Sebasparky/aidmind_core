@@ -84,6 +84,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       async (event, session) => {
         if (session?.user) {
           setUser(session.user);
+          // Immediately gate routing while profile resolves
+          setLoading(true);
           // Defer profile fetch to avoid Supabase client deadlock
           setTimeout(() => fetchProfile().finally(() => setLoading(false)), 0);
         } else {

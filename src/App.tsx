@@ -20,7 +20,7 @@ import Supervisor from "./pages/Supervisor";
 import Auditor from "./pages/Auditor";
 import Platform from "./pages/Platform";
 import NotFound from "./pages/NotFound";
-import { Loader2 } from "lucide-react";
+import { AuthLoadingScreen } from "@/components/auth/AuthLoadingScreen";
 
 const queryClient = new QueryClient();
 
@@ -29,11 +29,7 @@ function RoleRedirect() {
   const { loading, isAuthenticated, status, role } = useAuth();
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
-    );
+    return <AuthLoadingScreen />;
   }
 
   if (!isAuthenticated) return <Navigate to="/login" replace />;
