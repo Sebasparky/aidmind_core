@@ -2,7 +2,6 @@
  * Auditor Mode UI
  * 
  * Read-only, time-bounded access for external auditors.
- * Updated for real auth — route guard handles access control.
  */
 
 import { useMemo } from "react";
@@ -12,13 +11,15 @@ import { useAIAuthorization } from "@/hooks/useAIAuthorization";
 import { computeComplianceStatus } from "@/lib/eye/verdict";
 import { EventFeed } from "@/components/supervisor/EventFeed";
 import { PurgeProofPanel } from "@/components/supervisor/PurgeProofPanel";
-import { ContextualTooltips } from "@/components/onboarding/ContextualTooltips";
+import { TourController } from "@/components/tour/TourController";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import { useTourReplay } from "@/components/tour/useTourReplay";
 import { 
   Eye, 
   ShieldCheck, 
@@ -30,12 +31,15 @@ import {
   CheckCircle2,
   Loader2,
   LogOut,
+  ChevronDown,
+  Map,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
 
 export default function Auditor() {
   const { profile } = useAuth();
+  const { replayTour } = useTourReplay("auditor");
 
   const { events: allEvents, loading, error, lastRefresh } = useEyeEvents({
     timeRangeHours: 168,
@@ -53,8 +57,10 @@ export default function Auditor() {
 
   return (
     <div className="min-h-screen bg-canvas flex flex-col">
+      <TourController role="auditor" />
+
       {/* Auditor Mode Banner */}
-      <header className="sticky top-0 z-50 bg-[hsl(var(--status-warning-muted))] border-b border-[hsl(var(--status-warning))]">
+      <header className="sticky top-0 z-50 bg-[hsl(var(--status-warning-muted))] border-b border-[hsl(var(--status-warning))]" data-tour="auditor-banner">
         <div className="container py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Eye className="h-5 w-5 text-[hsl(var(--status-warning-muted-foreground))]" />
@@ -64,37 +70,42 @@ export default function Auditor() {
             <Badge variant="outline" className="text-xs">Read-Only Access</Badge>
           </div>
           <div className="flex items-center gap-3 text-sm text-[hsl(var(--status-warning-muted-foreground))]">
-            <Avatar className="h-6 w-6">
-              <AvatarFallback className="bg-primary text-primary-foreground text-xs">
-                {initials}
-              </AvatarFallback>
-            </Avatar>
-            <span>{profile?.display_name}</span>
-
-            <Separator orientation="vertical" className="h-4" />
-
-            <Button
-              variant="ghost"
-              size="sm"
-              className="gap-2 text-[hsl(var(--status-warning-muted-foreground))] hover:bg-[hsl(var(--status-warning)/0.15)]"
-              aria-label="Sign out"
-              onClick={async () => {
-                await supabase.auth.signOut();
-                window.location.href = "/login";
-              }}
-            >
-              <LogOut className="h-4 w-4" />
-              Sign out
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" className="flex items-center gap-2 px-2" aria-label="User menu">
+                  <Avatar className="h-6 w-6">
+                    <AvatarFallback className="bg-primary text-primary-foreground text-xs">
+                      {initials}
+                    </AvatarFallback>
+                  </Avatar>
+                  <span>{profile?.display_name}</span>
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem onClick={replayTour} className="gap-2">
+                  <Map className="h-3.5 w-3.5" />
+                  Replay tour
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={async () => {
+                    await supabase.auth.signOut();
+                    window.location.href = "/login";
+                  }}
+                  className="gap-2"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
       <main className="flex-1 container py-6">
-        {/* Contextual tooltips */}
-        <ContextualTooltips role="auditor" />
-
         <div className="mb-6">
           <h1 className="text-2xl font-bold mb-2">Compliance Audit View</h1>
           <p className="text-muted-foreground">
@@ -110,7 +121,7 @@ export default function Auditor() {
 
         {/* Compliance Status Cards */}
         <div className="grid gap-4 md:grid-cols-3 mb-6">
-          <Card>
+          <Card data-tour="card-ai-authorization">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 {aiAuthStatus === "approved" && <ShieldCheck className="h-4 w-4 text-[hsl(var(--status-success))]" />}
@@ -141,7 +152,7 @@ export default function Auditor() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card data-tour="card-llm-compliance">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 <FileText className="h-4 w-4" />LLM Compliance
@@ -165,7 +176,7 @@ export default function Auditor() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card data-tour="card-deletion-proof">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 <ShieldCheck className="h-4 w-4" />Deletion Proof
@@ -202,10 +213,10 @@ export default function Auditor() {
 
         <Tabs defaultValue="timeline" className="space-y-4">
           <TabsList>
-            <TabsTrigger value="timeline" className="gap-2">
+            <TabsTrigger value="timeline" className="gap-2" data-tour="tab-timeline">
               <Clock className="h-4 w-4" />Event Timeline
             </TabsTrigger>
-            <TabsTrigger value="deletion-proof" className="gap-2">
+            <TabsTrigger value="deletion-proof" className="gap-2" data-tour="tab-deletion-proof-auditor">
               <ShieldCheck className="h-4 w-4" />Deletion Proof
             </TabsTrigger>
           </TabsList>

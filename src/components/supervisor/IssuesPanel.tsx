@@ -269,6 +269,7 @@ export function IssuesPanel({ events, onEventClick, acknowledgedIds = new Set(),
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <button
+                                data-tour="seen-toggle"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onToggleAcknowledged(event.event_id);

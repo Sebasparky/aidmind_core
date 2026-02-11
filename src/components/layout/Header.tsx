@@ -15,6 +15,8 @@ import { useDashboard } from "@/contexts/DashboardContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useOnboardingState } from "@/components/onboarding/WelcomeModal";
 import { resetContextualTooltips } from "@/components/onboarding/ContextualTooltips";
+import { useTourReplay } from "@/components/tour/useTourReplay";
+import { Map } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useDebounce } from "@/hooks/use-debounce";
 
@@ -32,6 +34,7 @@ export function Header() {
   const { searchQuery, setSearchQuery, clearSearch } = useDashboard();
   const { profile, signOut } = useAuth();
   const { replay } = useOnboardingState();
+  const { replayTour } = useTourReplay("caseworker");
   const [localSearch, setLocalSearch] = useState(searchQuery);
   const debouncedSearch = useDebounce(localSearch, 200);
   const [updates, setUpdates] = useState(mockUpdates);
@@ -188,6 +191,10 @@ export function Header() {
             <DropdownMenuItem onClick={handleReplayOnboarding} className="gap-2">
               <RotateCcw className="h-3.5 w-3.5" />
               Replay onboarding
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={replayTour} className="gap-2">
+              <Map className="h-3.5 w-3.5" />
+              Replay tour
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleSignOut}>Sign out</DropdownMenuItem>
