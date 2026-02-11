@@ -57,58 +57,56 @@ export default function Auditor() {
     : "?";
 
   return (
-    <div className="min-h-screen bg-canvas flex flex-col">
+    <div className="h-screen flex flex-col bg-background overflow-hidden">
       <TourController role="auditor" />
 
-      {/* Auditor Mode Banner */}
-      <header className="sticky top-0 z-50 h-16 bg-[hsl(var(--status-warning-muted))] border-b border-[hsl(var(--status-warning))]" data-tour="aud-banner">
-        <div className="h-full container px-6 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <AidMindBrand size="md" showWordmark={false} href="/auditor" />
-            <Separator orientation="vertical" className="h-5" />
-            <Eye className="h-5 w-5 text-[hsl(var(--status-warning-muted-foreground))]" />
-            <span className="font-semibold text-[hsl(var(--status-warning-muted-foreground))]">
-              AUDITOR MODE
-            </span>
-            <Badge variant="outline" className="text-xs">Read-Only Access</Badge>
-          </div>
-          <div className="flex items-center gap-3 text-sm text-[hsl(var(--status-warning-muted-foreground))]">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="flex items-center gap-2 px-2" aria-label="User menu">
-                  <Avatar className="h-6 w-6">
-                    <AvatarFallback className="bg-primary text-primary-foreground text-xs">
-                      {initials}
-                    </AvatarFallback>
-                  </Avatar>
-                  <span>{profile?.display_name}</span>
-                  <ChevronDown className="h-3.5 w-3.5" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem onClick={replayTour} className="gap-2">
-                  <Map className="h-3.5 w-3.5" />
-                  Replay tour
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={async () => {
-                    await supabase.auth.signOut();
-                    window.location.href = "/login";
-                  }}
-                  className="gap-2"
-                >
-                  <LogOut className="h-3.5 w-3.5" />
-                  Sign out
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+      {/* Auditor Header — same shell as Caseworker/Supervisor */}
+      <header className="h-16 border-b border-[hsl(var(--status-warning))] bg-[hsl(var(--status-warning-muted))] px-6 flex items-center justify-between flex-shrink-0" data-tour="aud-banner">
+        <div className="flex items-center gap-3">
+          <AidMindBrand size="md" showWordmark={false} href="/auditor" />
+          <Separator orientation="vertical" className="h-5" />
+          <Eye className="h-5 w-5 text-[hsl(var(--status-warning-muted-foreground))]" />
+          <span className="font-semibold text-[hsl(var(--status-warning-muted-foreground))]">
+            AUDITOR MODE
+          </span>
+          <Badge variant="outline" className="text-xs">Read-Only Access</Badge>
+        </div>
+        <div className="flex items-center gap-3 text-sm text-[hsl(var(--status-warning-muted-foreground))]">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="flex items-center gap-2 px-2" aria-label="User menu">
+                <Avatar className="h-6 w-6">
+                  <AvatarFallback className="bg-primary text-primary-foreground text-xs">
+                    {initials}
+                  </AvatarFallback>
+                </Avatar>
+                <span>{profile?.display_name}</span>
+                <ChevronDown className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem onClick={replayTour} className="gap-2">
+                <Map className="h-3.5 w-3.5" />
+                Replay tour
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={async () => {
+                  await supabase.auth.signOut();
+                  window.location.href = "/login";
+                }}
+                className="gap-2"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                Sign out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 container py-6">
+      <main className="flex-1 overflow-y-auto p-6 bg-[hsl(var(--canvas))]">
         <div className="mb-6">
           <h1 className="text-2xl font-bold mb-2">Compliance Audit View</h1>
           <p className="text-muted-foreground">
