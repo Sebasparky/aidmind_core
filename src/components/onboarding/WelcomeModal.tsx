@@ -1,8 +1,9 @@
 /**
  * WelcomeModal — First-login onboarding.
  *
- * Shows once (localStorage flag). Can be replayed via settings.
- * Non-blocking, informational, gentle.
+ * Shows once (localStorage flag). The guided tour only starts
+ * after the user explicitly clicks "Got it". Closing via X
+ * dismisses the modal without triggering the tour.
  */
 
 import { useEffect, useState } from "react";
@@ -16,38 +17,47 @@ import {
 import { Button } from "@/components/ui/button";
 import { CheckCircle2 } from "lucide-react";
 
-const ONBOARDED_KEY = "aidmind_onboarded";
+export const WELCOME_ACK_KEY = "aidmind_welcome_ack_v1";
 
 export function useOnboardingState() {
   const [showWelcome, setShowWelcome] = useState(false);
 
   useEffect(() => {
-    if (localStorage.getItem(ONBOARDED_KEY) !== "true") {
+    const ack = localStorage.getItem(WELCOME_ACK_KEY);
+    if (ack !== "true" && ack !== "dismissed") {
       setShowWelcome(true);
     }
   }, []);
 
-  const dismiss = () => {
-    localStorage.setItem(ONBOARDED_KEY, "true");
+  /** User clicked "Got it" — acknowledge and allow tour to start */
+  const acknowledge = () => {
+    localStorage.setItem(WELCOME_ACK_KEY, "true");
     setShowWelcome(false);
   };
 
-  const replay = () => {
-    localStorage.removeItem(ONBOARDED_KEY);
-    setShowWelcome(true);
+  /** User closed via X — dismiss without enabling tour auto-start */
+  const dismissViaX = () => {
+    localStorage.setItem(WELCOME_ACK_KEY, "dismissed");
+    setShowWelcome(false);
   };
 
-  return { showWelcome, dismiss, replay };
+  return { showWelcome, acknowledge, dismissViaX };
 }
 
 interface WelcomeModalProps {
   open: boolean;
-  onDismiss: () => void;
+  onAcknowledge: () => void;
+  onDismissViaX: () => void;
 }
 
-export function WelcomeModal({ open, onDismiss }: WelcomeModalProps) {
+export function WelcomeModal({ open, onAcknowledge, onDismissViaX }: WelcomeModalProps) {
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onDismiss()}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) onDismissViaX();
+      }}
+    >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="text-xl">Welcome to AidMind</DialogTitle>
@@ -66,7 +76,7 @@ export function WelcomeModal({ open, onDismiss }: WelcomeModalProps) {
           ))}
         </ul>
         <DialogFooter>
-          <Button onClick={onDismiss} className="w-full">
+          <Button onClick={onAcknowledge} className="w-full">
             Got it
           </Button>
         </DialogFooter>

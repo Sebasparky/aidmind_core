@@ -9,7 +9,8 @@ import { NavigationGuardProvider } from "@/contexts/NavigationGuardContext";
 import { DevRoleToggle } from "@/components/dev/DevRoleToggle";
 import { DevRlsCheck } from "@/components/dev/DevRlsCheck";
 import { RouteGuard } from "@/components/auth/RouteGuard";
-import { WelcomeModal, useOnboardingState } from "@/components/onboarding/WelcomeModal";
+import { WelcomeModal, useOnboardingState, WELCOME_ACK_KEY } from "@/components/onboarding/WelcomeModal";
+import { TOUR_REPLAY_EVENT } from "@/components/tour/types";
 import Login from "./pages/Login";
 import AccessPending from "./pages/AccessPending";
 import Index from "./pages/Index";
@@ -45,13 +46,20 @@ function RoleRedirect() {
 /** Onboarding overlay — renders welcome modal when appropriate */
 function OnboardingLayer() {
   const { isAuthenticated, status, role } = useAuth();
-  const { showWelcome, dismiss } = useOnboardingState();
+  const { showWelcome, acknowledge, dismissViaX } = useOnboardingState();
 
   if (!isAuthenticated || status !== "active" || !role) return null;
 
-  return <WelcomeModal open={showWelcome} onDismiss={dismiss} />;
-}
+  const handleAcknowledge = () => {
+    acknowledge();
+    // Start tour after a short delay so modal fully unmounts first
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent(TOUR_REPLAY_EVENT, { detail: { role } }));
+    }, 300);
+  };
 
+  return <WelcomeModal open={showWelcome} onAcknowledge={handleAcknowledge} onDismissViaX={dismissViaX} />;
+}
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <AuthProvider>

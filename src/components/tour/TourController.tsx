@@ -46,11 +46,15 @@ export function TourController({ role, onActivateTab }: TourControllerProps) {
 
   const steps = config?.steps ?? [];
 
-  // Auto-start on first login
+  // Auto-start on first login — only if welcome modal was acknowledged
   useEffect(() => {
     if (!config || steps.length === 0) return;
     const completed = localStorage.getItem(completedKey) === "true";
     if (completed) return;
+
+    // Gate: don't auto-start unless welcome was explicitly acknowledged
+    const welcomeAck = localStorage.getItem("aidmind_welcome_ack_v1");
+    if (welcomeAck !== "true") return;
 
     const timer = setTimeout(() => {
       const savedProgress = localStorage.getItem(progressKey);
