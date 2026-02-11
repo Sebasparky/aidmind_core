@@ -62,7 +62,7 @@ export default function Login() {
           <div className="flex justify-center mb-10">
             <AidMindBrand
               size="lg"
-              showWordmark={true}
+              showWordmark={false}
               className="text-[hsl(210,40%,98%)]"
             />
           </div>
