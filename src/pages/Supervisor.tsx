@@ -84,7 +84,7 @@ export default function Supervisor() {
   return (
     <div className="min-h-screen bg-canvas flex flex-col">
       <SupervisorHeader />
-      <TourController role="supervisor" />
+      <TourController role="supervisor" onActivateTab={setActiveTab} />
 
       <div className="flex-1 flex">
         <aside 
@@ -111,7 +111,7 @@ export default function Supervisor() {
                   size="sm"
                   onClick={() => setShowFilters(!showFilters)}
                   className="gap-2"
-                  data-tour="filter-toggle"
+                  data-tour="sup-filters-button"
                 >
                   {showFilters ? <X className="h-4 w-4" /> : <Filter className="h-4 w-4" />}
                   Filters
@@ -121,22 +121,22 @@ export default function Supervisor() {
                 </Button>
 
                 <TabsList className="bg-muted/50">
-                  <TabsTrigger value="daily-assurance" className="gap-2" data-tour="tab-daily-assurance">
+                  <TabsTrigger value="daily-assurance" className="gap-2" data-tour="sup-tab-daily-assurance">
                     <Gauge className="h-4 w-4" />Daily Assurance
                   </TabsTrigger>
-                  <TabsTrigger value="sessions" className="gap-2">
+                  <TabsTrigger value="sessions" className="gap-2" data-tour="sup-tab-sessions">
                     <LayoutList className="h-4 w-4" />Sessions
                   </TabsTrigger>
-                  <TabsTrigger value="issues" className="gap-2" data-tour="tab-issues">
+                  <TabsTrigger value="issues" className="gap-2" data-tour="sup-tab-system-issues">
                     <AlertTriangle className="h-4 w-4" />System Issues
                     {unacknowledgedCount > 0 && (
                       <Badge variant="destructive" className="ml-1 text-xs">{unacknowledgedCount}</Badge>
                     )}
                   </TabsTrigger>
-                  <TabsTrigger value="deletion-proof" className="gap-2" data-tour="tab-deletion-proof">
+                  <TabsTrigger value="deletion-proof" className="gap-2" data-tour="sup-tab-data-deletion">
                     <ShieldCheck className="h-4 w-4" />Data Deletion Proof
                   </TabsTrigger>
-                  <TabsTrigger value="governance" className="gap-2">
+                  <TabsTrigger value="governance" className="gap-2" data-tour="sup-tab-governance">
                     <Settings2 className="h-4 w-4" />Governance
                   </TabsTrigger>
                 </TabsList>

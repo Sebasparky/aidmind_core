@@ -60,7 +60,7 @@ export default function Auditor() {
       <TourController role="auditor" />
 
       {/* Auditor Mode Banner */}
-      <header className="sticky top-0 z-50 bg-[hsl(var(--status-warning-muted))] border-b border-[hsl(var(--status-warning))]" data-tour="auditor-banner">
+      <header className="sticky top-0 z-50 bg-[hsl(var(--status-warning-muted))] border-b border-[hsl(var(--status-warning))]" data-tour="aud-banner">
         <div className="container py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Eye className="h-5 w-5 text-[hsl(var(--status-warning-muted-foreground))]" />
@@ -121,7 +121,7 @@ export default function Auditor() {
 
         {/* Compliance Status Cards */}
         <div className="grid gap-4 md:grid-cols-3 mb-6">
-          <Card data-tour="card-ai-authorization">
+          <Card data-tour="aud-card-ai-auth">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 {aiAuthStatus === "approved" && <ShieldCheck className="h-4 w-4 text-[hsl(var(--status-success))]" />}
@@ -152,7 +152,7 @@ export default function Auditor() {
             </CardContent>
           </Card>
 
-          <Card data-tour="card-llm-compliance">
+          <Card data-tour="aud-card-llm-compliance">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 <FileText className="h-4 w-4" />LLM Compliance
@@ -176,7 +176,7 @@ export default function Auditor() {
             </CardContent>
           </Card>
 
-          <Card data-tour="card-deletion-proof">
+          <Card data-tour="aud-card-deletion-proof">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 <ShieldCheck className="h-4 w-4" />Deletion Proof
@@ -213,10 +213,10 @@ export default function Auditor() {
 
         <Tabs defaultValue="timeline" className="space-y-4">
           <TabsList>
-            <TabsTrigger value="timeline" className="gap-2" data-tour="tab-timeline">
+            <TabsTrigger value="timeline" className="gap-2" data-tour="aud-tab-timeline">
               <Clock className="h-4 w-4" />Event Timeline
             </TabsTrigger>
-            <TabsTrigger value="deletion-proof" className="gap-2" data-tour="tab-deletion-proof-auditor">
+            <TabsTrigger value="deletion-proof" className="gap-2" data-tour="aud-tab-deletion-proof">
               <ShieldCheck className="h-4 w-4" />Deletion Proof
             </TabsTrigger>
           </TabsList>

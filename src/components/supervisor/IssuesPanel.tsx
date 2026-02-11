@@ -150,7 +150,7 @@ export function IssuesPanel({ events, onEventClick, acknowledgedIds = new Set(),
 
   return (
     <Card className="h-full overflow-hidden">
-      <CardHeader className="pb-3">
+       <CardHeader className="pb-3" data-tour="sup-issues-header">
         <div className="flex items-center gap-2">
           <AlertTriangle className="h-5 w-5 text-[hsl(var(--status-warning))]" />
           <div>
@@ -269,7 +269,7 @@ export function IssuesPanel({ events, onEventClick, acknowledgedIds = new Set(),
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <button
-                                data-tour="seen-toggle"
+                                data-tour="sup-seen-toggle"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onToggleAcknowledged(event.event_id);

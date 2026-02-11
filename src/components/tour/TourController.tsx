@@ -3,8 +3,10 @@
  *
  * - Reads/writes localStorage for completion and progress
  * - Locates anchor elements via data-tour attributes
- * - Gracefully skips missing anchors
+ * - Gracefully skips missing anchors (with fallback)
  * - Manages spotlight overlay + popover positioning
+ * - Auto-switches tabs via activateTab on steps
+ * - Repositions on scroll/resize
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -18,49 +20,37 @@ import type { TourStep } from "./types";
 
 interface TourControllerProps {
   role: AppRole;
+  /** Optional callback to programmatically switch tabs */
+  onActivateTab?: (tabValue: string) => void;
 }
 
 function findAnchor(anchor: string): HTMLElement | null {
   return document.querySelector(`[data-tour="${anchor}"]`);
 }
 
-function getVisibleSteps(steps: TourStep[]): { step: TourStep; element: HTMLElement }[] {
-  const result: { step: TourStep; element: HTMLElement }[] = [];
-  for (const step of steps) {
-    const el = findAnchor(step.anchor);
-    if (el) {
-      result.push({ step, element: el });
-    }
-  }
-  return result;
+function resolveElement(step: TourStep): HTMLElement | null {
+  return findAnchor(step.anchor) || (step.fallbackAnchor ? findAnchor(step.fallbackAnchor) : null);
 }
 
-export function TourController({ role }: TourControllerProps) {
+export function TourController({ role, onActivateTab }: TourControllerProps) {
   const config = tourConfigs[role];
   const [active, setActive] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [targetRect, setTargetRect] = useState<DOMRect | null>(null);
-  const [visibleSteps, setVisibleSteps] = useState<{ step: TourStep; element: HTMLElement }[]>([]);
   const rafRef = useRef<number>();
 
   const completedKey = getTourCompletedKey(role);
   const progressKey = getTourProgressKey(role);
 
-  // Check if tour should auto-start
-  useEffect(() => {
-    if (!config) return;
+  const steps = config?.steps ?? [];
 
+  // Auto-start on first login
+  useEffect(() => {
+    if (!config || steps.length === 0) return;
     const completed = localStorage.getItem(completedKey) === "true";
     if (completed) return;
 
-    // Delay to let page render and data-tour attributes mount
     const timer = setTimeout(() => {
-      const steps = getVisibleSteps(config.steps);
-      if (steps.length === 0) return;
-
-      setVisibleSteps(steps);
-
-      // Resume from saved progress if available
       const savedProgress = localStorage.getItem(progressKey);
       const startIndex = savedProgress ? Math.min(parseInt(savedProgress, 10), steps.length - 1) : 0;
       setCurrentIndex(startIndex);
@@ -68,32 +58,58 @@ export function TourController({ role }: TourControllerProps) {
     }, 800);
 
     return () => clearTimeout(timer);
-  }, [config, completedKey, progressKey]);
+  }, [config, completedKey, progressKey, steps.length]);
 
-  // Update target rect when step changes
-  const updateRect = useCallback(() => {
-    if (!active || visibleSteps.length === 0) return;
+  // When step changes, activate the required tab then scroll element into view
+  useEffect(() => {
+    if (!active || steps.length === 0) return;
 
-    const { element } = visibleSteps[currentIndex];
-    if (element) {
-      const rect = element.getBoundingClientRect();
-      setTargetRect(rect);
-      element.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    const step = steps[currentIndex];
+    if (!step) return;
+
+    // Activate tab if needed
+    if (step.activateTab && onActivateTab) {
+      onActivateTab(step.activateTab);
     }
-  }, [active, currentIndex, visibleSteps]);
+
+    // Wait a tick for DOM to settle after tab switch, then find + scroll
+    const timer = setTimeout(() => {
+      const el = resolveElement(step);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+        // Wait for scroll to finish before measuring
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setTargetRect(el.getBoundingClientRect());
+          });
+        });
+      } else {
+        // No anchor found — show centered (null rect)
+        setTargetRect(null);
+      }
+    }, 150);
+
+    return () => clearTimeout(timer);
+  }, [active, currentIndex, steps, onActivateTab]);
+
+  // Reposition on scroll/resize
+  const updateRect = useCallback(() => {
+    if (!active || steps.length === 0) return;
+    const step = steps[currentIndex];
+    if (!step) return;
+    const el = resolveElement(step);
+    if (el) {
+      setTargetRect(el.getBoundingClientRect());
+    }
+  }, [active, currentIndex, steps]);
 
   useEffect(() => {
-    updateRect();
-
-    // Track scroll/resize for repositioning
     const handleUpdate = () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       rafRef.current = requestAnimationFrame(updateRect);
     };
-
     window.addEventListener("scroll", handleUpdate, true);
     window.addEventListener("resize", handleUpdate);
-
     return () => {
       window.removeEventListener("scroll", handleUpdate, true);
       window.removeEventListener("resize", handleUpdate);
@@ -109,10 +125,10 @@ export function TourController({ role }: TourControllerProps) {
   }, [active, currentIndex, progressKey]);
 
   const handleNext = useCallback(() => {
-    if (currentIndex < visibleSteps.length - 1) {
+    if (currentIndex < steps.length - 1) {
       setCurrentIndex((prev) => prev + 1);
     }
-  }, [currentIndex, visibleSteps.length]);
+  }, [currentIndex, steps.length]);
 
   const handleBack = useCallback(() => {
     if (currentIndex > 0) {
@@ -126,24 +142,24 @@ export function TourController({ role }: TourControllerProps) {
     localStorage.removeItem(progressKey);
   }, [completedKey, progressKey]);
 
-  if (!active || visibleSteps.length === 0) return null;
+  if (!active || steps.length === 0) return null;
 
-  const currentStep = visibleSteps[currentIndex];
+  const currentStep = steps[currentIndex];
   if (!currentStep) return null;
 
   return createPortal(
     <>
       <TourSpotlight targetRect={targetRect} visible={active} />
       <TourPopover
-        step={currentStep.step}
+        step={currentStep}
         stepIndex={currentIndex}
-        totalSteps={visibleSteps.length}
+        totalSteps={steps.length}
         targetRect={targetRect}
         onNext={handleNext}
         onBack={handleBack}
         onSkip={handleSkip}
         isFirst={currentIndex === 0}
-        isLast={currentIndex === visibleSteps.length - 1}
+        isLast={currentIndex === steps.length - 1}
       />
     </>,
     document.body

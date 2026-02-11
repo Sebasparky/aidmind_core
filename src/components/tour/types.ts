@@ -1,8 +1,12 @@
 import type { AppRole } from "@/contexts/AuthContext";
 
+export type TourPlacement = "bottom" | "top" | "left" | "right";
+
 export interface TourStep {
   /** data-tour attribute value to anchor to */
   anchor: string;
+  /** Fallback anchor if primary is missing */
+  fallbackAnchor?: string;
   /** 3–6 word title */
   title: string;
   /** What this does */
@@ -11,6 +15,10 @@ export interface TourStep {
   usage: string;
   /** Optional boundary note */
   boundaryNote?: string;
+  /** Preferred placement */
+  placement?: TourPlacement;
+  /** Tab value to activate before showing this step (supervisor tabs) */
+  activateTab?: string;
 }
 
 export interface TourConfig {
