@@ -1,22 +1,32 @@
 
 
-## Fix Auditor Separator Color
+## Login Screen: Logo-only + Card Glow
 
-**Problem:** The `bg-border` CSS variable resolves to a color that appears bluish against the Auditor header's warm yellow/amber background (`bg-[hsl(var(--status-warning-muted))]`). On the Supervisor header (neutral `bg-card` background), the same color looks grey.
+Two changes to match the reference image:
 
-**Fix:** Use a hardcoded neutral grey instead of the theme variable so the separator looks consistently grey regardless of surrounding background color.
+### 1. Remove wordmark from logo (Login.tsx, line 63-67)
 
-**File:** `src/pages/Auditor.tsx`, line 67
+Change `showWordmark={true}` to `showWordmark={false}` so only the eye icon logo displays, centered.
 
-**Current:**
-```tsx
-<Separator orientation="vertical" className="h-6 bg-border" />
+### 2. Add subtle glow behind the card (index.css)
+
+Add a `box-shadow` glow to `.login-card` using a soft blue radial spread, matching the reference image's ambient light effect:
+
+```css
+.login-card {
+  background: hsl(222 47% 14%);
+  border: 1px solid hsl(217 33% 20%);
+  border-radius: var(--radius);
+  box-shadow:
+    0 4px 24px -4px hsl(0 0% 0% / 0.3),
+    0 0 80px 20px hsl(217 91% 60% / 0.07),
+    0 0 160px 60px hsl(217 91% 60% / 0.04);
+}
 ```
 
-**Updated:**
-```tsx
-<Separator orientation="vertical" className="h-6 bg-neutral-300 dark:bg-neutral-600" />
-```
+The two extra shadow layers create a soft blue ambient glow radiating outward from the card, similar to the reference.
 
-This ensures the separator reads as a clean grey divider against the amber/warning background, matching the visual weight of the Supervisor header's separator.
+### Files modified
+- `src/pages/Login.tsx` -- one prop change (`showWordmark={false}`)
+- `src/index.css` -- extended `box-shadow` on `.login-card`
 
