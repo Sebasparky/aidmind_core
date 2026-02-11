@@ -3,9 +3,9 @@ import aidmindLogo from "@/assets/aidmind_logo_transparent.png";
 import { cn } from "@/lib/utils";
 
 const sizeMap = {
-  sm: "h-5",
-  md: "h-7",
-  lg: "h-11",
+  sm: "h-5 min-h-[20px]",
+  md: "h-7 min-h-[20px]",
+  lg: "h-12 min-h-[20px]",
 } as const;
 
 interface AidMindBrandProps {
