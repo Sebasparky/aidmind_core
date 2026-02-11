@@ -1,4 +1,4 @@
-import { Search, Bell, ChevronDown, X, Check, FileText, Calendar, MessageSquare, RotateCcw } from "lucide-react";
+import { Search, Bell, ChevronDown, X, Check, FileText, Calendar, MessageSquare } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,8 +13,6 @@ import { useNavigate } from "react-router-dom";
 import { useNavigationGuard } from "@/contexts/NavigationGuardContext";
 import { useDashboard } from "@/contexts/DashboardContext";
 import { useAuth } from "@/contexts/AuthContext";
-import { useOnboardingState } from "@/components/onboarding/WelcomeModal";
-import { resetContextualTooltips } from "@/components/onboarding/ContextualTooltips";
 import { useTourReplay } from "@/components/tour/useTourReplay";
 import { Map } from "lucide-react";
 import { useState, useEffect } from "react";
@@ -33,7 +31,6 @@ export function Header() {
   const { guardActive, guardedNavigate } = useNavigationGuard();
   const { searchQuery, setSearchQuery, clearSearch } = useDashboard();
   const { profile, signOut } = useAuth();
-  const { replay } = useOnboardingState();
   const { replayTour } = useTourReplay("caseworker");
   const [localSearch, setLocalSearch] = useState(searchQuery);
   const debouncedSearch = useDebounce(localSearch, 200);
@@ -68,10 +65,6 @@ export function Header() {
     setUpdates((prev) => prev.map((u) => ({ ...u, read: true })));
   };
 
-  const handleReplayOnboarding = () => {
-    resetContextualTooltips();
-    replay();
-  };
 
   const handleSignOut = async () => {
     await signOut();
@@ -188,10 +181,6 @@ export function Header() {
           <DropdownMenuContent align="end" className="w-48 bg-popover">
             <div className="px-2 py-1.5 text-sm text-muted-foreground">{profile?.display_name}</div>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleReplayOnboarding} className="gap-2">
-              <RotateCcw className="h-3.5 w-3.5" />
-              Replay onboarding
-            </DropdownMenuItem>
             <DropdownMenuItem onClick={replayTour} className="gap-2">
               <Map className="h-3.5 w-3.5" />
               Replay tour
