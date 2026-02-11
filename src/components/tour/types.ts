@@ -28,6 +28,7 @@ export interface TourConfig {
 
 export const TOUR_STORAGE_PREFIX = "aidmind_tour_completed_";
 export const TOUR_PROGRESS_PREFIX = "aidmind_tour_progress_";
+export const TOUR_REPLAY_EVENT = "aidmind:tour-replay";
 
 export function getTourCompletedKey(role: AppRole): string {
   return `${TOUR_STORAGE_PREFIX}${role}_v1`;
