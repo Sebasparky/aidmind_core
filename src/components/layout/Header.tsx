@@ -1,5 +1,5 @@
 import { Search, Bell, ChevronDown, X, Check, FileText, Calendar, MessageSquare } from "lucide-react";
-import aidmindLogo from "@/assets/aidmind_logo_transparent.png";
+import { AidMindBrand } from "@/components/brand/AidMindBrand";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -75,13 +75,7 @@ export function Header() {
   return (
     <header className="h-16 border-b border-border bg-card px-6 flex items-center justify-between">
       {/* Left: Logo */}
-      <button
-        onClick={handleLogoClick}
-        className="flex items-center gap-2 hover:opacity-80 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-lg"
-        aria-label="Go to dashboard"
-      >
-        <img src={aidmindLogo} alt="AidMind" className="h-7 md:h-7 w-auto" />
-      </button>
+      <AidMindBrand size="md" showWordmark={false} onClick={handleLogoClick} />
 
       {/* Center: Search */}
       <div className="flex-1 max-w-xl mx-8">
