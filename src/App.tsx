@@ -1,3 +1,4 @@
+import { useState, useEffect, useCallback } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -60,6 +61,35 @@ function OnboardingLayer() {
 
   return <WelcomeModal open={showWelcome} onAcknowledge={handleAcknowledge} onDismissViaX={dismissViaX} />;
 }
+
+/** Dev mode panels — toggleable via VITE_DEV_MODE + ⌘+Shift+D runtime toggle */
+function DevModeLayer() {
+  const envEnabled = import.meta.env.VITE_DEV_MODE === 'true';
+  const [runtimeHidden, setRuntimeHidden] = useState(false);
+
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'D') {
+      e.preventDefault();
+      setRuntimeHidden((prev) => !prev);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!envEnabled) return;
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [envEnabled, handleKeyDown]);
+
+  if (!envEnabled || runtimeHidden) return null;
+
+  return (
+    <>
+      <DevRoleToggle />
+      <DevRlsCheck />
+    </>
+  );
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <AuthProvider>
@@ -126,8 +156,7 @@ const App = () => (
               <OnboardingLayer />
             </DashboardProvider>
           </NavigationGuardProvider>
-          <DevRoleToggle />
-          <DevRlsCheck />
+          <DevModeLayer />
         </BrowserRouter>
       </TooltipProvider>
     </AuthProvider>

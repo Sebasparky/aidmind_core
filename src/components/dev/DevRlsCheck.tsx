@@ -29,7 +29,7 @@ export function DevRlsCheck() {
     message: "Click to test RLS on eye_events",
   });
 
-  if (!import.meta.env.DEV) return null;
+  if (import.meta.env.VITE_DEV_MODE !== 'true') return null;
   if (!isAuthenticated) return null;
 
   const runCheck = async () => {
