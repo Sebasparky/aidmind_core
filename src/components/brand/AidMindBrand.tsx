@@ -1,11 +1,11 @@
 import { Link } from "react-router-dom";
-import aidmindLogo from "@/assets/aidmind_logo_transparent.png";
+import aidmindLogo from "@/assets/aidmind_logo_cropped.png";
 import { cn } from "@/lib/utils";
 
 const sizeMap = {
-  sm: "h-7 min-h-[20px]",
-  md: "h-9 min-h-[20px]",
-  lg: "h-14 min-h-[20px]",
+  sm: "h-7 sm:h-8",
+  md: "h-7 sm:h-8",
+  lg: "h-12",
 } as const;
 
 interface AidMindBrandProps {
