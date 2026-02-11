@@ -1,4 +1,5 @@
 import { Search, Bell, ChevronDown, X, Check, FileText, Calendar, MessageSquare } from "lucide-react";
+import aidmindLogo from "@/assets/aidmind_logo_transparent.png";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -79,14 +80,7 @@ export function Header() {
         className="flex items-center gap-2 hover:opacity-80 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-lg"
         aria-label="Go to dashboard"
       >
-        <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-          <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-primary-foreground" stroke="currentColor" strokeWidth="2">
-            <path d="M12 2L2 7l10 5 10-5-10-5z" />
-            <path d="M2 17l10 5 10-5" />
-            <path d="M2 12l10 5 10-5" />
-          </svg>
-        </div>
-        <span className="text-xl font-semibold text-foreground">AidMind</span>
+        <img src={aidmindLogo} alt="AidMind" className="h-7 md:h-7 w-auto" />
       </button>
 
       {/* Center: Search */}
