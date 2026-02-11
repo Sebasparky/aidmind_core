@@ -64,7 +64,7 @@ export default function Auditor() {
       <header className="h-16 border-b border-[hsl(var(--status-warning))] bg-[hsl(var(--status-warning-muted))] px-6 flex items-center justify-between flex-shrink-0" data-tour="aud-banner">
         <div className="flex items-center gap-3">
           <AidMindBrand size="md" showWordmark={false} href="/auditor" />
-          <Separator orientation="vertical" className="h-5" />
+          <Separator orientation="vertical" className="h-6 bg-border" />
           <Eye className="h-5 w-5 text-[hsl(var(--status-warning-muted-foreground))]" />
           <span className="font-semibold text-[hsl(var(--status-warning-muted-foreground))]">
             AUDITOR MODE
