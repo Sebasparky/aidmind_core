@@ -40,11 +40,53 @@ export function TourController({ role, onActivateTab }: TourControllerProps) {
   const [targetRect, setTargetRect] = useState<DOMRect | null>(null);
   const [replayNonce, setReplayNonce] = useState(0);
   const rafRef = useRef<number>();
+  const [positioned, setPositioned] = useState(false);
 
   const completedKey = getTourCompletedKey(role);
   const progressKey = getTourProgressKey(role);
 
   const steps = config?.steps ?? [];
+
+  // Helper: wait for a tour anchor to be measurable before proceeding
+  const waitForTarget = useCallback(
+    (step: TourStep, timeoutMs = 2000): Promise<DOMRect | null> => {
+      return new Promise((resolve) => {
+        const start = Date.now();
+        let lastRect: DOMRect | null = null;
+        let stableCount = 0;
+
+        function check() {
+          const el = resolveElement(step);
+          if (el) {
+            const rect = el.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              if (
+                lastRect &&
+                Math.abs(rect.top - lastRect.top) < 2 &&
+                Math.abs(rect.left - lastRect.left) < 2
+              ) {
+                stableCount++;
+              } else {
+                stableCount = 0;
+              }
+              lastRect = rect;
+              if (stableCount >= 2) {
+                resolve(rect);
+                return;
+              }
+            }
+          }
+          if (Date.now() - start > timeoutMs) {
+            resolve(lastRect);
+            return;
+          }
+          requestAnimationFrame(check);
+        }
+        requestAnimationFrame(check);
+      });
+    },
+    []
+  );
 
   // Auto-start on first login — only if welcome modal was acknowledged
   useEffect(() => {
@@ -56,19 +98,35 @@ export function TourController({ role, onActivateTab }: TourControllerProps) {
     const welcomeAck = localStorage.getItem("aidmind_welcome_ack_v1");
     if (welcomeAck !== "true") return;
 
-    const timer = setTimeout(() => {
+    let cancelled = false;
+    const timer = setTimeout(async () => {
       const savedProgress = localStorage.getItem(progressKey);
       const startIndex = savedProgress ? Math.min(parseInt(savedProgress, 10), steps.length - 1) : 0;
+      const step = steps[startIndex];
+
+      // Wait for target to be stable before showing
+      if (step) {
+        const rect = await waitForTarget(step);
+        if (cancelled) return;
+        if (rect) {
+          setTargetRect(rect);
+          setPositioned(true);
+        }
+      }
+
       setCurrentIndex(startIndex);
       setActive(true);
     }, 800);
 
-    return () => clearTimeout(timer);
-  }, [config, completedKey, progressKey, steps.length, replayNonce]);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [config, completedKey, progressKey, steps.length, replayNonce, waitForTarget]);
 
   // Listen for replay events
   useEffect(() => {
-    const handler = (e: Event) => {
+    const handler = async (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.role !== role) return;
 
@@ -76,17 +134,25 @@ export function TourController({ role, onActivateTab }: TourControllerProps) {
       setActive(false);
       setCurrentIndex(0);
       setTargetRect(null);
+      setPositioned(false);
       setReplayNonce((n) => n + 1);
 
-      // Re-enable on next frame so component fully resets
-      requestAnimationFrame(() => {
-        setActive(true);
-      });
+      // Wait for first step target before showing
+      const step = steps[0];
+      if (step) {
+        const rect = await waitForTarget(step);
+        if (rect) {
+          setTargetRect(rect);
+          setPositioned(true);
+        }
+      }
+
+      setActive(true);
     };
 
     window.addEventListener(TOUR_REPLAY_EVENT, handler);
     return () => window.removeEventListener(TOUR_REPLAY_EVENT, handler);
-  }, [role]);
+  }, [role, steps, waitForTarget]);
 
   // When step changes, activate the required tab then scroll element into view
   useEffect(() => {
@@ -98,6 +164,12 @@ export function TourController({ role, onActivateTab }: TourControllerProps) {
     // Activate tab if needed
     if (step.activateTab && onActivateTab) {
       onActivateTab(step.activateTab);
+    }
+
+    // For step 0 when already positioned by waitForTarget, skip re-measure
+    if (currentIndex === 0 && positioned) {
+      setPositioned(false); // consume the flag
+      return;
     }
 
     // Wait a tick for DOM to settle after tab switch, then find + scroll
@@ -118,7 +190,7 @@ export function TourController({ role, onActivateTab }: TourControllerProps) {
     }, 150);
 
     return () => clearTimeout(timer);
-  }, [active, currentIndex, steps, onActivateTab]);
+  }, [active, currentIndex, steps, onActivateTab, positioned]);
 
   // Reposition on scroll/resize
   const updateRect = useCallback(() => {
