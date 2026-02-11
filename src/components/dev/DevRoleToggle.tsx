@@ -30,8 +30,8 @@ const ROLE_ROUTES: Record<AppRole, string> = {
 const TOGGLE_ROLES: AppRole[] = ["caseworker", "supervisor", "auditor"];
 
 export function DevRoleToggle() {
-  // Hard gate — tree-shaken in production builds
-  if (!import.meta.env.DEV) return null;
+  // Gate on VITE_DEV_MODE env var (false in production builds)
+  if (import.meta.env.VITE_DEV_MODE !== 'true') return null;
 
   const { role, devRoleOverride, setDevRoleOverride, isAuthenticated } = useAuth();
   const navigate = useNavigate();
