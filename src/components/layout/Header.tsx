@@ -82,9 +82,9 @@ export function Header() {
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            type="search"
+            type="text"
             placeholder="Search cases, tasks, notes..."
-            className="pl-10 pr-10 h-10 bg-secondary border-border"
+            className="pl-10 pr-10 h-10 bg-secondary border-border [&::-webkit-search-cancel-button]:hidden"
             aria-label="Search cases, tasks, and notes"
             value={localSearch}
             onChange={(e) => setLocalSearch(e.target.value)}

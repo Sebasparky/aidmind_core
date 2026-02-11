@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { AlertCircle, Clock, FileWarning, ChevronRight, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -56,6 +56,7 @@ interface DerivedSignalsPanelProps {
   items?: DerivedSignalItem[];
   onItemClick?: (item: DerivedSignalItem) => void;
   onOpenSession?: (sessionId: string) => void;
+  searchQuery?: string;
 }
 
 // Placeholder data for v1 demonstration
@@ -168,10 +169,22 @@ function signalToObligation(item: DerivedSignalItem): ObligationData {
   };
 }
 
-export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSession }: DerivedSignalsPanelProps) {
-  const [displayItems, setDisplayItems] = useState<DerivedSignalItem[]>(items ?? placeholderItems);
+export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSession, searchQuery = "" }: DerivedSignalsPanelProps) {
+  const [allItems, setAllItems] = useState<DerivedSignalItem[]>(items ?? placeholderItems);
   const [selectedObligation, setSelectedObligation] = useState<ObligationData | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+
+  const displayItems = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return allItems;
+    return allItems.filter((item) =>
+      item.obligation.toLowerCase().includes(q) ||
+      item.source.label.toLowerCase().includes(q) ||
+      (item.timeContext?.toLowerCase().includes(q)) ||
+      (item.obligationDetail?.relatedSession?.label.toLowerCase().includes(q)) ||
+      (item.obligationDetail?.relatedSession?.caseLabel?.toLowerCase().includes(q))
+    );
+  }, [allItems, searchQuery]);
 
   const handleCardClick = (item: DerivedSignalItem) => {
     onItemClick?.(item);
@@ -180,7 +193,7 @@ export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSessi
   };
 
   const handleResolve = (id: string) => {
-    setDisplayItems((prev) => prev.filter((item) => item.id !== id));
+    setAllItems((prev) => prev.filter((item) => item.id !== id));
     setPanelOpen(false);
     setSelectedObligation(null);
     toast({ title: "Obligation resolved", description: "Removed from Derived Signals." });
@@ -193,7 +206,7 @@ export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSessi
   };
 
   const handleDismiss = (id: string) => {
-    setDisplayItems((prev) => prev.filter((item) => item.id !== id));
+    setAllItems((prev) => prev.filter((item) => item.id !== id));
     setPanelOpen(false);
     setSelectedObligation(null);
     toast({ title: "Obligation dismissed", description: "Removed from Derived Signals." });
@@ -241,10 +254,12 @@ export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSessi
                 <AlertCircle className="h-6 w-6 text-muted-foreground/50" />
               </div>
               <p className="text-sm text-muted-foreground">
-                No derived signals at this time.
+                {searchQuery.trim() ? "No matches in Derived Signals" : "No derived signals at this time."}
               </p>
               <p className="text-xs text-muted-foreground/70 mt-1">
-                Available policy context does not indicate outstanding documentation considerations.
+                {searchQuery.trim()
+                  ? "Try adjusting your search"
+                  : "Available policy context does not indicate outstanding documentation considerations."}
               </p>
             </div>
         ) : (

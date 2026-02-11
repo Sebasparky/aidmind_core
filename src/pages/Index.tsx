@@ -6,8 +6,11 @@ import { ActiveSessionsPanel } from "@/components/dashboard/ActiveSessionsPanel"
 import { SessionHistoryPanel } from "@/components/dashboard/SessionHistoryPanel";
 import { TourController } from "@/components/tour/TourController";
 import { V1_DASHBOARD_REDESIGN } from "@/config/features";
+import { useDashboard } from "@/contexts/DashboardContext";
 
 const Index = () => {
+  const { searchQuery } = useDashboard();
+
   if (V1_DASHBOARD_REDESIGN) {
     return (
       <DashboardLayout>
@@ -15,13 +18,13 @@ const Index = () => {
         
         <div className="grid grid-cols-3 gap-4 h-full min-h-0">
           <div className="min-h-0" data-tour="derived-signals">
-            <DerivedSignalsPanel className="h-full" />
+            <DerivedSignalsPanel className="h-full" searchQuery={searchQuery} />
           </div>
           <div className="min-h-0">
-            <ActiveSessionsPanel className="h-full" />
+            <ActiveSessionsPanel className="h-full" searchQuery={searchQuery} />
           </div>
           <div className="min-h-0" data-tour="session-history">
-            <SessionHistoryPanel className="h-full" />
+            <SessionHistoryPanel className="h-full" searchQuery={searchQuery} />
           </div>
         </div>
       </DashboardLayout>

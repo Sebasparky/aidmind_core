@@ -81,9 +81,10 @@ function getOutcomeLabel(outcome: HistoricalSession["outcome"]) {
 
 interface SessionHistoryPanelProps {
   className?: string;
+  searchQuery?: string;
 }
 
-export function SessionHistoryPanel({ className }: SessionHistoryPanelProps) {
+export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery = "" }: SessionHistoryPanelProps) {
   const { notes, loading, error, refresh } = useRecentNotes(20);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -112,11 +113,14 @@ export function SessionHistoryPanel({ className }: SessionHistoryPanelProps) {
       reviewerUsed: note.status === "exported",
     }));
 
-  // Apply search filter
-  const filteredSessions = searchQuery.trim()
+  // Apply search filter (combine local + global search)
+  const combinedQuery = (globalSearchQuery.trim() || searchQuery.trim()).toLowerCase();
+  const filteredSessions = combinedQuery
     ? historicalSessions.filter((session) =>
-        session.caseLabel.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        session.interactionType.toLowerCase().includes(searchQuery.toLowerCase())
+        session.caseLabel.toLowerCase().includes(combinedQuery) ||
+        session.interactionType.toLowerCase().includes(combinedQuery) ||
+        getOutcomeLabel(session.outcome).toLowerCase().includes(combinedQuery) ||
+        formatDate(session.completedAt).toLowerCase().includes(combinedQuery)
       )
     : historicalSessions;
 
@@ -206,10 +210,10 @@ export function SessionHistoryPanel({ className }: SessionHistoryPanelProps) {
                 <History className="h-6 w-6 text-muted-foreground/50" />
               </div>
               <p className="text-sm text-muted-foreground">
-                {searchQuery.trim() ? "No sessions found" : "No session history"}
+                {combinedQuery ? "No matches in Session History" : "No session history"}
               </p>
               <p className="text-xs text-muted-foreground/70 mt-1">
-                {searchQuery.trim() 
+                {combinedQuery 
                   ? "Try adjusting your search" 
                   : "Completed sessions will appear here"}
               </p>

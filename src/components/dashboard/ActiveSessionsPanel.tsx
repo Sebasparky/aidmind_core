@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Sparkles, Shield, Clock, RefreshCw, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -71,9 +71,10 @@ function getToolsUsedColor(guidanceUsed: boolean, reviewerUsed: boolean): string
 
 interface ActiveSessionsPanelProps {
   className?: string;
+  searchQuery?: string;
 }
 
-export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
+export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessionsPanelProps) {
   const navigate = useNavigate();
   const { notes, loading, error, refresh } = useRecentNotes(20);
   const [startSessionOpen, setStartSessionOpen] = useState(false);
@@ -96,6 +97,15 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
       guidanceUsed: false,
       reviewerUsed: false,
     }));
+
+  const filteredActiveSessions = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return activeSessions;
+    return activeSessions.filter((s) =>
+      s.caseLabel.toLowerCase().includes(q) ||
+      s.interactionType.toLowerCase().includes(q)
+    );
+  }, [activeSessions, searchQuery]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -220,21 +230,23 @@ export function ActiveSessionsPanel({ className }: ActiveSessionsPanelProps) {
               Try again
             </Button>
           </div>
-        ) : activeSessions.length === 0 ? (
+        ) : filteredActiveSessions.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center px-4">
             <div className="w-12 h-12 rounded-full bg-muted/50 flex items-center justify-center mb-4">
               <Clock className="h-6 w-6 text-muted-foreground/50" />
             </div>
             <p className="text-sm text-muted-foreground">
-              No active sessions
+              {searchQuery.trim() ? "No matches in Active Sessions" : "No active sessions"}
             </p>
             <p className="text-xs text-muted-foreground/70 mt-1">
-              Start a new session to access guidance and review tools
+              {searchQuery.trim()
+                ? "Try adjusting your search"
+                : "Start a new session to access guidance and review tools"}
             </p>
           </div>
         ) : (
           <div className="space-y-3">
-            {activeSessions.map((session) => (
+            {filteredActiveSessions.map((session) => (
               <div
                 key={session.id}
                 className="p-4 rounded-lg border border-border bg-background hover:bg-accent/30 transition-colors"
