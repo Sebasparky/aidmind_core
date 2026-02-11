@@ -1,8 +1,8 @@
 /**
- * Login Page — AidMind MVP
+ * Login Page — AidMind
  *
- * Dark theme, calm, modern, minimal.
- * Email + password only. No sign-up marketing.
+ * Dark theme, calm, modern, enterprise.
+ * Centered card layout. No marketing copy.
  */
 
 import { useState } from "react";
@@ -22,10 +22,9 @@ export default function Login() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Already authenticated → let route guards handle redirect
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-[hsl(222,47%,11%)] flex items-center justify-center">
+      <div className="login-bg min-h-screen flex items-center justify-center">
         <Loader2 className="h-6 w-6 animate-spin text-[hsl(215,20%,65%)]" />
       </div>
     );
@@ -46,94 +45,107 @@ export default function Login() {
     });
 
     if (signInError) {
-      setError(signInError.message === "Invalid login credentials"
-        ? "Invalid email or password."
-        : signInError.message
+      setError(
+        signInError.message === "Invalid login credentials"
+          ? "Invalid email or password."
+          : signInError.message
       );
     }
     setSubmitting(false);
   };
 
   return (
-    <div className="min-h-screen bg-[hsl(222,47%,11%)] flex items-center justify-center px-4">
-      <div className="w-full max-w-sm space-y-6">
-        {/* Branding */}
-        <div className="text-center flex flex-col items-center">
-          <AidMindBrand size="lg" showWordmark={true} className="text-[hsl(210,40%,98%)]" />
-        </div>
-
-        {/* Form */}
-        <form onSubmit={handleSignIn} className="space-y-5">
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email" className="text-sm text-[hsl(215,20%,65%)]">
-                Email
-              </Label>
-              <Input
-                id="email"
-                type="email"
-                autoComplete="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="bg-[hsl(222,47%,14%)] border-[hsl(217,33%,20%)] text-[hsl(210,40%,98%)] placeholder:text-[hsl(215,20%,40%)] focus:border-[hsl(217,91%,60%)] focus:ring-[hsl(217,91%,60%)]"
-                placeholder="you@example.com"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password" className="text-sm text-[hsl(215,20%,65%)]">
-                Password
-              </Label>
-              <Input
-                id="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="bg-[hsl(222,47%,14%)] border-[hsl(217,33%,20%)] text-[hsl(210,40%,98%)] placeholder:text-[hsl(215,20%,40%)] focus:border-[hsl(217,91%,60%)] focus:ring-[hsl(217,91%,60%)]"
-                placeholder="••••••••"
-              />
-            </div>
+    <div className="login-bg min-h-screen flex items-center justify-center px-4">
+      <div className="relative z-10 w-full max-w-[440px]">
+        <div className="login-card px-8 py-10 sm:px-10 sm:py-12">
+          {/* Logo */}
+          <div className="flex justify-center mb-10">
+            <AidMindBrand
+              size="lg"
+              showWordmark={true}
+              className="text-[hsl(210,40%,98%)]"
+            />
           </div>
 
-          {error && (
-            <p className="text-sm text-[hsl(0,84%,60%)]" role="alert">
-              {error}
-            </p>
-          )}
+          {/* Form */}
+          <form onSubmit={handleSignIn} className="space-y-6">
+            <div className="space-y-5">
+              <div className="space-y-2">
+                <Label
+                  htmlFor="email"
+                  className="text-sm font-medium text-[hsl(215,20%,65%)]"
+                >
+                  Email
+                </Label>
+                <Input
+                  id="email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="h-11 bg-[hsl(222,47%,11%)] border-[hsl(217,33%,20%)] text-[hsl(210,40%,98%)] placeholder:text-[hsl(215,20%,35%)] focus:border-[hsl(217,91%,60%)] focus:ring-[hsl(217,91%,60%)]"
+                  placeholder="you@example.com"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label
+                  htmlFor="password"
+                  className="text-sm font-medium text-[hsl(215,20%,65%)]"
+                >
+                  Password
+                </Label>
+                <Input
+                  id="password"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="h-11 bg-[hsl(222,47%,11%)] border-[hsl(217,33%,20%)] text-[hsl(210,40%,98%)] placeholder:text-[hsl(215,20%,35%)] focus:border-[hsl(217,91%,60%)] focus:ring-[hsl(217,91%,60%)]"
+                  placeholder="••••••••"
+                />
+              </div>
+            </div>
 
-          <Button
-            type="submit"
-            disabled={submitting}
-            className="w-full bg-[hsl(217,91%,60%)] hover:bg-[hsl(217,91%,55%)] text-white font-medium"
-          >
-            {submitting ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                Signing in…
-              </>
-            ) : (
-              "Sign in"
+            {error && (
+              <p className="text-sm text-[hsl(0,84%,60%)]" role="alert">
+                {error}
+              </p>
             )}
-          </Button>
-        </form>
 
-        {/* Secondary link */}
-        <p className="text-center">
-          <button
-            type="button"
-            className="text-xs text-[hsl(215,20%,45%)] hover:text-[hsl(215,20%,60%)] transition-colors"
-            onClick={() => {
-              // Placeholder — no support flow for MVP
-            }}
-          >
-            Trouble signing in?
-          </button>
-        </p>
+            <Button
+              type="submit"
+              disabled={submitting}
+              className="w-full h-11 bg-[hsl(217,91%,60%)] hover:bg-[hsl(217,91%,55%)] text-white font-medium text-sm"
+            >
+              {submitting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  Signing in…
+                </>
+              ) : (
+                "Sign in"
+              )}
+            </Button>
+          </form>
 
-        {/* Footer disclaimer */}
-        <p className="text-center text-[11px] text-[hsl(215,20%,35%)] leading-relaxed">
+          {/* Secondary link */}
+          <div className="mt-6 text-center">
+            <button
+              type="button"
+              className="text-xs text-[hsl(215,20%,40%)] hover:text-[hsl(215,20%,60%)] transition-colors"
+              onClick={() => {
+                // Placeholder — no support flow for MVP
+              }}
+            >
+              Trouble signing in?
+            </button>
+          </div>
+        </div>
+
+        {/* Footer disclaimer — outside card */}
+        <p className="mt-6 text-center text-[11px] text-[hsl(215,20%,30%)] leading-relaxed">
           AidMind does not store case notes or documentation.
         </p>
       </div>
