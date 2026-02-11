@@ -1,4 +1,4 @@
-import { X, ExternalLink, CheckCircle2, Eye, XCircle } from "lucide-react";
+import { ExternalLink, CheckCircle2, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,7 +36,6 @@ export interface ObligationData {
   triggeredAt: string;
   allowedActions: {
     canOpenSession: boolean;
-    canMarkReviewed: boolean;
     canDismiss: boolean;
   };
 }
@@ -47,7 +46,6 @@ interface ObligationPanelProps {
   obligation: ObligationData | null;
   onOpenSession?: (sessionId: string) => void;
   onResolve?: (id: string) => void;
-  onMarkReviewed?: (id: string) => void;
   onDismiss?: (id: string) => void;
 }
 
@@ -83,7 +81,6 @@ export function ObligationPanel({
   obligation,
   onOpenSession,
   onResolve,
-  onMarkReviewed,
   onDismiss,
 }: ObligationPanelProps) {
   if (!obligation) return null;
@@ -170,17 +167,15 @@ export function ObligationPanel({
                 )}
 
                 <div className="flex gap-2">
-                  {obligation.allowedActions.canMarkReviewed && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="flex-1 gap-1.5 text-xs text-muted-foreground"
-                      onClick={() => onMarkReviewed?.(obligation.id)}
-                    >
-                      <Eye className="h-3.5 w-3.5" />
-                      Mark as reviewed
-                    </Button>
-                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="flex-1 gap-1.5 text-xs text-muted-foreground"
+                    onClick={() => onResolve?.(obligation.id)}
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    Mark as resolved
+                  </Button>
                   {obligation.allowedActions.canDismiss && (
                     <Button
                       variant="ghost"
