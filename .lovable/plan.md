@@ -1,32 +1,19 @@
 
 
-## Login Screen: Logo-only + Card Glow
+## Fix: DEV MODE panels not showing
 
-Two changes to match the reference image:
+**Root cause**: The `.env.local` file created in the previous edit doesn't persist in the Lovable environment. Only the `.env` file is used. Since `VITE_DEV_MODE` is not defined in `.env`, it's always `undefined`, so the dev panels never render and the keyboard shortcut listener is never attached.
 
-### 1. Remove wordmark from logo (Login.tsx, line 63-67)
+**Fix**: Add `VITE_DEV_MODE=true` to the main `.env` file. The `.env.production` file already has `VITE_DEV_MODE=false`, which Vite automatically uses for production builds, so production remains safe.
 
-Change `showWordmark={true}` to `showWordmark={false}` so only the eye icon logo displays, centered.
+### Changes
 
-### 2. Add subtle glow behind the card (index.css)
+1. **`.env`** — Add `VITE_DEV_MODE=true` to the existing file (one line addition)
 
-Add a `box-shadow` glow to `.login-card` using a soft blue radial spread, matching the reference image's ambient light effect:
+That's it. The `DevModeLayer` component, the keyboard shortcut, and the `.env.production` override are all already wired correctly. The only missing piece is the variable definition in the base `.env` file.
 
-```css
-.login-card {
-  background: hsl(222 47% 14%);
-  border: 1px solid hsl(217 33% 20%);
-  border-radius: var(--radius);
-  box-shadow:
-    0 4px 24px -4px hsl(0 0% 0% / 0.3),
-    0 0 80px 20px hsl(217 91% 60% / 0.07),
-    0 0 160px 60px hsl(217 91% 60% / 0.04);
-}
-```
-
-The two extra shadow layers create a soft blue ambient glow radiating outward from the card, similar to the reference.
-
-### Files modified
-- `src/pages/Login.tsx` -- one prop change (`showWordmark={false}`)
-- `src/index.css` -- extended `box-shadow` on `.login-card`
+### Why this is safe
+- Vite loads `.env.production` during `vite build`, which sets `VITE_DEV_MODE=false`, overriding the base `.env` value
+- In dev (`vite dev`), the base `.env` value of `true` applies
+- The Lovable preview environment uses production-mode builds, so it will also get `false`
 
