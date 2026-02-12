@@ -9,6 +9,7 @@ import { useRecentNotes } from "@/hooks/useRecentNotes";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
+import { useDashboard } from "@/contexts/DashboardContext";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -57,47 +58,51 @@ function getToolsUsedColor(guidanceUsed: boolean, reviewerUsed: boolean): string
   return "bg-primary text-primary-foreground";
 }
 
+/**
+ * Demo placeholder active sessions with stable canonical IDs.
+ * These match the relatedSessionId values in Work Radar obligations.
+ */
+const placeholderActiveSessions: ActiveSession[] = [
+  {
+    id: "demo_active_1",
+    sessionId: "session_4821",
+    caseLabel: "Smith Family Intake",
+    interactionType: "In-person",
+    lastAccessed: new Date(Date.now() - 2 * 60 * 60 * 1000),
+    createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+    guidanceUsed: false,
+    reviewerUsed: false,
+  },
+  {
+    id: "demo_active_2",
+    sessionId: "session_4822",
+    caseLabel: "Housing Assistance Follow-up",
+    interactionType: "Phone call",
+    lastAccessed: new Date(Date.now() - 5 * 60 * 60 * 1000),
+    createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
+    guidanceUsed: true,
+    reviewerUsed: false,
+  },
+];
+
 interface ActiveSessionsPanelProps {
   className?: string;
   searchQuery?: string;
-  onSelectSession?: (sessionId: string) => void;
 }
 
-export function ActiveSessionsPanel({ className, searchQuery = "", onSelectSession }: ActiveSessionsPanelProps) {
+export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessionsPanelProps) {
   const navigate = useNavigate();
   const { notes, loading, error, refresh } = useRecentNotes(20);
+  const { registerActiveSessionIds, sessionHighlightTarget, clearSessionHighlight } = useDashboard();
   const [startSessionOpen, setStartSessionOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
   const [sessionToClose, setSessionToClose] = useState<ActiveSession | null>(null);
   const [highlightedSessionId, setHighlightedSessionId] = useState<string | null>(null);
+  const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
-  // Listen for highlight-session events from ObligationPanel
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const sessionId = (e as CustomEvent).detail?.sessionId;
-      if (!sessionId) return;
-
-      setHighlightedSessionId(sessionId);
-
-      // Use data-session-id attribute for reliable lookup
-      requestAnimationFrame(() => {
-        const card = document.querySelector(`[data-session-id="${sessionId}"]`);
-        if (card) {
-          card.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
-      });
-
-      // Remove highlight after 1.5s
-      setTimeout(() => setHighlightedSessionId(null), 1500);
-    };
-
-    window.addEventListener("highlight-session", handler);
-    return () => window.removeEventListener("highlight-session", handler);
-  }, []);
-
-  // Filter to only active sessions (not completed, not cancelled)
-  const activeSessions: ActiveSession[] = notes
+  // Build session list from DB notes + demo placeholders
+  const dbSessions: ActiveSession[] = notes
     .filter((note) => note.status === "in_progress" || note.status === "saved")
     .map((note) => ({
       id: note.id,
@@ -109,6 +114,39 @@ export function ActiveSessionsPanel({ className, searchQuery = "", onSelectSessi
       guidanceUsed: false,
       reviewerUsed: false,
     }));
+
+  // Merge: DB sessions first, then demo placeholders (skip if DB has data)
+  const activeSessions = useMemo(() => {
+    if (dbSessions.length > 0) return dbSessions;
+    return placeholderActiveSessions;
+  }, [dbSessions]);
+
+  // Register session IDs into context for cross-panel lookup
+  useEffect(() => {
+    registerActiveSessionIds(activeSessions.map((s) => s.sessionId));
+  }, [activeSessions, registerActiveSessionIds]);
+
+  // React to highlight requests from context (state-based, no DOM scraping)
+  useEffect(() => {
+    if (!sessionHighlightTarget || sessionHighlightTarget.location !== "active") return;
+
+    const targetId = sessionHighlightTarget.sessionId;
+    setHighlightedSessionId(targetId);
+
+    requestAnimationFrame(() => {
+      const card = cardRefs.current.get(targetId);
+      if (card) {
+        card.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    });
+
+    const timer = setTimeout(() => {
+      setHighlightedSessionId(null);
+      clearSessionHighlight();
+    }, 1200);
+
+    return () => clearTimeout(timer);
+  }, [sessionHighlightTarget, clearSessionHighlight]);
 
   const filteredActiveSessions = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -259,6 +297,10 @@ export function ActiveSessionsPanel({ className, searchQuery = "", onSelectSessi
             {filteredActiveSessions.map((session) => (
               <div
                 key={session.id}
+                ref={(el) => {
+                  if (el) cardRefs.current.set(session.sessionId, el);
+                  else cardRefs.current.delete(session.sessionId);
+                }}
                 data-session-id={session.sessionId}
                 className={cn(
                   "p-4 rounded-lg border border-border bg-background hover:bg-accent/30 transition-all duration-300",

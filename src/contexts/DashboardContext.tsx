@@ -1,4 +1,4 @@
-// Dashboard context for task and search state management
+// Dashboard context for task, search, and session coordination state management
 import { createContext, useContext, useState, ReactNode, useCallback, useMemo } from "react";
 import { toast } from "@/hooks/use-toast";
 import { V1_SHOW_PLACEHOLDER_TASKS } from "@/config/features";
@@ -16,6 +16,15 @@ export interface Task {
   completedAt?: Date;
 }
 
+/**
+ * Session highlight target — set by WorkRadar "Open Session" to coordinate
+ * cross-panel navigation without DOM scraping.
+ */
+interface SessionHighlightTarget {
+  sessionId: string;
+  location: "active" | "history";
+}
+
 interface DashboardContextType {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
@@ -30,6 +39,13 @@ interface DashboardContextType {
   activeTasks: Task[];
   completedTasks: Task[];
   isPlaceholderMode: boolean;
+
+  // Session coordination
+  registerActiveSessionIds: (ids: string[]) => void;
+  registerHistorySessionIds: (ids: string[]) => void;
+  requestSessionHighlight: (sessionId: string) => void;
+  sessionHighlightTarget: SessionHighlightTarget | null;
+  clearSessionHighlight: () => void;
 }
 
 const DashboardContext = createContext<DashboardContextType | undefined>(undefined);
@@ -99,7 +115,6 @@ const placeholderTasks: Task[] = [
   },
 ];
 
-// Use placeholder tasks if flag is enabled, otherwise start empty
 const getInitialTasks = (): Task[] => {
   return V1_SHOW_PLACEHOLDER_TASKS ? placeholderTasks : [];
 };
@@ -109,8 +124,37 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [tasks, setTasks] = useState<Task[]>(getInitialTasks);
   const isPlaceholderMode = V1_SHOW_PLACEHOLDER_TASKS;
 
+  // Session coordination state
+  const [activeSessionIds, setActiveSessionIds] = useState<string[]>([]);
+  const [historySessionIds, setHistorySessionIds] = useState<string[]>([]);
+  const [sessionHighlightTarget, setSessionHighlightTarget] = useState<SessionHighlightTarget | null>(null);
+
   const clearSearch = useCallback(() => {
     setSearchQuery("");
+  }, []);
+
+  const registerActiveSessionIds = useCallback((ids: string[]) => {
+    setActiveSessionIds(ids);
+  }, []);
+
+  const registerHistorySessionIds = useCallback((ids: string[]) => {
+    setHistorySessionIds(ids);
+  }, []);
+
+  const requestSessionHighlight = useCallback((sessionId: string) => {
+    if (activeSessionIds.includes(sessionId)) {
+      setSessionHighlightTarget({ sessionId, location: "active" });
+    } else if (historySessionIds.includes(sessionId)) {
+      setSessionHighlightTarget({ sessionId, location: "history" });
+    } else {
+      toast({
+        title: "Session not available in this demo dataset.",
+      });
+    }
+  }, [activeSessionIds, historySessionIds]);
+
+  const clearSessionHighlight = useCallback(() => {
+    setSessionHighlightTarget(null);
   }, []);
 
   const completeTask = useCallback((taskId: string) => {
@@ -122,7 +166,6 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       )
     );
 
-    // Show undo toast
     const { dismiss } = toast({
       description: "Task completed",
       action: (
@@ -183,7 +226,6 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       return prev.filter((t) => t.id !== taskId);
     });
 
-    // Show undo toast for delete
     if (deletedTask) {
       const taskToRestore = deletedTask;
       const { dismiss } = toast({
@@ -265,6 +307,11 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         activeTasks,
         completedTasks,
         isPlaceholderMode,
+        registerActiveSessionIds,
+        registerHistorySessionIds,
+        requestSessionHighlight,
+        sessionHighlightTarget,
+        clearSessionHighlight,
       }}
     >
       {children}

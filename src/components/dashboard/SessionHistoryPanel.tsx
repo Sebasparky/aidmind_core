@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { History, CheckCircle2, XCircle, Clock, RefreshCw, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -7,14 +7,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { SessionDetailDrawer } from "./SessionDetailDrawer";
 import { useRecentNotes } from "@/hooks/useRecentNotes";
 import { cn } from "@/lib/utils";
+import { useDashboard } from "@/contexts/DashboardContext";
 
 /**
  * Session History: Closed sessions (completed, cancelled, abandoned).
  * 
  * IMPORTANT: This is READ-ONLY.
- * - Clicking opens a summary drawer, NOT a live session
- * - No "Resume", "Generate", or "Review" actions
- * - This is NOT a system of record
  */
 
 interface HistoricalSession {
@@ -42,42 +40,67 @@ function formatDate(date: Date): string {
 
 function getOutcomeIcon(outcome: HistoricalSession["outcome"]) {
   switch (outcome) {
-    case "completed":
-      return CheckCircle2;
-    case "cancelled":
-      return XCircle;
-    case "abandoned":
-      return Clock;
-    default:
-      return History;
+    case "completed": return CheckCircle2;
+    case "cancelled": return XCircle;
+    case "abandoned": return Clock;
+    default: return History;
   }
 }
 
 function getOutcomeBadgeVariant(outcome: HistoricalSession["outcome"]) {
   switch (outcome) {
-    case "completed":
-      return "default" as const;
-    case "cancelled":
-      return "secondary" as const;
-    case "abandoned":
-      return "outline" as const;
-    default:
-      return "secondary" as const;
+    case "completed": return "default" as const;
+    case "cancelled": return "secondary" as const;
+    case "abandoned": return "outline" as const;
+    default: return "secondary" as const;
   }
 }
 
 function getOutcomeLabel(outcome: HistoricalSession["outcome"]) {
   switch (outcome) {
-    case "completed":
-      return "Completed";
-    case "cancelled":
-      return "Cancelled";
-    case "abandoned":
-      return "Abandoned";
-    default:
-      return outcome;
+    case "completed": return "Completed";
+    case "cancelled": return "Cancelled";
+    case "abandoned": return "Abandoned";
+    default: return outcome;
   }
 }
+
+/**
+ * Demo placeholder history sessions with stable canonical IDs.
+ * These match relatedSessionId values in Work Radar obligations.
+ */
+const placeholderHistorySessions: HistoricalSession[] = [
+  {
+    id: "demo_history_1",
+    sessionId: "session_4823",
+    caseLabel: "Job Placement Review",
+    interactionType: "In-person",
+    outcome: "completed",
+    completedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+    guidanceUsed: true,
+    reviewerUsed: true,
+  },
+  {
+    id: "demo_history_2",
+    sessionId: "session_4820",
+    caseLabel: "Emergency Shelter Intake",
+    interactionType: "Phone call",
+    outcome: "completed",
+    completedAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+    guidanceUsed: true,
+    reviewerUsed: true,
+  },
+  {
+    id: "demo_history_3",
+    sessionId: "session_4819",
+    caseLabel: "Veteran Outreach Assessment",
+    interactionType: "Video call",
+    outcome: "cancelled",
+    completedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+    guidanceUsed: false,
+    reviewerUsed: false,
+  },
+];
 
 interface SessionHistoryPanelProps {
   className?: string;
@@ -86,44 +109,16 @@ interface SessionHistoryPanelProps {
 
 export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery = "" }: SessionHistoryPanelProps) {
   const { notes, loading, error, refresh } = useRecentNotes(20);
+  const { registerHistorySessionIds, sessionHighlightTarget, clearSessionHighlight } = useDashboard();
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedSession, setSelectedSession] = useState<HistoricalSession | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [highlightedSessionId, setHighlightedSessionId] = useState<string | null>(null);
+  const rowRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
 
-  // Listen for highlight-session events — if session is in history, open drawer + highlight
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const sessionId = (e as CustomEvent).detail?.sessionId;
-      if (!sessionId) return;
-
-      // Check if this session is in our history list
-      const historySession = historicalSessions.find((s) => s.sessionId === sessionId);
-      if (!historySession) return;
-
-      // Open the drawer with this session selected
-      setSelectedSession(historySession);
-      setDrawerOpen(true);
-      setHighlightedSessionId(sessionId);
-
-      // Scroll to the item after a brief delay for DOM update
-      requestAnimationFrame(() => {
-        const el = document.querySelector(`[data-session-id="${sessionId}"]`);
-        if (el) {
-          el.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
-      });
-
-      setTimeout(() => setHighlightedSessionId(null), 1500);
-    };
-
-    window.addEventListener("highlight-session", handler);
-    return () => window.removeEventListener("highlight-session", handler);
-  });
-
-  // Filter to only closed sessions
-  const historicalSessions: HistoricalSession[] = notes
+  // Build session list from DB notes + demo placeholders
+  const dbHistoricalSessions: HistoricalSession[] = notes
     .filter((note) => 
       note.status === "exported" || 
       note.status === "cancelled"
@@ -133,13 +128,49 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
       sessionId: note.sessionId,
       caseLabel: note.title,
       interactionType: note.interactionType || "Documentation",
-      outcome: note.status === "exported" 
-        ? "completed" 
-        : "cancelled",
+      outcome: note.status === "exported" ? "completed" : "cancelled",
       completedAt: note.updatedAt,
       guidanceUsed: note.status === "exported",
       reviewerUsed: note.status === "exported",
     }));
+
+  const historicalSessions = useMemo(() => {
+    if (dbHistoricalSessions.length > 0) return dbHistoricalSessions;
+    return placeholderHistorySessions;
+  }, [dbHistoricalSessions]);
+
+  // Register history session IDs into context for cross-panel lookup
+  useEffect(() => {
+    registerHistorySessionIds(historicalSessions.map((s) => s.sessionId));
+  }, [historicalSessions, registerHistorySessionIds]);
+
+  // React to highlight requests targeting history sessions
+  useEffect(() => {
+    if (!sessionHighlightTarget || sessionHighlightTarget.location !== "history") return;
+
+    const targetId = sessionHighlightTarget.sessionId;
+    const historySession = historicalSessions.find((s) => s.sessionId === targetId);
+    if (!historySession) return;
+
+    // Open drawer with this session selected
+    setSelectedSession(historySession);
+    setDrawerOpen(true);
+    setHighlightedSessionId(targetId);
+
+    requestAnimationFrame(() => {
+      const el = rowRefs.current.get(targetId);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    });
+
+    const timer = setTimeout(() => {
+      setHighlightedSessionId(null);
+      clearSessionHighlight();
+    }, 1200);
+
+    return () => clearTimeout(timer);
+  }, [sessionHighlightTarget, historicalSessions, clearSessionHighlight]);
 
   // Apply search filter (combine local + global search)
   const combinedQuery = (globalSearchQuery.trim() || searchQuery.trim()).toLowerCase();
@@ -252,6 +283,10 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
                 return (
                   <button
                     key={session.id}
+                    ref={(el) => {
+                      if (el) rowRefs.current.set(session.sessionId, el);
+                      else rowRefs.current.delete(session.sessionId);
+                    }}
                     data-session-id={session.sessionId}
                     onClick={() => handleSessionClick(session)}
                     className={cn(

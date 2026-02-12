@@ -143,9 +143,10 @@ export function ObligationPanel({
             {/* D) Required Action */}
             <section className="border-t border-border pt-5">
               <h3 className="text-sm font-medium text-foreground mb-3">Required Action</h3>
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {obligation.allowedActions.canOpenSession && obligation.relatedSession?.sessionId && (
                   <Button
+                    variant="outline"
                     className="w-full gap-2"
                     onClick={() => onOpenSession?.(obligation.relatedSession!.sessionId!)}
                   >
@@ -154,25 +155,16 @@ export function ObligationPanel({
                   </Button>
                 )}
                 
-                {!obligation.relatedSession?.sessionId && (
-                  <Button
-                    className="w-full gap-2"
-                    onClick={() => onResolve?.(obligation.id)}
-                  >
-                    <CheckCircle2 className="h-4 w-4" />
-                    Resolve Documentation
-                  </Button>
-                )}
-
                 <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full gap-1.5 text-xs text-muted-foreground"
+                  className="w-full gap-2"
                   onClick={() => onResolve?.(obligation.id)}
                 >
-                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  <CheckCircle2 className="h-4 w-4" />
                   Mark as resolved
                 </Button>
+                <p className="text-xs text-muted-foreground/60 text-center">
+                  AidMind cannot verify completion in external systems.
+                </p>
               </div>
             </section>
 
