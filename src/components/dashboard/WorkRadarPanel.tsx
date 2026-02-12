@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/tooltip";
 import { ObligationPanel, type ObligationData, type ObligationStatus } from "./ObligationPanel";
 import { toast } from "@/hooks/use-toast";
+import { useDashboard } from "@/contexts/DashboardContext";
 
 /**
  * Derived Signals: Informational indicators derived from policy and session context.
@@ -20,19 +21,14 @@ import { toast } from "@/hooks/use-toast";
 
 export interface DerivedSignalItem {
   id: string;
-  /** The obligation text */
   obligation: string;
-  /** Why this exists - source provenance */
   source: {
     type: "session" | "policy" | "timeline";
     label: string;
     id?: string;
   };
-  /** Time context (e.g., "Due in 48 hours", "Overdue by 2 days") */
   timeContext?: string;
-  /** Urgency level */
   urgency: "low" | "medium" | "high";
-  /** Extended obligation data for the detail panel */
   obligationDetail?: {
     description: string;
     relatedSession?: {
@@ -54,9 +50,7 @@ interface ResolvedObligation {
   title: string;
   relatedSessionLabel?: string;
   resolvedAt: Date;
-  /** Original item for undo */
   originalItem: DerivedSignalItem;
-  /** Original index in allItems for positional undo */
   originalIndex: number;
 }
 
@@ -64,16 +58,20 @@ interface DerivedSignalsPanelProps {
   className?: string;
   items?: DerivedSignalItem[];
   onItemClick?: (item: DerivedSignalItem) => void;
-  onOpenSession?: (sessionId: string) => void;
   searchQuery?: string;
 }
 
-// Placeholder data for v1 demonstration
+/**
+ * Placeholder data for v1 demonstration.
+ * 
+ * IMPORTANT: relatedSession.sessionId values must match canonical IDs
+ * used in ActiveSessionsPanel and SessionHistoryPanel demo data.
+ */
 const placeholderItems: DerivedSignalItem[] = [
   {
     id: "1",
     obligation: "Consent form still missing",
-    source: { type: "session", label: "Intake session #4821", id: "4821" },
+    source: { type: "session", label: "Intake session #4821", id: "session_4821" },
     timeContext: "Triggered 2 days ago",
     urgency: "high",
     obligationDetail: {
@@ -81,11 +79,9 @@ const placeholderItems: DerivedSignalItem[] = [
       relatedSession: {
         label: "Intake session #4821",
         caseLabel: "Smith Family Intake",
-        sessionId: "4821",
+        sessionId: "session_4821",
       },
-      allowedActions: {
-        canOpenSession: true,
-      },
+      allowedActions: { canOpenSession: true },
     },
   },
   {
@@ -96,22 +92,23 @@ const placeholderItems: DerivedSignalItem[] = [
     urgency: "high",
     obligationDetail: {
       description: "A policy threshold has been reached that requires supervisor sign-off before the case can proceed. This is a mandatory compliance step under Policy 7.1.",
-      allowedActions: {
-        canOpenSession: false,
-      },
+      allowedActions: { canOpenSession: false },
     },
   },
   {
     id: "3",
     obligation: "Follow-up documentation due",
-    source: { type: "timeline", label: "Timeline event confirmed" },
+    source: { type: "timeline", label: "Timeline event confirmed", id: "session_4823" },
     timeContext: "Due in 48 hours",
     urgency: "medium",
     obligationDetail: {
       description: "A scheduled follow-up is approaching. Documentation should be prepared to ensure continuity of care and compliance with the established timeline.",
-      allowedActions: {
-        canOpenSession: false,
+      relatedSession: {
+        label: "Follow-up session #4823",
+        caseLabel: "Job placement review",
+        sessionId: "session_4823",
       },
+      allowedActions: { canOpenSession: true },
     },
   },
 ];
@@ -130,27 +127,19 @@ function getUrgencyStyles(urgency: DerivedSignalItem["urgency"]) {
 
 function getSourceIcon(type: DerivedSignalItem["source"]["type"]) {
   switch (type) {
-    case "session":
-      return FileWarning;
-    case "policy":
-      return AlertCircle;
-    case "timeline":
-      return Clock;
-    default:
-      return AlertCircle;
+    case "session": return FileWarning;
+    case "policy": return AlertCircle;
+    case "timeline": return Clock;
+    default: return AlertCircle;
   }
 }
 
 function getSourceBadgeVariant(type: DerivedSignalItem["source"]["type"]) {
   switch (type) {
-    case "session":
-      return "secondary";
-    case "policy":
-      return "outline";
-    case "timeline":
-      return "secondary";
-    default:
-      return "secondary";
+    case "session": return "secondary";
+    case "policy": return "outline";
+    case "timeline": return "secondary";
+    default: return "secondary";
   }
 }
 
@@ -164,9 +153,7 @@ function signalToObligation(item: DerivedSignalItem): ObligationData {
     relatedSession: item.obligationDetail?.relatedSession,
     policySource: item.source.label,
     triggeredAt: item.timeContext ?? "Unknown",
-    allowedActions: item.obligationDetail?.allowedActions ?? {
-      canOpenSession: false,
-    },
+    allowedActions: item.obligationDetail?.allowedActions ?? { canOpenSession: false },
   };
 }
 
@@ -182,7 +169,8 @@ function formatResolvedTime(date: Date): string {
   return `Resolved ${Math.floor(diffHours / 24)}d ago`;
 }
 
-export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSession, searchQuery = "" }: DerivedSignalsPanelProps) {
+export function DerivedSignalsPanel({ className, items, onItemClick, searchQuery = "" }: DerivedSignalsPanelProps) {
+  const { requestSessionHighlight } = useDashboard();
   const [allItems, setAllItems] = useState<DerivedSignalItem[]>(items ?? placeholderItems);
   const [selectedObligation, setSelectedObligation] = useState<ObligationData | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -214,7 +202,6 @@ export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSessi
     setPanelOpen(false);
     setSelectedObligation(null);
 
-    // Fade out animation
     setFadingOutId(id);
     setTimeout(() => {
       setAllItems((prev) => prev.filter((i) => i.id !== id));
@@ -240,7 +227,6 @@ export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSessi
         action: item ? (
           <button
             onClick={() => {
-              // Undo: restore to active at original position
               setAllItems((prev) => {
                 const restored = [...prev];
                 const insertAt = Math.min(itemIndex, restored.length);
@@ -264,27 +250,11 @@ export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSessi
     setPanelOpen(false);
     setSelectedObligation(null);
 
-    // Small delay to let the sheet close before highlighting
+    // Use context-based registry lookup instead of DOM scraping
     setTimeout(() => {
-      // Check if session exists in Active Sessions (via DOM data-session-id)
-      const activeCard = document.querySelector(`[data-session-id="${sessionId}"]`);
-      if (activeCard) {
-        // Session found in active or history panel — dispatch highlight event
-        window.dispatchEvent(
-          new CustomEvent("highlight-session", { detail: { sessionId } })
-        );
-        return;
-      }
-
-      // Session not found anywhere
-      toast({
-        title: "Session not found for this obligation.",
-        variant: "destructive",
-      });
+      requestSessionHighlight(sessionId);
     }, 200);
-
-    onOpenSession?.(sessionId);
-  }, [onOpenSession]);
+  }, [requestSessionHighlight]);
 
   return (
     <TooltipProvider>
@@ -356,8 +326,6 @@ export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSessi
                         <p className="text-sm font-medium text-foreground">
                           {item.obligation}
                         </p>
-                        
-                        {/* Source provenance badge */}
                         <div className="flex items-center gap-2 mt-2">
                           <Badge 
                             variant={getSourceBadgeVariant(item.source.type)}
@@ -367,8 +335,6 @@ export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSessi
                             {item.source.label}
                           </Badge>
                         </div>
-                        
-                        {/* Time context */}
                         {item.timeContext && (
                           <p className="text-xs text-muted-foreground mt-2">
                             {item.timeContext}
