@@ -28,6 +28,8 @@ export interface DerivedSignalItem {
     id?: string;
   };
   timeContext?: string;
+  /** Due/SLA context string, e.g. "Due in 48 hours", "Overdue by 3 hours" */
+  dueContext?: string;
   urgency: "low" | "medium" | "high";
   obligationDetail?: {
     description: string;
@@ -73,6 +75,7 @@ const placeholderItems: DerivedSignalItem[] = [
     obligation: "Consent form still missing",
     source: { type: "session", label: "Intake session #4821", id: "session_4821" },
     timeContext: "Triggered 2 days ago",
+    dueContext: "Overdue by 2 days",
     urgency: "high",
     obligationDetail: {
       description: "This intake session is missing a required consent form under Policy 4.2. Documentation cannot be finalized until consent is recorded.",
@@ -88,7 +91,8 @@ const placeholderItems: DerivedSignalItem[] = [
     id: "2",
     obligation: "Supervisor sign-off required",
     source: { type: "policy", label: "Policy threshold reached" },
-    timeContext: "Due within 24 hours",
+    timeContext: "Triggered 1 day ago",
+    dueContext: "Due in 24 hours",
     urgency: "high",
     obligationDetail: {
       description: "A policy threshold has been reached that requires supervisor sign-off before the case can proceed. This is a mandatory compliance step under Policy 7.1.",
@@ -98,8 +102,9 @@ const placeholderItems: DerivedSignalItem[] = [
   {
     id: "3",
     obligation: "Follow-up documentation due",
-    source: { type: "timeline", label: "Timeline event confirmed", id: "session_4823" },
-    timeContext: "Due in 48 hours",
+    source: { type: "timeline", label: "Follow-up session #4823", id: "session_4823" },
+    timeContext: "Triggered 3 days ago",
+    dueContext: "Due in 48 hours",
     urgency: "medium",
     obligationDetail: {
       description: "A scheduled follow-up is approaching. Documentation should be prepared to ensure continuity of care and compliance with the established timeline.",
@@ -326,7 +331,7 @@ export function DerivedSignalsPanel({ className, items, onItemClick, searchQuery
                         <p className="text-sm font-medium text-foreground">
                           {item.obligation}
                         </p>
-                        <div className="flex items-center gap-2 mt-2">
+                        <div className="flex items-center gap-2 mt-2 flex-wrap">
                           <Badge 
                             variant={getSourceBadgeVariant(item.source.type)}
                             className="text-xs gap-1"
@@ -334,6 +339,15 @@ export function DerivedSignalsPanel({ className, items, onItemClick, searchQuery
                             <SourceIcon className="h-3 w-3" />
                             {item.source.label}
                           </Badge>
+                          {item.dueContext && (
+                            <Badge
+                              variant={item.dueContext.toLowerCase().startsWith("overdue") ? "destructive" : "warning"}
+                              className="text-xs gap-1"
+                            >
+                              <Clock className="h-3 w-3" />
+                              {item.dueContext}
+                            </Badge>
+                          )}
                         </div>
                         {item.timeContext && (
                           <p className="text-xs text-muted-foreground mt-2">
