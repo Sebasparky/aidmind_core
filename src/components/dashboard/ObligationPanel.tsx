@@ -1,4 +1,4 @@
-import { ExternalLink, CheckCircle2, XCircle } from "lucide-react";
+import { ExternalLink, CheckCircle2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
  * that transforms derived signals into actionable obligations.
  */
 
-export type ObligationStatus = "open" | "in_progress" | "resolved" | "dismissed";
+export type ObligationStatus = "open" | "in_progress" | "resolved";
 export type ObligationSeverity = "low" | "medium" | "high";
 
 export interface ObligationData {
@@ -36,7 +36,6 @@ export interface ObligationData {
   triggeredAt: string;
   allowedActions: {
     canOpenSession: boolean;
-    canDismiss: boolean;
   };
 }
 
@@ -46,7 +45,6 @@ interface ObligationPanelProps {
   obligation: ObligationData | null;
   onOpenSession?: (sessionId: string) => void;
   onResolve?: (id: string) => void;
-  onDismiss?: (id: string) => void;
 }
 
 function getStatusLabel(status: ObligationStatus): string {
@@ -54,7 +52,6 @@ function getStatusLabel(status: ObligationStatus): string {
     case "open": return "Open";
     case "in_progress": return "In Progress";
     case "resolved": return "Resolved";
-    case "dismissed": return "Dismissed";
   }
 }
 
@@ -63,7 +60,6 @@ function getStatusBadgeClass(status: ObligationStatus): string {
     case "open": return "badge-danger";
     case "in_progress": return "badge-warning";
     case "resolved": return "badge-success";
-    case "dismissed": return "badge-info";
   }
 }
 
@@ -81,7 +77,6 @@ export function ObligationPanel({
   obligation,
   onOpenSession,
   onResolve,
-  onDismiss,
 }: ObligationPanelProps) {
   if (!obligation) return null;
 
@@ -112,6 +107,9 @@ export function ObligationPanel({
               <h3 className="text-sm font-medium text-foreground mb-2">What this means</h3>
               <p className="text-sm text-muted-foreground leading-relaxed">
                 {obligation.description}
+              </p>
+              <p className="text-xs text-muted-foreground/60 mt-2">
+                This item will remain until you mark it resolved.
               </p>
             </section>
 
@@ -166,28 +164,15 @@ export function ObligationPanel({
                   </Button>
                 )}
 
-                <div className="flex gap-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="flex-1 gap-1.5 text-xs text-muted-foreground"
-                    onClick={() => onResolve?.(obligation.id)}
-                  >
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    Mark as resolved
-                  </Button>
-                  {obligation.allowedActions.canDismiss && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="flex-1 gap-1.5 text-xs text-muted-foreground"
-                      onClick={() => onDismiss?.(obligation.id)}
-                    >
-                      <XCircle className="h-3.5 w-3.5" />
-                      Dismiss
-                    </Button>
-                  )}
-                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full gap-1.5 text-xs text-muted-foreground"
+                  onClick={() => onResolve?.(obligation.id)}
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Mark as resolved
+                </Button>
               </div>
             </section>
 

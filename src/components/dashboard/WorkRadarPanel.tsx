@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { AlertCircle, Clock, FileWarning, ChevronRight, ChevronDown, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -42,7 +42,6 @@ export interface DerivedSignalItem {
     };
     allowedActions?: {
       canOpenSession: boolean;
-      canDismiss: boolean;
     };
   };
 }
@@ -55,6 +54,10 @@ interface ResolvedObligation {
   title: string;
   relatedSessionLabel?: string;
   resolvedAt: Date;
+  /** Original item for undo */
+  originalItem: DerivedSignalItem;
+  /** Original index in allItems for positional undo */
+  originalIndex: number;
 }
 
 interface DerivedSignalsPanelProps {
@@ -82,7 +85,6 @@ const placeholderItems: DerivedSignalItem[] = [
       },
       allowedActions: {
         canOpenSession: true,
-        canDismiss: false,
       },
     },
   },
@@ -96,7 +98,6 @@ const placeholderItems: DerivedSignalItem[] = [
       description: "A policy threshold has been reached that requires supervisor sign-off before the case can proceed. This is a mandatory compliance step under Policy 7.1.",
       allowedActions: {
         canOpenSession: false,
-        canDismiss: false,
       },
     },
   },
@@ -110,7 +111,6 @@ const placeholderItems: DerivedSignalItem[] = [
       description: "A scheduled follow-up is approaching. Documentation should be prepared to ensure continuity of care and compliance with the established timeline.",
       allowedActions: {
         canOpenSession: false,
-        canDismiss: true,
       },
     },
   },
@@ -166,7 +166,6 @@ function signalToObligation(item: DerivedSignalItem): ObligationData {
     triggeredAt: item.timeContext ?? "Unknown",
     allowedActions: item.obligationDetail?.allowedActions ?? {
       canOpenSession: false,
-      canDismiss: false,
     },
   };
 }
@@ -210,8 +209,8 @@ export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSessi
   };
 
   const handleResolve = useCallback((id: string) => {
-    // Find the item before removing
-    const item = allItems.find((i) => i.id === id);
+    const itemIndex = allItems.findIndex((i) => i.id === id);
+    const item = itemIndex >= 0 ? allItems[itemIndex] : null;
     setPanelOpen(false);
     setSelectedObligation(null);
 
@@ -221,42 +220,68 @@ export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSessi
       setAllItems((prev) => prev.filter((i) => i.id !== id));
       setFadingOutId(null);
 
-      if (item) {
-        setResolvedItems((prev) => [
-          {
+      const resolvedEntry: ResolvedObligation | null = item
+        ? {
             id: item.id,
             title: item.obligation,
             relatedSessionLabel: item.obligationDetail?.relatedSession?.label,
             resolvedAt: new Date(),
-          },
-          ...prev,
-        ]);
+            originalItem: item,
+            originalIndex: itemIndex,
+          }
+        : null;
+
+      if (resolvedEntry) {
+        setResolvedItems((prev) => [resolvedEntry, ...prev]);
       }
 
-      toast({ title: "Obligation marked as resolved" });
+      const { dismiss } = toast({
+        title: "Marked as resolved",
+        action: item ? (
+          <button
+            onClick={() => {
+              // Undo: restore to active at original position
+              setAllItems((prev) => {
+                const restored = [...prev];
+                const insertAt = Math.min(itemIndex, restored.length);
+                restored.splice(insertAt, 0, item);
+                return restored;
+              });
+              setResolvedItems((prev) => prev.filter((r) => r.id !== id));
+              dismiss();
+            }}
+            className="text-sm font-medium text-primary hover:text-primary/80 transition-colors px-3 py-1 rounded-md bg-primary/10 hover:bg-primary/20"
+          >
+            Undo
+          </button>
+        ) : undefined,
+        duration: 12000,
+      });
     }, 250);
   }, [allItems]);
-
-  const handleDismiss = useCallback((id: string) => {
-    setPanelOpen(false);
-    setSelectedObligation(null);
-
-    setFadingOutId(id);
-    setTimeout(() => {
-      setAllItems((prev) => prev.filter((i) => i.id !== id));
-      setFadingOutId(null);
-      toast({ title: "Obligation dismissed" });
-    }, 250);
-  }, []);
 
   const handleOpenSession = useCallback((sessionId: string) => {
     setPanelOpen(false);
     setSelectedObligation(null);
 
-    // Dispatch a custom event so ActiveSessionsPanel can highlight the card
-    window.dispatchEvent(
-      new CustomEvent("highlight-session", { detail: { sessionId } })
-    );
+    // Small delay to let the sheet close before highlighting
+    setTimeout(() => {
+      // Check if session exists in Active Sessions (via DOM data-session-id)
+      const activeCard = document.querySelector(`[data-session-id="${sessionId}"]`);
+      if (activeCard) {
+        // Session found in active or history panel — dispatch highlight event
+        window.dispatchEvent(
+          new CustomEvent("highlight-session", { detail: { sessionId } })
+        );
+        return;
+      }
+
+      // Session not found anywhere
+      toast({
+        title: "Session not found for this obligation.",
+        variant: "destructive",
+      });
+    }, 200);
 
     onOpenSession?.(sessionId);
   }, [onOpenSession]);
@@ -408,7 +433,6 @@ export function DerivedSignalsPanel({ className, items, onItemClick, onOpenSessi
         obligation={selectedObligation}
         onOpenSession={handleOpenSession}
         onResolve={handleResolve}
-        onDismiss={handleDismiss}
       />
     </TooltipProvider>
   );

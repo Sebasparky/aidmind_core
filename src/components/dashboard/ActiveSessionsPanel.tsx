@@ -20,18 +20,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-/**
- * Active Sessions: Access points to Generate Guidance and Run Reviewer tools.
- * 
- * V1 CONSTRAINTS:
- * - Sessions are containers, NOT workflows
- * - No stage pills (drafting, editing, exporting)
- * - No lifecycle language
- * - Two explicit actions: Generate Guidance, Run Reviewer
- * - "Tools Used: X of 2" (display-only, NOT a workflow state)
- * - Sessions move to History when BOTH tools used AND user closes session
- */
-
 interface ActiveSession {
   id: string;
   sessionId: string;
@@ -72,9 +60,10 @@ function getToolsUsedColor(guidanceUsed: boolean, reviewerUsed: boolean): string
 interface ActiveSessionsPanelProps {
   className?: string;
   searchQuery?: string;
+  onSelectSession?: (sessionId: string) => void;
 }
 
-export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessionsPanelProps) {
+export function ActiveSessionsPanel({ className, searchQuery = "", onSelectSession }: ActiveSessionsPanelProps) {
   const navigate = useNavigate();
   const { notes, loading, error, refresh } = useRecentNotes(20);
   const [startSessionOpen, setStartSessionOpen] = useState(false);
@@ -82,7 +71,6 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
   const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
   const [sessionToClose, setSessionToClose] = useState<ActiveSession | null>(null);
   const [highlightedSessionId, setHighlightedSessionId] = useState<string | null>(null);
-  const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // Listen for highlight-session events from ObligationPanel
   useEffect(() => {
@@ -92,11 +80,13 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
 
       setHighlightedSessionId(sessionId);
 
-      // Scroll to the card
-      const card = cardRefs.current.get(sessionId);
-      if (card) {
-        card.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      }
+      // Use data-session-id attribute for reliable lookup
+      requestAnimationFrame(() => {
+        const card = document.querySelector(`[data-session-id="${sessionId}"]`);
+        if (card) {
+          card.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
 
       // Remove highlight after 1.5s
       setTimeout(() => setHighlightedSessionId(null), 1500);
@@ -107,7 +97,6 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
   }, []);
 
   // Filter to only active sessions (not completed, not cancelled)
-  // TODO: Replace with real tool usage tracking from database
   const activeSessions: ActiveSession[] = notes
     .filter((note) => note.status === "in_progress" || note.status === "saved")
     .map((note) => ({
@@ -117,7 +106,6 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
       interactionType: note.interactionType || "Documentation",
       lastAccessed: note.updatedAt,
       createdAt: note.updatedAt,
-      // Placeholder: will be replaced with real tracking
       guidanceUsed: false,
       reviewerUsed: false,
     }));
@@ -138,12 +126,10 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
   };
 
   const handleGenerateGuidance = (session: ActiveSession) => {
-    // Navigate to standalone Guidance tool page
     navigate(`/guidance/${session.sessionId}`);
   };
 
   const handleRunReviewer = (session: ActiveSession) => {
-    // Navigate to standalone Reviewer tool page
     navigate(`/reviewer/${session.sessionId}`);
   };
 
@@ -273,10 +259,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
             {filteredActiveSessions.map((session) => (
               <div
                 key={session.id}
-                ref={(el) => {
-                  if (el) cardRefs.current.set(session.sessionId, el);
-                  else cardRefs.current.delete(session.sessionId);
-                }}
+                data-session-id={session.sessionId}
                 className={cn(
                   "p-4 rounded-lg border border-border bg-background hover:bg-accent/30 transition-all duration-300",
                   highlightedSessionId === session.sessionId && "ring-2 ring-primary/40 bg-primary/5"
@@ -288,7 +271,6 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                     <p className="text-sm font-medium text-foreground">
                       {session.caseLabel}
                     </p>
-                    {/* Tools used indicator - display only, NOT workflow */}
                     <Badge 
                       variant="secondary"
                       className={cn(
@@ -309,7 +291,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                   </div>
                 </div>
 
-                {/* Two explicit tool actions - independent, non-sequential */}
+                {/* Two explicit tool actions */}
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
                     variant={session.guidanceUsed ? "secondary" : "outline"}
@@ -334,7 +316,6 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                     {session.reviewerUsed && <Check className="h-3 w-3 ml-0.5" />}
                   </Button>
                   
-                  {/* Close session action */}
                   <Button
                     variant="ghost"
                     size="sm"
@@ -353,7 +334,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         )}
       </div>
 
-      {/* Start Session Modal - creates card, NEVER navigates */}
+      {/* Start Session Modal */}
       <StartNoteModal 
         open={startSessionOpen} 
         onOpenChange={setStartSessionOpen}
