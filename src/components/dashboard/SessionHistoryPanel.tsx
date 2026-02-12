@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { History, CheckCircle2, XCircle, Clock, RefreshCw, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -90,10 +90,39 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedSession, setSelectedSession] = useState<HistoricalSession | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [highlightedSessionId, setHighlightedSessionId] = useState<string | null>(null);
 
-  // Filter to only closed sessions (completed or cancelled)
-  // Session is "completed" when both tools are used (2/2)
-  // TODO: Replace with real tool usage tracking from database
+  // Listen for highlight-session events — if session is in history, open drawer + highlight
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const sessionId = (e as CustomEvent).detail?.sessionId;
+      if (!sessionId) return;
+
+      // Check if this session is in our history list
+      const historySession = historicalSessions.find((s) => s.sessionId === sessionId);
+      if (!historySession) return;
+
+      // Open the drawer with this session selected
+      setSelectedSession(historySession);
+      setDrawerOpen(true);
+      setHighlightedSessionId(sessionId);
+
+      // Scroll to the item after a brief delay for DOM update
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-session-id="${sessionId}"]`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
+
+      setTimeout(() => setHighlightedSessionId(null), 1500);
+    };
+
+    window.addEventListener("highlight-session", handler);
+    return () => window.removeEventListener("highlight-session", handler);
+  });
+
+  // Filter to only closed sessions
   const historicalSessions: HistoricalSession[] = notes
     .filter((note) => 
       note.status === "exported" || 
@@ -108,7 +137,6 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
         ? "completed" 
         : "cancelled",
       completedAt: note.updatedAt,
-      // Placeholder: will be replaced with real tracking
       guidanceUsed: note.status === "exported",
       reviewerUsed: note.status === "exported",
     }));
@@ -131,7 +159,6 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
   };
 
   const handleSessionClick = (session: HistoricalSession) => {
-    // Open read-only drawer, NOT a live session
     setSelectedSession(session);
     setDrawerOpen(true);
   };
@@ -225,8 +252,12 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
                 return (
                   <button
                     key={session.id}
+                    data-session-id={session.sessionId}
                     onClick={() => handleSessionClick(session)}
-                    className="w-full text-left p-3 rounded-lg hover:bg-accent/50 transition-colors"
+                    className={cn(
+                      "w-full text-left p-3 rounded-lg hover:bg-accent/50 transition-all duration-300",
+                      highlightedSessionId === session.sessionId && "ring-2 ring-primary/40 bg-primary/5"
+                    )}
                   >
                     <div className="flex items-start gap-3">
                       <div className={cn(
