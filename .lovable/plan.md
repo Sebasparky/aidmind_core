@@ -1,98 +1,63 @@
 
 
-## Fix "Open Session" Reliability + Obligation Panel CTA Cleanup
+## Diagnose and Harden "Open Session" Linking
 
-### Problem
-`requestSessionHighlight` in `DashboardContext` closes over stale empty arrays because child panels register IDs via `useEffect` after the callback is created. The `setTimeout(200)` in the open-session handler adds nondeterminism. When DB sessions exist, placeholders are replaced, breaking hardcoded obligation references.
+### Root Cause Analysis
+
+After thorough code review, the fixes from the previous round (seeded refs, stable callback, empty-overwrite protection, always-include-placeholders) are **architecturally correct**. The "Session not available" toast should not appear for `session_4821` or `session_4823`.
+
+The remaining issue is **observability**: all diagnostic logging uses `import.meta.env.DEV`, which is `false` in the Lovable preview (production build). This means you cannot verify the fix is working or see what's actually happening at call time.
 
 ### Changes
 
-#### 1. DashboardContext.tsx -- Use refs for registry + stable callback
+#### 1. DashboardContext.tsx -- Switch debug gating from `import.meta.env.DEV` to `VITE_DEV_MODE`
 
-- Add `useRef<string[]>([])` for both `activeSessionIdsRef` and `historySessionIdsRef`
-- In `registerActiveSessionIds` and `registerHistorySessionIds`, update both the ref and the state setter
-- Rewrite `requestSessionHighlight` with an empty dependency array (`[]`), reading from refs instead of state
-- Add optional DEV-mode `console.log` gated by `import.meta.env.VITE_DEV_MODE`
-
-#### 2. WorkRadarPanel.tsx -- Remove setTimeout from open-session handler
-
-Replace:
-```typescript
-const handleOpenSession = useCallback((sessionId: string) => {
-  setPanelOpen(false);
-  setSelectedObligation(null);
-  setTimeout(() => {
-    requestSessionHighlight(sessionId);
-  }, 200);
-}, [requestSessionHighlight]);
-```
-
-With:
-```typescript
-const handleOpenSession = useCallback((sessionId: string) => {
-  requestSessionHighlight(sessionId);
-  setPanelOpen(false);
-  setSelectedObligation(null);
-}, [requestSessionHighlight]);
-```
-
-Call highlight first (synchronous state update), then close the panel.
-
-#### 3. ActiveSessionsPanel.tsx -- Always include placeholders alongside DB sessions
-
-Change the merge logic from "DB replaces placeholders" to "DB sessions + placeholders always present":
+Replace all `import.meta.env.DEV` checks in `registerActiveSessionIds`, `registerHistorySessionIds`, and `requestSessionHighlight` with:
 
 ```typescript
-const activeSessions = useMemo(() => {
-  return [...dbSessions, ...placeholderActiveSessions];
-}, [dbSessions]);
+const IS_DEV = import.meta.env.VITE_DEV_MODE === "true";
 ```
 
-This ensures `session_4821` and `session_4822` are always registered regardless of DB state.
+This ensures diagnostic logging works in the Lovable preview environment where `.env` has `VITE_DEV_MODE=true`.
 
-#### 4. SessionHistoryPanel.tsx -- Same: always include placeholders
+Affected locations (4 occurrences):
+- `registerActiveSessionIds`: empty-array warning (line 147) and registration log (line 158)
+- `registerHistorySessionIds`: empty-array warning (line 169) and registration log (line 181)
+- `requestSessionHighlight`: entry log (line 194) and not-found diagnostic toast/console (line 210)
+
+#### 2. DashboardContext.tsx -- Add a one-time mount log
+
+Add a `useEffect` that runs once on provider mount to log the initial state of the seeded registries:
 
 ```typescript
-const historicalSessions = useMemo(() => {
-  return [...dbHistoricalSessions, ...placeholderHistorySessions];
-}, [dbHistoricalSessions]);
+useEffect(() => {
+  if (IS_DEV) {
+    console.log("[DashboardContext] Provider mounted. Seeded registries:", {
+      active: activeSessionIdsRef.current,
+      history: historySessionIdsRef.current,
+    });
+  }
+}, []);
 ```
 
-Ensures `session_4823` is always present.
+This will confirm the refs are seeded correctly on load.
 
-#### 5. ObligationPanel.tsx -- Hide "Open Session" when no sessionId
+#### 3. No other code changes needed
 
-In the "Required Action" section, the `Open Session` button is already conditionally rendered with `obligation.relatedSession?.sessionId`. The "Supervisor sign-off" obligation has `canOpenSession: false` and no `sessionId`, so the button is already hidden. No change needed here -- already correct.
+- WorkRadarPanel: already calls `requestSessionHighlight` synchronously (no setTimeout) -- confirmed correct
+- ActiveSessionsPanel / SessionHistoryPanel: already always include placeholders -- confirmed correct  
+- ObligationPanel: already hides "Open Session" when no sessionId -- confirmed correct
+- Ref-based registry with stable callback: already implemented -- confirmed correct
 
-#### 6. Test file update
+### What to do after this change
 
-Update the `DashboardContext` mock in `Dashboard.v1.test.tsx` to include the new ref-based fields (the mock interface stays the same since refs are internal).
+Once deployed, open the dashboard, open browser DevTools console, and:
+1. Look for the `[DashboardContext] Provider mounted` log confirming seeded IDs
+2. Click "Consent form still missing" then "Open Session"
+3. Check the console for `[DashboardContext] requestSessionHighlight` showing the lookup result
 
-### Technical Details
-
-```text
-requestSessionHighlight flow (after fix):
-
-  WorkRadar click "Open Session"
-       |
-       v
-  requestSessionHighlight(sessionId)  -- reads refs (always current)
-       |
-       +-- activeSessionIdsRef.current.includes(id)?
-       |     YES -> setHighlightTarget({ id, "active" })
-       |
-       +-- historySessionIdsRef.current.includes(id)?
-       |     YES -> setHighlightTarget({ id, "history" })
-       |
-       +-- ELSE -> toast("Session not available...")
-       |
-       v
-  Close obligation panel (setPanelOpen(false))
-```
+If it says "session_4821" was found in "active" -- the fix is working. If it still says "not found", the console will show exactly what the registries contain, pinpointing the issue.
 
 ### Files Modified
-- `src/contexts/DashboardContext.tsx` -- refs + stable callback + dev logging
-- `src/components/dashboard/WorkRadarPanel.tsx` -- remove setTimeout
-- `src/components/dashboard/ActiveSessionsPanel.tsx` -- always include placeholders
-- `src/components/dashboard/SessionHistoryPanel.tsx` -- always include placeholders
+- `src/contexts/DashboardContext.tsx` -- switch DEV gate to VITE_DEV_MODE + add mount log
 
