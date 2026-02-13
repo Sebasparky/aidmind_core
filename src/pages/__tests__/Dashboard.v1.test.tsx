@@ -5,6 +5,19 @@ import { DerivedSignalsPanel, WorkRadarPanel } from "@/components/dashboard/Work
 import { ActiveSessionsPanel } from "@/components/dashboard/ActiveSessionsPanel";
 import { SessionHistoryPanel } from "@/components/dashboard/SessionHistoryPanel";
 
+// Mock DashboardContext
+vi.mock("@/contexts/DashboardContext", () => ({
+  useDashboard: () => ({
+    requestSessionHighlight: vi.fn(),
+    registerActiveSessionIds: vi.fn(),
+    registerHistorySessionIds: vi.fn(),
+    activeSessionIds: [],
+    historySessionIds: [],
+    highlightTarget: null,
+    clearHighlight: vi.fn(),
+  }),
+}));
+
 // Mock useRecentNotes
 vi.mock("@/hooks/useRecentNotes", () => ({
   useRecentNotes: () => ({
@@ -42,16 +55,14 @@ describe("V1 Dashboard Components", () => {
   });
 
   describe("DerivedSignalsPanel", () => {
-    it("displays 'Derived Signals' section title", () => {
+    it("displays 'Work Radar' section title", () => {
       renderWithRouter(<DerivedSignalsPanel />);
-      expect(screen.getByText("Derived Signals")).toBeInTheDocument();
+      expect(screen.getByText("Work Radar")).toBeInTheDocument();
     });
 
-    it("displays correct subtitle about policy and session context", () => {
+    it("displays correct subtitle with active count", () => {
       renderWithRouter(<DerivedSignalsPanel />);
-      expect(
-        screen.getByText("Signals derived from available policy and session context to support documentation readiness.")
-      ).toBeInTheDocument();
+      expect(screen.getByText(/Active/)).toBeInTheDocument();
     });
 
     it("does NOT use task-manager language", () => {
@@ -73,7 +84,7 @@ describe("V1 Dashboard Components", () => {
       renderWithRouter(<DerivedSignalsPanel />);
       expect(screen.getByText("Intake session #4821")).toBeInTheDocument();
       expect(screen.getByText("Policy threshold reached")).toBeInTheDocument();
-      expect(screen.getByText("Timeline event confirmed")).toBeInTheDocument();
+      expect(screen.getByText("Follow-up session #4823")).toBeInTheDocument();
     });
 
     it("shows obligation text clearly", () => {
