@@ -123,7 +123,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
 
   // Register session IDs into context for cross-panel lookup
   useEffect(() => {
-    registerActiveSessionIds(activeSessions.map((s) => s.sessionId));
+    registerActiveSessionIds(activeSessions.map((s) => s.sessionId), "ActiveSessionsPanel");
   }, [activeSessions, registerActiveSessionIds]);
 
   // React to highlight requests from context (state-based, no DOM scraping)

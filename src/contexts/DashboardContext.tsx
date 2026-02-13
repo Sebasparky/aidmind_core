@@ -41,8 +41,8 @@ interface DashboardContextType {
   isPlaceholderMode: boolean;
 
   // Session coordination
-  registerActiveSessionIds: (ids: string[]) => void;
-  registerHistorySessionIds: (ids: string[]) => void;
+  registerActiveSessionIds: (ids: string[], source?: string) => void;
+  registerHistorySessionIds: (ids: string[], source?: string) => void;
   requestSessionHighlight: (sessionId: string) => void;
   sessionHighlightTarget: SessionHighlightTarget | null;
   clearSessionHighlight: () => void;
@@ -127,44 +127,102 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   // Session coordination state — refs are the source of truth for the
   // stable requestSessionHighlight callback; state is kept for any
   // downstream UI that may need to react to changes.
-  const activeSessionIdsRef = useRef<string[]>([]);
-  const historySessionIdsRef = useRef<string[]>([]);
+  //
+  // Seeded with placeholder IDs so highlights work even before panels mount.
+  const PLACEHOLDER_ACTIVE_IDS = ["session_4821", "session_4822"];
+  const PLACEHOLDER_HISTORY_IDS = ["session_4823", "session_4820", "session_4819"];
+
+  const activeSessionIdsRef = useRef<string[]>(PLACEHOLDER_ACTIVE_IDS);
+  const historySessionIdsRef = useRef<string[]>(PLACEHOLDER_HISTORY_IDS);
   const [sessionHighlightTarget, setSessionHighlightTarget] = useState<SessionHighlightTarget | null>(null);
 
   const clearSearch = useCallback(() => {
     setSearchQuery("");
   }, []);
 
-  const registerActiveSessionIds = useCallback((ids: string[]) => {
-    activeSessionIdsRef.current = ids;
+  const registerActiveSessionIds = useCallback((ids: string[], source?: string) => {
+    const normalized = ids.map((id) => id.trim());
+
+    if (normalized.length === 0) {
+      if (import.meta.env.DEV) {
+        console.warn(
+          `[DashboardContext] registerActiveSessionIds called with empty array from "${source ?? "unknown"}". Ignoring to preserve existing registry.`
+        );
+        console.trace();
+      }
+      return; // never overwrite with empty
+    }
+
+    activeSessionIdsRef.current = normalized;
+
+    if (import.meta.env.DEV) {
+      console.log(`[DashboardContext] registerActiveSessionIds (${source ?? "unknown"})`, {
+        count: normalized.length,
+        first5: normalized.slice(0, 5),
+      });
+    }
   }, []);
 
-  const registerHistorySessionIds = useCallback((ids: string[]) => {
-    historySessionIdsRef.current = ids;
+  const registerHistorySessionIds = useCallback((ids: string[], source?: string) => {
+    const normalized = ids.map((id) => id.trim());
+
+    if (normalized.length === 0) {
+      if (import.meta.env.DEV) {
+        console.warn(
+          `[DashboardContext] registerHistorySessionIds called with empty array from "${source ?? "unknown"}". Ignoring to preserve existing registry.`
+        );
+        console.trace();
+      }
+      return; // never overwrite with empty
+    }
+
+    historySessionIdsRef.current = normalized;
+
+    if (import.meta.env.DEV) {
+      console.log(`[DashboardContext] registerHistorySessionIds (${source ?? "unknown"})`, {
+        count: normalized.length,
+        first5: normalized.slice(0, 5),
+      });
+    }
   }, []);
 
   const requestSessionHighlight = useCallback((sessionId: string) => {
+    const normalized = sessionId.trim();
     const activeIds = activeSessionIdsRef.current;
     const historyIds = historySessionIdsRef.current;
 
-    if (import.meta.env.VITE_DEV_MODE === "true") {
+    if (import.meta.env.DEV) {
       console.log("[DashboardContext] requestSessionHighlight", {
-        sessionId,
+        sessionId: normalized,
+        hasWhitespace: sessionId !== normalized,
         activeCount: activeIds.length,
         historyCount: historyIds.length,
-        activeIds,
-        historyIds,
+        activeIds: activeIds.slice(0, 5),
+        historyIds: historyIds.slice(0, 5),
       });
     }
 
-    if (activeIds.includes(sessionId)) {
-      setSessionHighlightTarget({ sessionId, location: "active" });
-    } else if (historyIds.includes(sessionId)) {
-      setSessionHighlightTarget({ sessionId, location: "history" });
+    if (activeIds.includes(normalized)) {
+      setSessionHighlightTarget({ sessionId: normalized, location: "active" });
+    } else if (historyIds.includes(normalized)) {
+      setSessionHighlightTarget({ sessionId: normalized, location: "history" });
     } else {
-      toast({
-        title: "Session not available in this demo dataset.",
-      });
+      if (import.meta.env.DEV) {
+        console.groupCollapsed(`[DashboardContext] Session not found: ${normalized}`);
+        console.log("active registry:", activeIds);
+        console.log("history registry:", historyIds);
+        console.trace();
+        console.groupEnd();
+
+        toast({
+          title: `Session not found: ${normalized}`,
+          description: `active[${activeIds.length}]: ${activeIds.slice(0, 5).join(", ")} | history[${historyIds.length}]: ${historyIds.slice(0, 5).join(", ")}`,
+        });
+      } else {
+        toast({
+          title: "Session not available in this demo dataset.",
+        });
+      }
     }
   }, []);
 

@@ -141,7 +141,7 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
 
   // Register history session IDs into context for cross-panel lookup
   useEffect(() => {
-    registerHistorySessionIds(historicalSessions.map((s) => s.sessionId));
+    registerHistorySessionIds(historicalSessions.map((s) => s.sessionId), "SessionHistoryPanel");
   }, [historicalSessions, registerHistorySessionIds]);
 
   // React to highlight requests targeting history sessions
