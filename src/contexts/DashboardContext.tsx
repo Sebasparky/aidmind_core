@@ -1,5 +1,5 @@
 // Dashboard context for task, search, and session coordination state management
-import { createContext, useContext, useState, ReactNode, useCallback, useMemo } from "react";
+import { createContext, useContext, useState, useRef, ReactNode, useCallback, useMemo } from "react";
 import { toast } from "@/hooks/use-toast";
 import { V1_SHOW_PLACEHOLDER_TASKS } from "@/config/features";
 
@@ -124,9 +124,11 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [tasks, setTasks] = useState<Task[]>(getInitialTasks);
   const isPlaceholderMode = V1_SHOW_PLACEHOLDER_TASKS;
 
-  // Session coordination state
-  const [activeSessionIds, setActiveSessionIds] = useState<string[]>([]);
-  const [historySessionIds, setHistorySessionIds] = useState<string[]>([]);
+  // Session coordination state — refs are the source of truth for the
+  // stable requestSessionHighlight callback; state is kept for any
+  // downstream UI that may need to react to changes.
+  const activeSessionIdsRef = useRef<string[]>([]);
+  const historySessionIdsRef = useRef<string[]>([]);
   const [sessionHighlightTarget, setSessionHighlightTarget] = useState<SessionHighlightTarget | null>(null);
 
   const clearSearch = useCallback(() => {
@@ -134,24 +136,37 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const registerActiveSessionIds = useCallback((ids: string[]) => {
-    setActiveSessionIds(ids);
+    activeSessionIdsRef.current = ids;
   }, []);
 
   const registerHistorySessionIds = useCallback((ids: string[]) => {
-    setHistorySessionIds(ids);
+    historySessionIdsRef.current = ids;
   }, []);
 
   const requestSessionHighlight = useCallback((sessionId: string) => {
-    if (activeSessionIds.includes(sessionId)) {
+    const activeIds = activeSessionIdsRef.current;
+    const historyIds = historySessionIdsRef.current;
+
+    if (import.meta.env.VITE_DEV_MODE === "true") {
+      console.log("[DashboardContext] requestSessionHighlight", {
+        sessionId,
+        activeCount: activeIds.length,
+        historyCount: historyIds.length,
+        activeIds,
+        historyIds,
+      });
+    }
+
+    if (activeIds.includes(sessionId)) {
       setSessionHighlightTarget({ sessionId, location: "active" });
-    } else if (historySessionIds.includes(sessionId)) {
+    } else if (historyIds.includes(sessionId)) {
       setSessionHighlightTarget({ sessionId, location: "history" });
     } else {
       toast({
         title: "Session not available in this demo dataset.",
       });
     }
-  }, [activeSessionIds, historySessionIds]);
+  }, []);
 
   const clearSessionHighlight = useCallback(() => {
     setSessionHighlightTarget(null);

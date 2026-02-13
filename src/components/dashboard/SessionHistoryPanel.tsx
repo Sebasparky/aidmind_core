@@ -134,9 +134,9 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
       reviewerUsed: note.status === "exported",
     }));
 
+  // Always include placeholders so Work Radar obligation links remain valid.
   const historicalSessions = useMemo(() => {
-    if (dbHistoricalSessions.length > 0) return dbHistoricalSessions;
-    return placeholderHistorySessions;
+    return [...dbHistoricalSessions, ...placeholderHistorySessions];
   }, [dbHistoricalSessions]);
 
   // Register history session IDs into context for cross-panel lookup

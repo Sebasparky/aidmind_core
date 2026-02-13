@@ -115,10 +115,10 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
       reviewerUsed: false,
     }));
 
-  // Merge: DB sessions first, then demo placeholders (skip if DB has data)
+  // Always include placeholders so Work Radar obligation links remain valid.
+  // DB sessions are shown first, placeholders follow.
   const activeSessions = useMemo(() => {
-    if (dbSessions.length > 0) return dbSessions;
-    return placeholderActiveSessions;
+    return [...dbSessions, ...placeholderActiveSessions];
   }, [dbSessions]);
 
   // Register session IDs into context for cross-panel lookup
