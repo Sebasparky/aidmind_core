@@ -1,5 +1,7 @@
 // Dashboard context for task, search, and session coordination state management
-import { createContext, useContext, useState, useRef, ReactNode, useCallback, useMemo } from "react";
+import { createContext, useContext, useState, useRef, ReactNode, useCallback, useMemo, useEffect } from "react";
+
+const IS_DEV = import.meta.env.VITE_DEV_MODE === "true";
 import { toast } from "@/hooks/use-toast";
 import { V1_SHOW_PLACEHOLDER_TASKS } from "@/config/features";
 
@@ -144,7 +146,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     const normalized = ids.map((id) => id.trim());
 
     if (normalized.length === 0) {
-      if (import.meta.env.DEV) {
+      if (IS_DEV) {
         console.warn(
           `[DashboardContext] registerActiveSessionIds called with empty array from "${source ?? "unknown"}". Ignoring to preserve existing registry.`
         );
@@ -155,7 +157,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
 
     activeSessionIdsRef.current = normalized;
 
-    if (import.meta.env.DEV) {
+    if (IS_DEV) {
       console.log(`[DashboardContext] registerActiveSessionIds (${source ?? "unknown"})`, {
         count: normalized.length,
         first5: normalized.slice(0, 5),
@@ -167,7 +169,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     const normalized = ids.map((id) => id.trim());
 
     if (normalized.length === 0) {
-      if (import.meta.env.DEV) {
+      if (IS_DEV) {
         console.warn(
           `[DashboardContext] registerHistorySessionIds called with empty array from "${source ?? "unknown"}". Ignoring to preserve existing registry.`
         );
@@ -178,7 +180,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
 
     historySessionIdsRef.current = normalized;
 
-    if (import.meta.env.DEV) {
+    if (IS_DEV) {
       console.log(`[DashboardContext] registerHistorySessionIds (${source ?? "unknown"})`, {
         count: normalized.length,
         first5: normalized.slice(0, 5),
@@ -191,7 +193,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     const activeIds = activeSessionIdsRef.current;
     const historyIds = historySessionIdsRef.current;
 
-    if (import.meta.env.DEV) {
+    if (IS_DEV) {
       console.log("[DashboardContext] requestSessionHighlight", {
         sessionId: normalized,
         hasWhitespace: sessionId !== normalized,
@@ -207,7 +209,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     } else if (historyIds.includes(normalized)) {
       setSessionHighlightTarget({ sessionId: normalized, location: "history" });
     } else {
-      if (import.meta.env.DEV) {
+      if (IS_DEV) {
         console.groupCollapsed(`[DashboardContext] Session not found: ${normalized}`);
         console.log("active registry:", activeIds);
         console.log("history registry:", historyIds);
@@ -223,6 +225,15 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
           title: "Session not available in this demo dataset.",
         });
       }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (IS_DEV) {
+      console.log("[DashboardContext] Provider mounted. Seeded registries:", {
+        active: activeSessionIdsRef.current,
+        history: historySessionIdsRef.current,
+      });
     }
   }, []);
 
