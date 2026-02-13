@@ -252,13 +252,9 @@ export function DerivedSignalsPanel({ className, items, onItemClick, searchQuery
   }, [allItems]);
 
   const handleOpenSession = useCallback((sessionId: string) => {
+    requestSessionHighlight(sessionId);
     setPanelOpen(false);
     setSelectedObligation(null);
-
-    // Use context-based registry lookup instead of DOM scraping
-    setTimeout(() => {
-      requestSessionHighlight(sessionId);
-    }, 200);
   }, [requestSessionHighlight]);
 
   return (

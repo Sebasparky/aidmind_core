@@ -127,12 +127,10 @@ describe("V1 Dashboard Components", () => {
       expect(screen.queryByText("Start Note")).not.toBeInTheDocument();
     });
 
-    it("shows correct empty state", () => {
+    it("always shows placeholder sessions (no empty state)", () => {
       renderWithRouter(<ActiveSessionsPanel />);
-      expect(screen.getByText("No active sessions")).toBeInTheDocument();
-      expect(
-        screen.getByText("Start a new session to access guidance and review tools")
-      ).toBeInTheDocument();
+      // Placeholders are always present so Work Radar links stay valid
+      expect(screen.getByText("Smith Family Intake")).toBeInTheDocument();
     });
 
     it("does NOT display lifecycle stage language", () => {
@@ -160,10 +158,10 @@ describe("V1 Dashboard Components", () => {
       expect(screen.getByText("Closed sessions (read-only)")).toBeInTheDocument();
     });
 
-    it("shows correct empty state", () => {
+    it("always shows placeholder sessions (no empty state)", () => {
       renderWithRouter(<SessionHistoryPanel />);
-      expect(screen.getByText("No session history")).toBeInTheDocument();
-      expect(screen.getByText("Completed sessions will appear here")).toBeInTheDocument();
+      // Placeholders are always present so Work Radar links stay valid
+      expect(screen.getByText("Job Placement Review")).toBeInTheDocument();
     });
 
     it("does NOT display 'Export' as a primary action", () => {
