@@ -1,19 +1,18 @@
 
 
-## Fix: DEV MODE panels not showing
+## Update: Remove "Timeline event confirmed" from Test File
 
-**Root cause**: The `.env.local` file created in the previous edit doesn't persist in the Lovable environment. Only the `.env` file is used. Since `VITE_DEV_MODE` is not defined in `.env`, it's always `undefined`, so the dev panels never render and the keyboard shortcut listener is never attached.
+The production code (`WorkRadarPanel.tsx`) already implements the correct behavior from the last edit:
+- All three obligations have proper `dueContext` values ("Overdue by 2 days", "Due in 24 hours", "Due in 48 hours")
+- The "Timeline event confirmed" label was already replaced with "Follow-up session #4823"
+- The due/SLA chip renders correctly with overdue (destructive/red) and upcoming (warning) styling
 
-**Fix**: Add `VITE_DEV_MODE=true` to the main `.env` file. The `.env.production` file already has `VITE_DEV_MODE=false`, which Vite automatically uses for production builds, so production remains safe.
+The only remaining occurrence of "Timeline event confirmed" is in the test file `src/pages/__tests__/Dashboard.v1.test.tsx` (line 76), which still asserts that text exists on screen.
 
-### Changes
+### Change
 
-1. **`.env`** — Add `VITE_DEV_MODE=true` to the existing file (one line addition)
+**File: `src/pages/__tests__/Dashboard.v1.test.tsx`** (line 76)
+- Replace `expect(screen.getByText("Timeline event confirmed")).toBeInTheDocument();` with `expect(screen.getByText("Follow-up session #4823")).toBeInTheDocument();`
 
-That's it. The `DevModeLayer` component, the keyboard shortcut, and the `.env.production` override are all already wired correctly. The only missing piece is the variable definition in the base `.env` file.
-
-### Why this is safe
-- Vite loads `.env.production` during `vite build`, which sets `VITE_DEV_MODE=false`, overriding the base `.env` value
-- In dev (`vite dev`), the base `.env` value of `true` applies
-- The Lovable preview environment uses production-mode builds, so it will also get `false`
+This is a one-line fix to align the test with the updated demo data.
 
