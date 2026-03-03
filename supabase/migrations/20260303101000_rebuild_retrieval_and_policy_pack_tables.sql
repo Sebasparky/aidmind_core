@@ -51,7 +51,7 @@ create table public.compiled_policy_pack_chunks (
 -- 5) Create/replace match_document_chunks RPC
 create or replace function public.match_document_chunks(
   p_tenant_id uuid,
-  p_query_embedding vector(1536),
+  p_query_embedding extensions.vector(1536),
   p_match_count int,
   p_min_similarity real
 )
