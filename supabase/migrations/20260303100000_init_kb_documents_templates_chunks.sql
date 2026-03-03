@@ -57,7 +57,7 @@ create table if not exists public.document_chunks (
   content text not null,
   token_count integer,
   metadata jsonb not null default '{}'::jsonb,
-  embedding vector(1536),
+  embedding extensions.vector(1536),
   created_at timestamptz not null default now(),
   unique (document_id, chunk_index)
 );
@@ -69,7 +69,7 @@ create index if not exists document_chunks_document_id_idx
 -- Note: ivfflat benefits from ANALYZE and reasonably sized lists.
 create index if not exists document_chunks_embedding_ivfflat_idx
   on public.document_chunks
-  using ivfflat (embedding vector_cosine_ops)
+  using ivfflat (embedding extensions.vector_cosine_ops)
   with (lists = 100);
 -- Optional: full-text index for debugging / keyword search
 create index if not exists document_chunks_content_fts_idx
