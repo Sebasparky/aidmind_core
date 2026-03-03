@@ -175,11 +175,10 @@ function sanitizeHref(href: string | null | undefined): string | null {
 export function stripHtml(html: string): string {
   if (!html) return "";
   
-  // Create a temporary div to parse HTML (browser/jsdom-safe)
-  if (typeof document !== "undefined") {
-    const temp = document.createElement("div");
-    temp.innerHTML = html; // Parse HTML (element is not in DOM, so scripts won't execute)
-    return temp.textContent || "";
+  // Use DOMParser to parse HTML safely (never inserted into the live DOM)
+  if (typeof DOMParser !== "undefined") {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    return doc.body.textContent || "";
   }
   
   // Fallback for SSR: simple regex strip (less robust but safe)
