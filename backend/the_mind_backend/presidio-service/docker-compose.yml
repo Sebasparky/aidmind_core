@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  aidmind-ner-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aidmind-ner-service
+    ports:
+      - "8001:8001"
+    environment:
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+
+    # Security: no PHI persistence
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    # Resource limits (note: compose 'deploy' is ignored unless using Swarm)
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M

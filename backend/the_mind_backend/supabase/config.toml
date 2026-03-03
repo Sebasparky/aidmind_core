@@ -1,0 +1,22 @@
+project_id = "zgufwshhfisrmtdutnwq"
+
+[functions.session-manager]
+verify_jwt = false
+
+[functions.start-session]
+verify_jwt = false
+
+[functions.select-template]
+verify_jwt = false
+
+[functions.run-reviewer]
+verify_jwt = false
+
+[functions.ingest-kb-text]
+verify_jwt = false
+
+[functions.compile-policy-pack]
+verify_jwt = false
+
+[functions.generate-guidance-phase1]
+verify_jwt = false
