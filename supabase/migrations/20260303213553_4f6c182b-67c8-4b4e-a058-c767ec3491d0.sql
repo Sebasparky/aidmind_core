@@ -3,7 +3,7 @@
 create extension if not exists pgcrypto with schema extensions;
 
 -- Create tenants table
-create table public.tenants (
+create table if not exists public.tenants (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   slug text unique,
