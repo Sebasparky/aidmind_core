@@ -14,6 +14,148 @@ export type Database = {
   }
   public: {
     Tables: {
+      compiled_policy_pack_chunks: {
+        Row: {
+          chunk_id: string
+          chunk_index: number
+          compiled_policy_pack_id: string
+          created_at: string | null
+          document_id: string
+          id: string
+          metadata: Json
+          rank: number
+          similarity: number
+          tenant_id: string
+        }
+        Insert: {
+          chunk_id: string
+          chunk_index: number
+          compiled_policy_pack_id: string
+          created_at?: string | null
+          document_id: string
+          id?: string
+          metadata?: Json
+          rank: number
+          similarity: number
+          tenant_id: string
+        }
+        Update: {
+          chunk_id?: string
+          chunk_index?: number
+          compiled_policy_pack_id?: string
+          created_at?: string | null
+          document_id?: string
+          id?: string
+          metadata?: Json
+          rank?: number
+          similarity?: number
+          tenant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "compiled_policy_pack_chunks_compiled_policy_pack_id_fkey"
+            columns: ["compiled_policy_pack_id"]
+            isOneToOne: false
+            referencedRelation: "compiled_policy_packs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      compiled_policy_packs: {
+        Row: {
+          created_at: string | null
+          id: string
+          metadata: Json
+          retrieval_run_id: string
+          session_id: string
+          status: string
+          template_id: string
+          tenant_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          metadata?: Json
+          retrieval_run_id: string
+          session_id: string
+          status?: string
+          template_id: string
+          tenant_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          metadata?: Json
+          retrieval_run_id?: string
+          session_id?: string
+          status?: string
+          template_id?: string
+          tenant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "compiled_policy_packs_retrieval_run_id_fkey"
+            columns: ["retrieval_run_id"]
+            isOneToOne: false
+            referencedRelation: "retrieval_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      document_chunks: {
+        Row: {
+          chunk_index: number
+          content: string
+          created_at: string
+          document_id: string
+          embedding: string | null
+          heading_path: string | null
+          id: string
+          metadata: Json
+          tenant_id: string
+          token_count: number | null
+        }
+        Insert: {
+          chunk_index: number
+          content: string
+          created_at?: string
+          document_id: string
+          embedding?: string | null
+          heading_path?: string | null
+          id?: string
+          metadata?: Json
+          tenant_id: string
+          token_count?: number | null
+        }
+        Update: {
+          chunk_index?: number
+          content?: string
+          created_at?: string
+          document_id?: string
+          embedding?: string | null
+          heading_path?: string | null
+          id?: string
+          metadata?: Json
+          tenant_id?: string
+          token_count?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "document_chunks_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "kb_documents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "document_chunks_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ephemeral_artifacts: {
         Row: {
           artifact_type: string
@@ -76,6 +218,109 @@ export type Database = {
         }
         Relationships: []
       }
+      kb_documents: {
+        Row: {
+          content: string
+          created_at: string
+          file_path: string | null
+          id: string
+          metadata: Json
+          source: string | null
+          tenant_id: string
+          title: string
+          updated_at: string
+          version: string | null
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          file_path?: string | null
+          id?: string
+          metadata?: Json
+          source?: string | null
+          tenant_id: string
+          title: string
+          updated_at?: string
+          version?: string | null
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          file_path?: string | null
+          id?: string
+          metadata?: Json
+          source?: string | null
+          tenant_id?: string
+          title?: string
+          updated_at?: string
+          version?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "kb_documents_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      kb_templates: {
+        Row: {
+          content: string
+          content_hash: string | null
+          content_type: string
+          created_at: string
+          extraction_status: string
+          file_path: string | null
+          id: string
+          is_active: boolean
+          metadata: Json
+          name: string
+          tenant_id: string
+          updated_at: string
+          version: string
+        }
+        Insert: {
+          content?: string
+          content_hash?: string | null
+          content_type?: string
+          created_at?: string
+          extraction_status?: string
+          file_path?: string | null
+          id?: string
+          is_active?: boolean
+          metadata?: Json
+          name: string
+          tenant_id: string
+          updated_at?: string
+          version: string
+        }
+        Update: {
+          content?: string
+          content_hash?: string | null
+          content_type?: string
+          created_at?: string
+          extraction_status?: string
+          file_path?: string | null
+          id?: string
+          is_active?: boolean
+          metadata?: Json
+          name?: string
+          tenant_id?: string
+          updated_at?: string
+          version?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "kb_templates_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           created_at: string
@@ -103,6 +348,51 @@ export type Database = {
         }
         Relationships: []
       }
+      retrieval_runs: {
+        Row: {
+          completed_at: string | null
+          created_at: string | null
+          error: string | null
+          guardrails: Json
+          id: string
+          params: Json
+          query_count: number
+          selected_chunk_count: number
+          session_id: string
+          status: string
+          template_id: string
+          tenant_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string | null
+          error?: string | null
+          guardrails?: Json
+          id?: string
+          params?: Json
+          query_count?: number
+          selected_chunk_count?: number
+          session_id: string
+          status?: string
+          template_id: string
+          tenant_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string | null
+          error?: string | null
+          guardrails?: Json
+          id?: string
+          params?: Json
+          query_count?: number
+          selected_chunk_count?: number
+          session_id?: string
+          status?: string
+          template_id?: string
+          tenant_id?: string
+        }
+        Relationships: []
+      }
       sessions: {
         Row: {
           cancelled_at: string | null
@@ -113,24 +403,38 @@ export type Database = {
           created_at: string
           id: string
           interaction_type: string | null
+          interview_notes: string | null
+          metadata: Json
+          policy_pack_id: string | null
           session_id: string
           state: string
+          status: string
+          template_id: string | null
+          tenant_id: string | null
           ttl_expires_at: string
           updated_at: string
+          user_id: string | null
         }
         Insert: {
           cancelled_at?: string | null
-          case_id: string
+          case_id?: string
           case_label?: string | null
           client_label?: string | null
           closed_at?: string | null
           created_at?: string
           id?: string
           interaction_type?: string | null
-          session_id: string
+          interview_notes?: string | null
+          metadata?: Json
+          policy_pack_id?: string | null
+          session_id?: string
           state?: string
+          status?: string
+          template_id?: string | null
+          tenant_id?: string | null
           ttl_expires_at?: string
           updated_at?: string
+          user_id?: string | null
         }
         Update: {
           cancelled_at?: string | null
@@ -141,10 +445,17 @@ export type Database = {
           created_at?: string
           id?: string
           interaction_type?: string | null
+          interview_notes?: string | null
+          metadata?: Json
+          policy_pack_id?: string | null
           session_id?: string
           state?: string
+          status?: string
+          template_id?: string | null
+          tenant_id?: string | null
           ttl_expires_at?: string
           updated_at?: string
+          user_id?: string | null
         }
         Relationships: []
       }
@@ -259,6 +570,22 @@ export type Database = {
           _user_id: string
         }
         Returns: boolean
+      }
+      match_document_chunks: {
+        Args: {
+          p_match_count: number
+          p_min_similarity: number
+          p_query_embedding: string
+          p_tenant_id: string
+        }
+        Returns: {
+          chunk_index: number
+          content: string
+          document_id: string
+          id: string
+          metadata: Json
+          similarity: number
+        }[]
       }
     }
     Enums: {
