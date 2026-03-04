@@ -160,7 +160,16 @@ No text outside JSON.
     if (!updateResponse || updateResponse.error) throw updateResponse?.error || new Error("Update RPC failed");
 
     return new Response(JSON.stringify({ success: true }), { status: 200 });
-  } catch (err) {
-    return new Response(JSON.stringify({ error: String(err) }), { status: 500 });
-  }
+} catch (err) {
+  console.error("[generate-guidance-phase1] error:", err);
+  const payload =
+    err instanceof Error
+      ? { error: err.message, name: err.name, stack: err.stack }
+      : { error: err };
+
+  return new Response(JSON.stringify(payload), {
+    status: 500,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 });
