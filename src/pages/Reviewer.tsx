@@ -601,21 +601,11 @@ export default function Reviewer() {
                             <Badge variant="outline" className="text-xs mb-2">
                               Page {page.pageNumber}
                             </Badge>
-                            {activeSnippet ? (
-                              <p
-                                className="text-foreground whitespace-pre-wrap break-words"
-                                dangerouslySetInnerHTML={{
-                                  __html: highlightSnippet(
-                                    page.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"),
-                                    activeSnippet
-                                  ),
-                                }}
-                              />
-                            ) : (
-                              <p className="text-foreground whitespace-pre-wrap break-words">
-                                {page.text || <span className="text-muted-foreground italic">(no text on this page)</span>}
-                              </p>
-                            )}
+                            <p className="text-foreground whitespace-pre-wrap break-words">
+                              {page.text
+                                ? renderHighlightedText(page.text, activeSnippet)
+                                : <span className="text-muted-foreground italic">(no text on this page)</span>}
+                            </p>
                           </div>
                         ))}
                       </div>
