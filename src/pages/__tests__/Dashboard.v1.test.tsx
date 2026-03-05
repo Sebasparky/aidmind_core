@@ -5,6 +5,25 @@ import { DerivedSignalsPanel, WorkRadarPanel } from "@/components/dashboard/Work
 import { ActiveSessionsPanel } from "@/components/dashboard/ActiveSessionsPanel";
 import { SessionHistoryPanel } from "@/components/dashboard/SessionHistoryPanel";
 
+// Mock AuthContext
+vi.mock("@/contexts/AuthContext", () => ({
+  useAuth: () => ({
+    user: { id: "test-user" },
+    session: { access_token: "test-token" },
+    loading: false,
+    signOut: vi.fn(),
+  }),
+}));
+
+// Mock useTenant
+vi.mock("@/hooks/useTenant", () => ({
+  useTenant: () => ({
+    tenantId: "test-tenant",
+    tenant: { id: "test-tenant", name: "Test Tenant" },
+    loading: false,
+  }),
+}));
+
 // Mock DashboardContext
 vi.mock("@/contexts/DashboardContext", () => ({
   useDashboard: () => ({
