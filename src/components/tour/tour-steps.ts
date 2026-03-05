@@ -11,6 +11,13 @@ export const caseworkerTour: TourConfig = {
       placement: "bottom",
     },
     {
+      anchor: "dashboard-search",
+      title: "Search across dashboard",
+      description: "Filters all three dashboard columns (Derived Signals, Active Sessions, and Session History) in real-time by keyword.",
+      usage: "When you want to quickly find a specific session, signal, or historical record.",
+      placement: "bottom",
+    },
+    {
       anchor: "guidance-button",
       title: "Generate Guidance",
       description: "Opens the Guidance tool for the selected session to surface policy-based considerations.",
@@ -28,8 +35,8 @@ export const caseworkerTour: TourConfig = {
     {
       anchor: "close-session",
       title: "Close a session",
-      description: "Moves the session to history once you are finished using both tools.",
-      usage: "When you have completed your documentation preparation for this interaction.",
+      description: "Once both tools (Guidance and Reviewer) have been used, the session status changes to \"Done\" (2/2). Closing a \"Done\" session marks it as \"Completed\". Closing before all tools are used marks it as \"Closed early\".",
+      usage: "When you have finished using the session tools and want to move it to history.",
       placement: "bottom",
     },
     {
@@ -43,7 +50,7 @@ export const caseworkerTour: TourConfig = {
     {
       anchor: "session-history",
       title: "Session History",
-      description: "Read-only list of previously closed sessions with summary information.",
+      description: "Read-only list of previously closed sessions. Each session appears as either \"Completed\" (both tools were used) or \"Closed early\" (not all tools were used before closing).",
       usage: "To reference past session details. No actions can be taken on closed sessions.",
       placement: "bottom",
     },
