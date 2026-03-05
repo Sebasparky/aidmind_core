@@ -1,63 +1,73 @@
 
 
-## Diagnose and Harden "Open Session" Linking
+## Animated Eye Logo for Login Screen
 
-### Root Cause Analysis
+### What Changes
 
-After thorough code review, the fixes from the previous round (seeded refs, stable callback, empty-overwrite protection, always-include-placeholders) are **architecturally correct**. The "Session not available" toast should not appear for `session_4821` or `session_4823`.
+Replace the static `AidMindBrand` logo on the login page with a custom inline SVG eye animation + CSS typing wordmark. The animation runs once on page load (~1.4s), then becomes fully static.
 
-The remaining issue is **observability**: all diagnostic logging uses `import.meta.env.DEV`, which is `false` in the Lovable preview (production build). This means you cannot verify the fix is working or see what's actually happening at call time.
+### New Component
 
-### Changes
+**`src/components/brand/EyeActivation.tsx`**
 
-#### 1. DashboardContext.tsx -- Switch debug gating from `import.meta.env.DEV` to `VITE_DEV_MODE`
+A self-contained React component with inline SVG and scoped CSS keyframes:
 
-Replace all `import.meta.env.DEV` checks in `registerActiveSessionIds`, `registerHistorySessionIds`, and `requestSessionHighlight` with:
+1. **SVG Structure** — three elements drawn with `stroke-dasharray`/`stroke-dashoffset`:
+   - Outer eye outline (almond shape)
+   - Inner arc (upper lid detail)
+   - Center ring (the "awareness" circle)
 
-```typescript
-const IS_DEV = import.meta.env.VITE_DEV_MODE === "true";
+2. **Draw Animation Timing**:
+   - `0–0.5s`: Outer eye outline draws via dashoffset → 0
+   - `0.45–0.8s`: Inner arc draws (slight overlap for fluidity)
+   - `0.85–1.05s`: Center ring fades in (opacity 0→1)
+   - `1.05–3s`: Center ring does one very subtle scale pulse (1→1.12→1), then stops
+
+3. **Wordmark Typing** (`<span>`):
+   - Starts at `0.9s` delay
+   - CSS `steps(7)` animation on `width: 0ch → 7ch` over ~0.5s
+   - Thin caret via `border-right`, blink animation that stops after typing completes (use `animation-iteration-count` or `forwards` fill to freeze)
+
+4. **All CSS**: Defined in a `<style>` tag within the component (or as CSS-in-JS via a scoped class block in `index.css`). No external libraries.
+
+5. **Color**: Uses `currentColor` inheriting from the login page's light-on-dark scheme (`hsl(210,40%,98%)`).
+
+### Login Page Update
+
+**`src/pages/Login.tsx`** — lines 61–68:
+
+Replace:
+```tsx
+<div className="flex justify-center mb-10">
+  <AidMindBrand size="lg" showWordmark={false} className="..." />
+</div>
 ```
 
-This ensures diagnostic logging works in the Lovable preview environment where `.env` has `VITE_DEV_MODE=true`.
-
-Affected locations (4 occurrences):
-- `registerActiveSessionIds`: empty-array warning (line 147) and registration log (line 158)
-- `registerHistorySessionIds`: empty-array warning (line 169) and registration log (line 181)
-- `requestSessionHighlight`: entry log (line 194) and not-found diagnostic toast/console (line 210)
-
-#### 2. DashboardContext.tsx -- Add a one-time mount log
-
-Add a `useEffect` that runs once on provider mount to log the initial state of the seeded registries:
-
-```typescript
-useEffect(() => {
-  if (IS_DEV) {
-    console.log("[DashboardContext] Provider mounted. Seeded registries:", {
-      active: activeSessionIdsRef.current,
-      history: historySessionIdsRef.current,
-    });
-  }
-}, []);
+With:
+```tsx
+<div className="flex justify-center mb-10">
+  <EyeActivation />
+</div>
 ```
 
-This will confirm the refs are seeded correctly on load.
+Remove the `AidMindBrand` import (if no longer used on this page).
 
-#### 3. No other code changes needed
+### Layout
 
-- WorkRadarPanel: already calls `requestSessionHighlight` synchronously (no setTimeout) -- confirmed correct
-- ActiveSessionsPanel / SessionHistoryPanel: already always include placeholders -- confirmed correct  
-- ObligationPanel: already hides "Open Session" when no sessionId -- confirmed correct
-- Ref-based registry with stable callback: already implemented -- confirmed correct
+The component renders as a centered flex column:
+```
+   [SVG Eye ~120×60]
+      AidMind
+```
 
-### What to do after this change
+Eye SVG sized at roughly `w-28 h-14` (112×56px). Wordmark below in `text-2xl font-semibold tracking-tight` matching the existing brand typography.
 
-Once deployed, open the dashboard, open browser DevTools console, and:
-1. Look for the `[DashboardContext] Provider mounted` log confirming seeded IDs
-2. Click "Consent form still missing" then "Open Session"
-3. Check the console for `[DashboardContext] requestSessionHighlight` showing the lookup result
+### Technical Details
 
-If it says "session_4821" was found in "active" -- the fix is working. If it still says "not found", the console will show exactly what the registries contain, pinpointing the issue.
-
-### Files Modified
-- `src/contexts/DashboardContext.tsx` -- switch DEV gate to VITE_DEV_MODE + add mount log
+- All animations use `animation-fill-mode: forwards` so elements stay visible after drawing
+- SVG paths start with `opacity: 0` or full `stroke-dashoffset`, animated to final state
+- The pulse on the center ring uses `transform-origin: center` and a very gentle keyframe
+- Caret uses `border-right: 2px solid currentColor` with a blink keyframe that runs 2-3 times then stops via `animation-iteration-count: 3`
+- `overflow: hidden` on the wordmark container to hide text beyond current width during typing
+- No `useEffect` or JS timers needed — pure CSS animation driven by `animation-delay`
 
