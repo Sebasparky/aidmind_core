@@ -1,106 +1,128 @@
 /**
- * EyeActivation — Animated SVG eye logo + typing wordmark.
+ * EyeActivation — Animated spiral-eye SVG + typing wordmark.
  * Runs once on page load (~1.4s), then stays static.
  * Pure CSS keyframes — no external animation libraries.
  */
 
 export function EyeActivation() {
   return (
-    <div className="flex flex-col items-center gap-3">
+    <div className="flex flex-row items-center gap-3">
       <style>{`
-        /* ---- Eye draw animations ---- */
-        @keyframes draw-outline {
+        @keyframes eye-draw {
           to { stroke-dashoffset: 0; }
         }
-        @keyframes draw-arc {
-          to { stroke-dashoffset: 0; }
-        }
-        @keyframes ring-in {
+        @keyframes eye-fade {
           to { opacity: 1; }
         }
-        @keyframes ring-pulse {
+        @keyframes eye-pulse {
           0%   { transform: scale(1); }
-          50%  { transform: scale(1.12); }
+          50%  { transform: scale(1.1); }
           100% { transform: scale(1); }
         }
-
-        /* ---- Wordmark typing ---- */
-        @keyframes typing {
+        @keyframes eye-typing {
           from { width: 0; }
           to   { width: 7ch; }
         }
-        @keyframes blink-caret {
-          0%, 100% { border-color: transparent; }
-          50%      { border-color: currentColor; }
-        }
 
-        .eye-outline {
+        /* Layer 1: Outer eye outline */
+        .eye-layer-1 {
+          stroke-dasharray: 420;
+          stroke-dashoffset: 420;
+          animation: eye-draw 0.45s ease-out 0s forwards;
+        }
+        /* Layer 2: Inner band */
+        .eye-layer-2 {
           stroke-dasharray: 320;
           stroke-dashoffset: 320;
-          animation: draw-outline 0.5s ease-out forwards;
+          animation: eye-draw 0.35s ease-out 0.2s forwards;
         }
-        .eye-arc {
-          stroke-dasharray: 60;
-          stroke-dashoffset: 60;
-          animation: draw-arc 0.35s ease-out 0.45s forwards;
+        /* Layer 3: Iris ring */
+        .eye-layer-3 {
+          stroke-dasharray: 190;
+          stroke-dashoffset: 190;
+          animation: eye-draw 0.35s ease-out 0.4s forwards;
         }
-        .eye-center {
+        /* Layer 4: Spiral tail */
+        .eye-layer-4 {
+          stroke-dasharray: 120;
+          stroke-dashoffset: 120;
+          animation: eye-draw 0.3s ease-out 0.55s forwards;
+        }
+        /* Layer 5: Center pupil */
+        .eye-layer-5 {
           opacity: 0;
           transform-origin: center;
           animation:
-            ring-in 0.2s ease-out 0.85s forwards,
-            ring-pulse 1.6s ease-in-out 1.05s 1 forwards;
+            eye-fade 0.15s ease-out 0.85s forwards,
+            eye-pulse 1.4s ease-in-out 1.0s 1 forwards;
         }
-        .eye-wordmark {
+        /* Wordmark typing — no caret */
+        .eye-wordmark-text {
           display: inline-block;
           overflow: hidden;
           white-space: nowrap;
           width: 0;
-          border-right: 2px solid transparent;
-          animation:
-            typing 0.46s steps(7) 0.9s forwards,
-            blink-caret 0.4s step-end 0.9s 3;
+          animation: eye-typing 0.46s steps(7) 0.95s forwards;
         }
       `}</style>
 
-      {/* SVG Eye */}
+      {/* Spiral Eye SVG */}
       <svg
-        className="w-28 h-14"
-        viewBox="0 0 120 60"
+        className="w-12 h-12 flex-shrink-0"
+        viewBox="0 0 200 120"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
         aria-hidden="true"
       >
+        {/* Outer eye outline — almond shape */}
         <path
-          className="eye-outline"
-          d="M10 30 Q60 0 110 30 Q60 60 10 30"
+          className="eye-layer-1"
+          d="M10 60 Q50 5 100 5 Q150 5 190 60 Q150 115 100 115 Q50 115 10 60Z"
           stroke="currentColor"
-          strokeWidth="1.8"
+          strokeWidth="4"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
+        {/* Inner band — smaller almond */}
         <path
-          className="eye-arc"
-          d="M40 30 Q60 18 80 30"
+          className="eye-layer-2"
+          d="M30 60 Q55 22 100 22 Q145 22 170 60 Q145 98 100 98 Q55 98 30 60Z"
           stroke="currentColor"
-          strokeWidth="1.8"
+          strokeWidth="3.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        {/* Iris ring */}
+        <circle
+          className="eye-layer-3"
+          cx="100"
+          cy="60"
+          r="30"
+          stroke="currentColor"
+          strokeWidth="3.5"
+        />
+        {/* Spiral tail — connects iris to inner band */}
+        <path
+          className="eye-layer-4"
+          d="M130 60 Q135 38 118 28 Q100 20 82 32 Q68 44 72 60 Q76 76 92 80 Q108 82 116 70"
+          stroke="currentColor"
+          strokeWidth="3"
           strokeLinecap="round"
           fill="none"
         />
+        {/* Center pupil */}
         <circle
-          className="eye-center"
-          cx="60"
-          cy="30"
-          r="4"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          fill="none"
+          className="eye-layer-5"
+          cx="100"
+          cy="60"
+          r="8"
+          fill="currentColor"
         />
       </svg>
 
       {/* Wordmark */}
       <span className="text-2xl font-semibold tracking-tight text-current">
-        <span className="eye-wordmark">AidMind</span>
+        <span className="eye-wordmark-text">AidMind</span>
       </span>
     </div>
   );
