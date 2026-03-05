@@ -177,10 +177,9 @@ describe("V1 Dashboard Components", () => {
       expect(screen.getByText("Closed sessions (read-only)")).toBeInTheDocument();
     });
 
-    it("always shows placeholder sessions (no empty state)", () => {
+    it("shows empty state when no sessions", () => {
       renderWithRouter(<SessionHistoryPanel />);
-      // Placeholders are always present so Work Radar links stay valid
-      expect(screen.getByText("Job Placement Review")).toBeInTheDocument();
+      expect(screen.getByText("No session history yet")).toBeInTheDocument();
     });
 
     it("does NOT display 'Export' as a primary action", () => {

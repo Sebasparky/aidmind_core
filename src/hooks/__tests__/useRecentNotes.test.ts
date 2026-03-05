@@ -130,14 +130,14 @@ describe("mapStateToStatus", () => {
     expect(mapStateToStatus(session)).toBe("cancelled");
   });
 
-  it("returns 'exported' for state EXPORTED", () => {
+  it("returns 'completed' for state EXPORTED", () => {
     const session = createMockSession({ state: "EXPORTED" });
-    expect(mapStateToStatus(session)).toBe("exported");
+    expect(mapStateToStatus(session)).toBe("completed");
   });
 
-  it("returns 'exported' for state PURGED", () => {
+  it("returns 'completed' for state PURGED", () => {
     const session = createMockSession({ state: "PURGED" });
-    expect(mapStateToStatus(session)).toBe("exported");
+    expect(mapStateToStatus(session)).toBe("completed");
   });
 
   it("returns 'cancelled' for state CANCELLED", () => {
