@@ -407,6 +407,10 @@ export type Database = {
           client_label: string | null
           closed_at: string | null
           created_at: string
+          guidance_scope: string | null
+          guidance_scope_other: string | null
+          guidance_scope_set_at: string | null
+          guidance_scope_set_by: string | null
           id: string
           interaction_type: string | null
           interview_notes: string | null
@@ -428,6 +432,10 @@ export type Database = {
           client_label?: string | null
           closed_at?: string | null
           created_at?: string
+          guidance_scope?: string | null
+          guidance_scope_other?: string | null
+          guidance_scope_set_at?: string | null
+          guidance_scope_set_by?: string | null
           id?: string
           interaction_type?: string | null
           interview_notes?: string | null
@@ -449,6 +457,10 @@ export type Database = {
           client_label?: string | null
           closed_at?: string | null
           created_at?: string
+          guidance_scope?: string | null
+          guidance_scope_other?: string | null
+          guidance_scope_set_at?: string | null
+          guidance_scope_set_by?: string | null
           id?: string
           interaction_type?: string | null
           interview_notes?: string | null

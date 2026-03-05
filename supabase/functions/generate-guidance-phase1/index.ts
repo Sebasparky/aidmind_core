@@ -69,10 +69,10 @@ Deno.serve(async (req) => {
   });
 
   try {
-    // ── 1. Fetch session and enforce template_id ───────────────
+    // ── 1. Fetch session and enforce template_id + guidance_scope ──
     const { data: session, error: sessionErr } = await supabase
       .from("sessions")
-      .select("id, template_id, tenant_id, status, policy_pack_id")
+      .select("id, template_id, tenant_id, status, policy_pack_id, guidance_scope, guidance_scope_other")
       .eq("id", sessionIdResult.value)
       .maybeSingle();
 
@@ -86,7 +86,16 @@ Deno.serve(async (req) => {
       });
     }
 
+    if (!session.guidance_scope) {
+      return json(400, {
+        error: "guidance_scope missing for session. Set scope at session creation.",
+        code: "SCOPE_REQUIRED",
+      });
+    }
+
     const templateId: string = session.template_id;
+    const guidanceScope: string = session.guidance_scope;
+    const guidanceScopeOther: string | null = session.guidance_scope_other;
 
     // ── 2. Retrieve policy snippets ────────────────────────────
     const snippetResponse = await supabase.rpc("get_policy_snippets_for_session", {
@@ -117,7 +126,13 @@ Deno.serve(async (req) => {
       })
       .join("\n\n");
 
-    // ── 4. Call LLM ────────────────────────────────────────────
+    // ── 4. Build scope context line ──────────────────────────
+    let scopeLine = `Session scope/type: ${guidanceScope}`;
+    if (guidanceScope === "other" && guidanceScopeOther) {
+      scopeLine += `\nScope details: ${guidanceScopeOther}`;
+    }
+
+    // ── 5. Call LLM ────────────────────────────────────────────
     const model = "gpt-4o";
     const completion = await openai.chat.completions.create({
       model,
@@ -127,6 +142,8 @@ Deno.serve(async (req) => {
           role: "system",
           content: `
 You are assisting a social services caseworker preparing to conduct a structured client interview.
+
+${scopeLine}
 
 You are given policy excerpts that are relevant to the template being completed for this program and jurisdiction.
 
@@ -228,11 +245,13 @@ No text outside JSON.
       }
     }
 
-    // ── 6. Build guidance payload with template_id ─────────────
+    // ── 6. Build guidance payload with template_id + scope ────
     const guidancePayload = {
       generated_at: new Date().toISOString(),
       model,
       template_id: templateId,
+      guidance_scope: guidanceScope,
+      ...(guidanceScope === "other" && guidanceScopeOther ? { guidance_scope_other: guidanceScopeOther } : {}),
       questions: parsed.questions,
     };
 
@@ -258,6 +277,7 @@ No text outside JSON.
         resource_type: "tool",
         resource_id: "generate_guidance_phase1",
         template_id: templateId,
+        guidance_scope: guidanceScope,
         question_count: parsed.questions.length,
         snippet_count: snippetIdSet.size,
         result: "success",

@@ -26,6 +26,10 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     ttl_expires_at: new Date(Date.now() + 3600000).toISOString(),
     cancelled_at: null,
     closed_at: null,
+    guidance_scope: null,
+    guidance_scope_other: null,
+    guidance_scope_set_at: null,
+    guidance_scope_set_by: null,
     ...overrides,
   };
 }
