@@ -138,10 +138,9 @@ describe("V1 Dashboard Components", () => {
       expect(screen.queryByText("Start Note")).not.toBeInTheDocument();
     });
 
-    it("always shows placeholder sessions (no empty state)", () => {
+    it("shows empty state when no sessions loaded", () => {
       renderWithRouter(<ActiveSessionsPanel />);
-      // Placeholders are always present so Work Radar links stay valid
-      expect(screen.getByText("Smith Family Intake")).toBeInTheDocument();
+      expect(screen.getByText("No active sessions")).toBeInTheDocument();
     });
 
     it("does NOT display lifecycle stage language", () => {
