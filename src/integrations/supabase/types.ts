@@ -459,6 +459,35 @@ export type Database = {
         }
         Relationships: []
       }
+      tenant_users: {
+        Row: {
+          created_at: string
+          id: string
+          tenant_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          tenant_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          tenant_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tenant_users_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tenants: {
         Row: {
           created_at: string
@@ -564,6 +593,13 @@ export type Database = {
         Args: never
         Returns: Database["public"]["Enums"]["app_role"]
       }
+      get_policy_snippets_for_session: {
+        Args: { session_id_input: string }
+        Returns: {
+          chunk_text: string
+          snippet_id: string
+        }[]
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
@@ -573,8 +609,8 @@ export type Database = {
       }
       match_document_chunks: {
         Args: {
-          p_match_count: number
-          p_min_similarity: number
+          p_match_count?: number
+          p_min_similarity?: number
           p_query_embedding: string
           p_tenant_id: string
         }
@@ -586,6 +622,10 @@ export type Database = {
           metadata: Json
           similarity: number
         }[]
+      }
+      update_session_guidance_phase1: {
+        Args: { guidance_json: Json; session_id_input: string }
+        Returns: boolean
       }
     }
     Enums: {

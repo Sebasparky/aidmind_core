@@ -110,11 +110,11 @@ Deno.serve(async (req) => {
     if (updateErr) throw new Error(`Failed to update session: ${updateErr.message}`);
 
     // 7. Eye event
-    await logEyeEvent(supabase, session_id, "TEMPLATE_SELECTED", {
-      actor: "select-template",
-      template_id: template.id,
-      template_name: template.name,
-      template_version: template.version,
+    await logEyeEvent(supabase, {
+      session_id,
+      event_type: "TEMPLATE_SELECTED",
+      serviceName: "select-template",
+      payload: { template_id: template.id, template_name: template.name, template_version: template.version },
     });
 
     // 8. Response

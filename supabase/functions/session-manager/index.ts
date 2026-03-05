@@ -85,10 +85,11 @@ Deno.serve(async (req) => {
 
         if (error) throw new Error(`Failed to create session: ${error.message}`);
 
-        await logEyeEvent(supabase, session.id, "SESSION_STARTED", {
-          actor: "session-manager",
-          tenant_id: data.tenant_id,
-          user_id: data.user_id ?? null,
+        await logEyeEvent(supabase, {
+          session_id: session.id,
+          event_type: "SESSION_STARTED",
+          serviceName: "session-manager",
+          payload: { tenant_id: data.tenant_id, user_id: data.user_id ?? null },
         });
 
         return json(200, { success: true, session });
@@ -149,10 +150,11 @@ Deno.serve(async (req) => {
 
         if (updateErr) throw new Error(`Failed to update session: ${updateErr.message}`);
 
-        await logEyeEvent(supabase, session_id, "SESSION_STATUS_CHANGED", {
-          actor: "session-manager",
-          from_status: session.status,
-          to_status: data.status,
+        await logEyeEvent(supabase, {
+          session_id,
+          event_type: "SESSION_STATUS_CHANGED",
+          serviceName: "session-manager",
+          payload: { from_status: session.status, to_status: data.status },
         });
 
         return json(200, { success: true, session_id, status: data.status });
@@ -189,7 +191,11 @@ Deno.serve(async (req) => {
         if (updateErr) throw new Error(`Failed to update session: ${updateErr.message}`);
 
         const eventName = action === "close" ? "SESSION_CLOSED" : "SESSION_CANCELLED";
-        await logEyeEvent(supabase, session_id, eventName, { actor: "session-manager" });
+        await logEyeEvent(supabase, {
+          session_id,
+          event_type: eventName,
+          serviceName: "session-manager",
+        });
 
         return json(200, { success: true, session_id, status: terminalStatus });
       }
