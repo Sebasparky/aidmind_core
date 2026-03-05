@@ -79,7 +79,8 @@ export async function uploadPdfToStorage(
   kbDocumentId: string,
   file: File
 ): Promise<string> {
-  const storagePath = `tenants/${tenantId}/kb_documents/${kbDocumentId}/${file.name}`;
+  const sanitizedName = sanitizeForStorageKey(file.name);
+  const storagePath = `tenants/${tenantId}/kb_documents/${kbDocumentId}/${sanitizedName}`;
 
   const { error } = await supabase.storage
     .from(BUCKET)
