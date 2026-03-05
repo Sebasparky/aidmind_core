@@ -265,6 +265,65 @@ export type Database = {
           },
         ]
       }
+      kb_ingestion_jobs: {
+        Row: {
+          attempts: number
+          created_at: string
+          error: string | null
+          finished_at: string | null
+          id: number
+          kb_document_id: string
+          locked_at: string | null
+          locked_by: string | null
+          max_attempts: number
+          priority: number
+          started_at: string | null
+          status: string
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          attempts?: number
+          created_at?: string
+          error?: string | null
+          finished_at?: string | null
+          id?: number
+          kb_document_id: string
+          locked_at?: string | null
+          locked_by?: string | null
+          max_attempts?: number
+          priority?: number
+          started_at?: string | null
+          status?: string
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          attempts?: number
+          created_at?: string
+          error?: string | null
+          finished_at?: string | null
+          id?: number
+          kb_document_id?: string
+          locked_at?: string | null
+          locked_by?: string | null
+          max_attempts?: number
+          priority?: number
+          started_at?: string | null
+          status?: string
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "kb_ingestion_jobs_kb_document_id_fkey"
+            columns: ["kb_document_id"]
+            isOneToOne: false
+            referencedRelation: "kb_documents"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       kb_templates: {
         Row: {
           content: string

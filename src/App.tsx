@@ -23,6 +23,7 @@ import Supervisor from "./pages/Supervisor";
 import Auditor from "./pages/Auditor";
 import Platform from "./pages/Platform";
 import NotFound from "./pages/NotFound";
+import KbBulkUpload from "./pages/KbBulkUpload";
 import { AuthLoadingScreen } from "@/components/auth/AuthLoadingScreen";
 
 const queryClient = new QueryClient();
@@ -137,6 +138,11 @@ const App = () => (
                 <Route path="/platform/*" element={
                   <RouteGuard allowedRoles={["caseworker"]}>
                     <Platform />
+                  </RouteGuard>
+                } />
+                <Route path="/kb/bulk-upload" element={
+                  <RouteGuard allowedRoles={["caseworker", "supervisor"]}>
+                    <KbBulkUpload />
                   </RouteGuard>
                 } />
 
