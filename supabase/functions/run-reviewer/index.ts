@@ -63,8 +63,7 @@ function jsonResponse(status: number, body: Record<string, unknown>) {
 }
 
 function errorResponse(status: number, code: string, message: string) {
-  const body: ErrorResponse = { error: { code, message } };
-  return jsonResponse(status, body);
+  return jsonResponse(status, { error: { code, message } });
 }
 
 function isValidUuid(value: string): boolean {
@@ -73,13 +72,18 @@ function isValidUuid(value: string): boolean {
 
 /** Safely log eye event - failures must not break reviewer flow */
 async function safeLogEyeEvent(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   sessionId: string,
   eventType: string,
   payload: Record<string, unknown>
 ): Promise<void> {
   try {
-    await logEyeEvent(supabase, sessionId, eventType, payload);
+    await logEyeEvent(supabase, {
+      session_id: sessionId,
+      event_type: eventType,
+      serviceName: "run-reviewer",
+      payload,
+    });
   } catch (err) {
     console.error(`Failed to log eye event ${eventType}:`, err);
   }

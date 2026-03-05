@@ -51,10 +51,11 @@ Deno.serve(async (req) => {
 
     if (error) throw new Error(`Failed to create session: ${error.message}`);
 
-    await logEyeEvent(supabase, session.id, "SESSION_STARTED", {
-      actor: "start-session",
-      tenant_id,
-      user_id: user_id ?? null,
+    await logEyeEvent(supabase, {
+      session_id: session.id,
+      event_type: "SESSION_STARTED",
+      serviceName: "start-session",
+      payload: { tenant_id, user_id: user_id ?? null },
     });
 
     return json(200, { success: true, session });

@@ -207,11 +207,11 @@ Deno.serve(async (req) => {
     if (statusErr) throw new Error(`Failed to update session status: ${statusErr.message}`);
 
     try {
-      await logEyeEvent(supabase, session_id, "POLICY_PACK_COMPILATION_STARTED", {
-        actor: "compile-policy-pack",
-        tenant_id,
-        template_id,
-        guardrails,
+      await logEyeEvent(supabase, {
+        session_id,
+        event_type: "POLICY_PACK_COMPILATION_STARTED",
+        serviceName: "compile-policy-pack",
+        payload: { tenant_id, template_id, guardrails },
       });
     } catch (err) {
       console.error("Eye event failed:", err);
@@ -363,12 +363,11 @@ Deno.serve(async (req) => {
 
     // 10. Log completion
     try {
-      await logEyeEvent(supabase, session_id, "POLICY_PACK_COMPILATION_COMPLETED", {
-        actor: "compile-policy-pack",
-        compiled_policy_pack_id,
-        retrieval_run_id,
-        query_count: queries.length,
-        selected_chunk_count: merged.length,
+      await logEyeEvent(supabase, {
+        session_id,
+        event_type: "POLICY_PACK_COMPILATION_COMPLETED",
+        serviceName: "compile-policy-pack",
+        payload: { compiled_policy_pack_id, retrieval_run_id, query_count: queries.length, selected_chunk_count: merged.length },
       });
     } catch (err) {
       console.error("Eye event failed:", err);
@@ -407,9 +406,11 @@ Deno.serve(async (req) => {
     }
 
     try {
-      await logEyeEvent(supabase, session_id!, "POLICY_PACK_COMPILATION_FAILED", {
-        actor: "compile-policy-pack",
-        reason: message,
+      await logEyeEvent(supabase, {
+        session_id: session_id!,
+        event_type: "POLICY_PACK_COMPILATION_FAILED",
+        serviceName: "compile-policy-pack",
+        payload: { reason_code: message },
       });
     } catch (_) {
       // never fail due to logging

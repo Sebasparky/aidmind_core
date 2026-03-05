@@ -73,6 +73,26 @@ async function embed(text: string, apiKey: string, model: string): Promise<numbe
   return vec;
 }
 
+const SERVICE_NAME = "ingest-kb-text";
+
+/** Helper to safely log eye events without breaking the main flow */
+async function safeLogEye(
+  supabase: any,
+  eventType: string,
+  payload?: Record<string, unknown>
+): Promise<void> {
+  try {
+    await logEyeEvent(supabase, {
+      session_id: null,
+      event_type: eventType,
+      serviceName: SERVICE_NAME,
+      payload,
+    });
+  } catch (err) {
+    console.error("Eye event failed:", err);
+  }
+}
+
 /* ── Main handler ── */
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -113,23 +133,8 @@ Deno.serve(async (req) => {
     if (docErr) throw new Error(`Failed to fetch document: ${docErr.message}`);
     if (!doc) return json(404, { success: false, error: "Document not found" });
 
-    try {
-      await logEyeEvent(supabase, null, "KB_DOCUMENT_INGEST_STARTED", {
-        actor: "ingest-kb-text",
-        tenant_id: doc.tenant_id,
-      });
-    } catch (err) {
-      console.error("Eye event failed:", err);
-    }
-
-    try {
-      await logEyeEvent(supabase, null, "KB_DOCUMENT_TEXT_RECEIVED", {
-        actor: "ingest-kb-text",
-        char_count: extracted_text.length,
-      });
-    } catch (err) {
-      console.error("Eye event failed:", err);
-    }
+    await safeLogEye(supabase, "KB_DOCUMENT_INGEST_STARTED", { tenant_id: doc.tenant_id });
+    await safeLogEye(supabase, "KB_DOCUMENT_TEXT_RECEIVED", { char_count: extracted_text.length });
 
     // 2. Overwrite or duplicate check
     if (overwrite) {
@@ -155,14 +160,7 @@ Deno.serve(async (req) => {
     const chunks = chunkText(extracted_text)
       .filter((c) => c.trim().length >= 50);
 
-    try {
-      await logEyeEvent(supabase, null, "KB_DOCUMENT_CHUNKED", {
-        actor: "ingest-kb-text",
-        chunk_count: chunks.length,
-      });
-    } catch (err) {
-      console.error("Eye event failed:", err);
-    }
+    await safeLogEye(supabase, "KB_DOCUMENT_CHUNKED", { chunk_count: chunks.length });
 
     // 4. Embed + build rows
     const rows: Record<string, unknown>[] = [];
@@ -183,14 +181,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    try {
-      await logEyeEvent(supabase, null, "KB_DOCUMENT_EMBEDDED", {
-        actor: "ingest-kb-text",
-        chunk_count: rows.length,
-      });
-    } catch (err) {
-      console.error("Eye event failed:", err);
-    }
+    await safeLogEye(supabase, "KB_DOCUMENT_EMBEDDED", { chunk_count: rows.length });
 
     // 5. Insert chunks in batches of 50
     const BATCH_SIZE = 50;
@@ -208,14 +199,7 @@ Deno.serve(async (req) => {
 
     if (updateErr) throw new Error(`Failed to update document content: ${updateErr.message}`);
 
-    try {
-      await logEyeEvent(supabase, null, "KB_DOCUMENT_INGEST_COMPLETED", {
-        actor: "ingest-kb-text",
-        chunk_count: rows.length,
-      });
-    } catch (err) {
-      console.error("Eye event failed:", err);
-    }
+    await safeLogEye(supabase, "KB_DOCUMENT_INGEST_COMPLETED", { chunk_count: rows.length });
 
     return json(200, {
       success: true,
@@ -228,10 +212,7 @@ Deno.serve(async (req) => {
     const message = e instanceof Error ? e.message : "Unknown error";
     console.error("[ingest-kb-text] error:", message);
     try {
-      await logEyeEvent(supabase, null, "KB_DOCUMENT_INGEST_FAILED", {
-        actor: "ingest-kb-text",
-        reason: message,
-      });
+      await safeLogEye(supabase, "KB_DOCUMENT_INGEST_FAILED", { reason_code: message });
     } catch (_) {
       // never fail due to logging
     }
