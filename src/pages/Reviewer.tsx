@@ -2,15 +2,16 @@ import { useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Shield, Info, Loader2, Copy, Check, RotateCcw,
   AlertTriangle, MessageSquare, Scale, CheckSquare, Eye,
+  Upload, FileText, X, RefreshCw, CheckCircle2, FileWarning,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import {
@@ -20,16 +21,23 @@ import {
   type FlagSeverity,
   FLAG_CATEGORIES,
   FLAG_CATEGORY_META,
-  MAX_REVIEWER_TEXT_LENGTH,
   MOCK_REVIEWER_OUTPUT,
 } from "@/lib/tools/reviewer-types";
 
-type ToolState = "idle" | "editing" | "running" | "success" | "error" | "cleared";
+type ToolState = "idle" | "ready" | "running" | "success" | "error" | "cleared";
 
 interface SessionInfo {
   caseLabel: string;
   interactionType: string | null;
 }
+
+interface SelectedFile {
+  file: File;
+  objectUrl: string;
+}
+
+const MAX_FILE_SIZE_MB = 20;
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 const SEVERITY_CONFIG: Record<FlagSeverity, { variant: "destructive" | "default" | "secondary"; label: string }> = {
   high: { variant: "destructive", label: "High" },
@@ -44,6 +52,12 @@ const CATEGORY_ICONS: Record<FlagCategory, typeof MessageSquare> = {
   completeness_flags: CheckSquare,
 };
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export default function Reviewer() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
@@ -53,11 +67,16 @@ export default function Reviewer() {
 
   // Tool state
   const [toolState, setToolState] = useState<ToolState>("idle");
-  const [userText, setUserText] = useState("");
+  const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [contextText, setContextText] = useState("");
   const [output, setOutput] = useState<ReviewerOutput | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [copiedCategory, setCopiedCategory] = useState<string | null>(null);
   const [simulateError, setSimulateError] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     async function fetchSession() {
@@ -91,15 +110,78 @@ export default function Reviewer() {
     fetchSession();
   }, [sessionId]);
 
-  const textTooLong = userText.length > MAX_REVIEWER_TEXT_LENGTH;
-  const textEmpty = userText.trim().length === 0;
-  const canRun = !textEmpty && !textTooLong && toolState !== "running";
+  // Cleanup object URL on unmount or file change
+  useEffect(() => {
+    return () => {
+      if (selectedFile) {
+        URL.revokeObjectURL(selectedFile.objectUrl);
+      }
+    };
+  }, [selectedFile]);
 
-  const handleTextChange = (val: string) => {
-    setUserText(val);
-    if (toolState === "idle" || toolState === "cleared") {
-      setToolState("editing");
+  const canRun = selectedFile !== null && !fileError && toolState !== "running";
+
+  const validateAndSetFile = useCallback((file: File) => {
+    setFileError(null);
+
+    if (file.type !== "application/pdf") {
+      setFileError("Please upload a PDF file.");
+      return;
     }
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      setFileError(`File exceeds ${MAX_FILE_SIZE_MB}MB limit.`);
+      return;
+    }
+
+    // Revoke previous URL
+    if (selectedFile) {
+      URL.revokeObjectURL(selectedFile.objectUrl);
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+    setSelectedFile({ file, objectUrl });
+    setToolState("ready");
+    setOutput(null);
+    setErrorMessage(null);
+  }, [selectedFile]);
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) validateAndSetFile(file);
+    // Reset input so re-selecting same file triggers change
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) validateAndSetFile(file);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleRemoveFile = () => {
+    if (selectedFile) {
+      URL.revokeObjectURL(selectedFile.objectUrl);
+    }
+    setSelectedFile(null);
+    setFileError(null);
+    setToolState("idle");
+    setOutput(null);
+    setErrorMessage(null);
+  };
+
+  const handleReplace = () => {
+    fileInputRef.current?.click();
   };
 
   const handleRun = useCallback(async () => {
@@ -121,11 +203,11 @@ export default function Reviewer() {
   }, [simulateError]);
 
   const handleClear = () => {
-    setUserText("");
+    handleRemoveFile();
+    setContextText("");
     setOutput(null);
     setErrorMessage(null);
-    setToolState("cleared");
-    setTimeout(() => setToolState("idle"), 300);
+    setToolState("idle");
   };
 
   const handleCopyCategory = async (category: FlagCategory) => {
@@ -222,50 +304,131 @@ export default function Reviewer() {
           <Alert className="mb-6 border-primary/20 bg-primary/5">
             <Info className="h-4 w-4 text-primary" />
             <AlertDescription className="text-sm text-muted-foreground">
-              Paste your documentation to check for tone, bias, policy language, and completeness.
+              Upload a PDF to check for tone, bias, policy language, and completeness.
               <strong className="block mt-1 text-foreground">
-                AidMind does not store, modify, or export your text.
+                AidMind does not store or edit your files. Your upload is used only for this review.
               </strong>
             </AlertDescription>
           </Alert>
 
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-            {/* ── Left: Input Panel ── */}
+            {/* ── Left: Upload Panel ── */}
             <div className="lg:col-span-2 space-y-4">
               <Card>
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-base">Your Documentation</CardTitle>
+                  <CardTitle className="text-base">Upload PDF</CardTitle>
                   <CardDescription>
-                    Paste the text you want reviewed. This text is processed in memory only and never stored.
+                    Upload the document you want reviewed. Files are processed in memory only.
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-3">
-                  <div>
-                    <Label htmlFor="reviewer-text" className="sr-only">Documentation text</Label>
-                    <Textarea
-                      id="reviewer-text"
-                      placeholder="Paste your documentation here for review…"
-                      value={userText}
-                      onChange={(e) => handleTextChange(e.target.value)}
-                      className="min-h-[280px] resize-y font-mono text-sm"
-                      maxLength={MAX_REVIEWER_TEXT_LENGTH + 100} // soft cap, validated below
-                    />
-                  </div>
+                <CardContent className="space-y-4">
+                  {/* Hidden file input */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="application/pdf"
+                    onChange={handleFileInputChange}
+                    className="sr-only"
+                    aria-label="Upload PDF file"
+                  />
 
-                  <div className="flex items-center justify-between">
-                    <p className={cn(
-                      "text-xs",
-                      textTooLong ? "text-destructive font-medium" : "text-muted-foreground"
-                    )}>
-                      {userText.length.toLocaleString()} / {MAX_REVIEWER_TEXT_LENGTH.toLocaleString()} characters
-                    </p>
-                    {textTooLong && (
-                      <p className="text-xs text-destructive">Text exceeds maximum length</p>
-                    )}
-                  </div>
+                  {!selectedFile ? (
+                    /* Drop zone */
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => fileInputRef.current?.click()}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          fileInputRef.current?.click();
+                        }
+                      }}
+                      onDrop={handleDrop}
+                      onDragOver={handleDragOver}
+                      onDragLeave={handleDragLeave}
+                      className={cn(
+                        "border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                        isDragging
+                          ? "border-primary bg-primary/5"
+                          : "border-muted-foreground/25 hover:border-primary/50 hover:bg-accent/30"
+                      )}
+                    >
+                      <Upload className="h-8 w-8 mx-auto text-muted-foreground/50 mb-3" />
+                      <p className="text-sm font-medium text-foreground mb-1">
+                        Drag & drop your PDF here
+                      </p>
+                      <p className="text-xs text-muted-foreground mb-3">
+                        or click to choose a file
+                      </p>
+                      <Button type="button" variant="outline" size="sm" className="pointer-events-none">
+                        Choose file
+                      </Button>
+                      <p className="text-xs text-muted-foreground mt-3">
+                        PDF only · Max {MAX_FILE_SIZE_MB}MB
+                      </p>
+                    </div>
+                  ) : (
+                    /* File selected card */
+                    <div className="border rounded-lg p-4 bg-accent/20">
+                      <div className="flex items-start gap-3">
+                        <FileText className="h-8 w-8 text-primary shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-foreground truncate">
+                            {selectedFile.file.name}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {formatFileSize(selectedFile.file.size)}
+                          </p>
+                          <Badge variant="secondary" className="mt-2 text-xs gap-1">
+                            <CheckCircle2 className="h-3 w-3" />
+                            Ready
+                          </Badge>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border">
+                        <Button variant="outline" size="sm" onClick={handleReplace} className="text-xs gap-1.5">
+                          <RefreshCw className="h-3 w-3" />
+                          Replace
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={handleRemoveFile} className="text-xs gap-1.5 text-destructive hover:text-destructive">
+                          <X className="h-3 w-3" />
+                          Remove
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* File error */}
+                  {fileError && (
+                    <div className="flex items-center gap-2 text-destructive">
+                      <FileWarning className="h-4 w-4 shrink-0" />
+                      <p className="text-xs font-medium">{fileError}</p>
+                    </div>
+                  )}
 
                   <p className="text-xs text-muted-foreground">
-                    AidMind does not store client content. Your text is cleared when you leave this page.
+                    Files are cleared when you leave this page.
+                  </p>
+                </CardContent>
+              </Card>
+
+              {/* Optional context */}
+              <Card>
+                <CardContent className="pt-5 space-y-2">
+                  <Label htmlFor="reviewer-context" className="text-sm text-foreground">
+                    Optional context <span className="text-muted-foreground font-normal">(not stored)</span>
+                  </Label>
+                  <Input
+                    id="reviewer-context"
+                    placeholder="e.g., intake summary, case type, program…"
+                    value={contextText}
+                    onChange={(e) => setContextText(e.target.value)}
+                    className="text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Used only for this review. Cleared when you leave the page.
                   </p>
                 </CardContent>
               </Card>
@@ -288,20 +451,58 @@ export default function Reviewer() {
               )}
             </div>
 
-            {/* ── Right: Output Panel ── */}
-            <div className="lg:col-span-3">
-              {/* Idle / Editing */}
-              {(toolState === "idle" || toolState === "editing" || toolState === "cleared") && (
-                <Card className="border-dashed">
-                  <CardContent className="py-16 text-center">
-                    <Shield className="h-10 w-10 mx-auto text-muted-foreground/30 mb-4" />
-                    <p className="text-sm text-muted-foreground">
-                      {textEmpty
-                        ? "Paste your text on the left, then click Run Reviewer."
-                        : "Ready to review. Click Run Reviewer below."}
-                    </p>
-                  </CardContent>
-                </Card>
+            {/* ── Right: Preview + Output Panel ── */}
+            <div className="lg:col-span-3 space-y-4">
+              {/* Idle / Ready — no results yet */}
+              {(toolState === "idle" || toolState === "ready" || toolState === "cleared") && !output && (
+                <>
+                  {!selectedFile ? (
+                    /* Empty state */
+                    <Card className="border-dashed">
+                      <CardContent className="py-16 text-center">
+                        <Shield className="h-10 w-10 mx-auto text-muted-foreground/30 mb-4" />
+                        <p className="text-sm text-muted-foreground">
+                          Upload a PDF on the left, then click Run Reviewer.
+                        </p>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    /* PDF preview + checklist */
+                    <div className="space-y-4">
+                      <Card>
+                        <CardHeader className="pb-2">
+                          <CardTitle className="text-sm font-medium">Document Preview</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="rounded-lg border overflow-hidden bg-muted/30" style={{ height: 400 }}>
+                            <iframe
+                              src={selectedFile.objectUrl}
+                              title="PDF preview"
+                              className="w-full h-full"
+                              style={{ border: "none" }}
+                            />
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                      {/* Readiness checklist */}
+                      <Card>
+                        <CardContent className="py-4">
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2 text-sm">
+                              <CheckCircle2 className="h-4 w-4 text-primary" />
+                              <span className="text-foreground">PDF selected</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-sm">
+                              <CheckCircle2 className="h-4 w-4 text-primary" />
+                              <span className="text-foreground">Ready to run</span>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </div>
+                  )}
+                </>
               )}
 
               {/* Running */}
@@ -332,6 +533,11 @@ export default function Reviewer() {
               {/* Success */}
               {toolState === "success" && output && (
                 <div className="space-y-4">
+                  {/* Mock label */}
+                  <Badge variant="outline" className="text-xs text-muted-foreground border-muted-foreground/30">
+                    Preview (mock)
+                  </Badge>
+
                   {/* Summary bar */}
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -451,9 +657,9 @@ export default function Reviewer() {
             Back to Dashboard
           </Button>
           <div className="flex items-center gap-2">
-            {(toolState === "success" || toolState === "error" || userText.length > 0) && (
-              <Button variant="outline" onClick={handleClear}>
-                <RotateCcw className="h-4 w-4 mr-2" />
+            {(selectedFile || output || toolState === "error") && (
+              <Button variant="outline" onClick={handleClear} className="gap-1.5">
+                <RotateCcw className="h-4 w-4" />
                 Clear
               </Button>
             )}
