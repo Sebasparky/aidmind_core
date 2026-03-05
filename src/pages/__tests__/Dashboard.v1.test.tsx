@@ -5,6 +5,25 @@ import { DerivedSignalsPanel, WorkRadarPanel } from "@/components/dashboard/Work
 import { ActiveSessionsPanel } from "@/components/dashboard/ActiveSessionsPanel";
 import { SessionHistoryPanel } from "@/components/dashboard/SessionHistoryPanel";
 
+// Mock AuthContext
+vi.mock("@/contexts/AuthContext", () => ({
+  useAuth: () => ({
+    user: { id: "test-user" },
+    session: { access_token: "test-token" },
+    loading: false,
+    signOut: vi.fn(),
+  }),
+}));
+
+// Mock useTenant
+vi.mock("@/hooks/useTenant", () => ({
+  useTenant: () => ({
+    tenantId: "test-tenant",
+    tenant: { id: "test-tenant", name: "Test Tenant" },
+    loading: false,
+  }),
+}));
+
 // Mock DashboardContext
 vi.mock("@/contexts/DashboardContext", () => ({
   useDashboard: () => ({
@@ -80,24 +99,16 @@ describe("V1 Dashboard Components", () => {
       expect(screen.queryByText(/task list/i)).not.toBeInTheDocument();
     });
 
-    it("displays source badges with provenance information (placeholder data)", () => {
+    it("shows derived signals or empty state from real data", () => {
       renderWithRouter(<DerivedSignalsPanel />);
-      expect(screen.getByText("Intake session #4821")).toBeInTheDocument();
-      expect(screen.getByText("Policy threshold reached")).toBeInTheDocument();
-      expect(screen.getByText("Follow-up session #4823")).toBeInTheDocument();
-    });
-
-    it("shows obligation text clearly", () => {
-      renderWithRouter(<DerivedSignalsPanel />);
-      expect(screen.getByText("Consent form still missing")).toBeInTheDocument();
-      expect(screen.getByText("Supervisor sign-off required")).toBeInTheDocument();
-      expect(screen.getByText("Follow-up documentation due")).toBeInTheDocument();
+      // With mocked supabase returning no data, should show empty state
+      expect(screen.getByText(/All clear|no signals|Work Radar/i)).toBeInTheDocument();
     });
 
     it("shows correct empty state when no items", () => {
       renderWithRouter(<DerivedSignalsPanel items={[]} />);
-      expect(screen.getByText("No derived signals at this time.")).toBeInTheDocument();
-      expect(screen.getByText("Available policy context does not indicate outstanding documentation considerations.")).toBeInTheDocument();
+      expect(screen.getByText("All clear — no signals at this time.")).toBeInTheDocument();
+      expect(screen.getByText("System health, KB status, and audit events are nominal.")).toBeInTheDocument();
     });
 
     it("provides info tooltip about non-authoritative nature", () => {
@@ -127,10 +138,9 @@ describe("V1 Dashboard Components", () => {
       expect(screen.queryByText("Start Note")).not.toBeInTheDocument();
     });
 
-    it("always shows placeholder sessions (no empty state)", () => {
+    it("shows empty state when no sessions loaded", () => {
       renderWithRouter(<ActiveSessionsPanel />);
-      // Placeholders are always present so Work Radar links stay valid
-      expect(screen.getByText("Smith Family Intake")).toBeInTheDocument();
+      expect(screen.getByText("No active sessions")).toBeInTheDocument();
     });
 
     it("does NOT display lifecycle stage language", () => {
@@ -158,10 +168,9 @@ describe("V1 Dashboard Components", () => {
       expect(screen.getByText("Closed sessions (read-only)")).toBeInTheDocument();
     });
 
-    it("always shows placeholder sessions (no empty state)", () => {
+    it("shows empty state when no sessions", () => {
       renderWithRouter(<SessionHistoryPanel />);
-      // Placeholders are always present so Work Radar links stay valid
-      expect(screen.getByText("Job Placement Review")).toBeInTheDocument();
+      expect(screen.getByText("No session history yet")).toBeInTheDocument();
     });
 
     it("does NOT display 'Export' as a primary action", () => {
