@@ -1,0 +1,2 @@
+supabase==2.13.0
+PyMuPDF==1.25.3
