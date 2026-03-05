@@ -1,4 +1,4 @@
-import { useParams, useNavigate, useLocation } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
   Sparkles,
@@ -11,130 +11,44 @@ import {
   AlertTriangle,
   FileText,
   Pencil,
+  ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { useState, useEffect, useCallback } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import {
-  type GuidanceOutput,
   type GuidanceQuestion,
   type GuidanceCategory,
   GUIDANCE_CATEGORIES,
-  MOCK_GUIDANCE_OUTPUT,
 } from "@/lib/tools/guidance-types";
-
-type ToolState = "idle" | "running" | "success" | "error" | "cleared";
-
-interface SessionInfo {
-  caseLabel: string;
-  interactionType: string | null;
-  hasPolicyPack: boolean;
-  guidanceScope: string | null;
-  guidanceScopeOther: string | null;
-}
-
-interface LocationState {
-  templateId?: string;
-  templateName?: string;
-  templateSource?: string;
-}
+import { useGuidanceSession } from "@/hooks/useGuidanceSession";
+import { CitationsModal } from "@/components/session/CitationsModal";
 
 export default function Guidance() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
-  const location = useLocation();
-  const locState = (location.state as LocationState) || {};
 
-  const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
-  const [pageLoading, setPageLoading] = useState(true);
-  const [pageError, setPageError] = useState<string | null>(null);
+  const {
+    session,
+    loading,
+    fetchError,
+    runState,
+    runError,
+    runGuidance,
+    clearResults,
+  } = useGuidanceSession(sessionId);
 
-  // Template info from selection screen
-  const [templateName] = useState(locState.templateName || null);
-  const [templateId] = useState(locState.templateId || null);
-
-  // Tool state
-  const [toolState, setToolState] = useState<ToolState>("idle");
-  const [output, setOutput] = useState<GuidanceOutput | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [simulateError, setSimulateError] = useState(false);
+  const [citationsModal, setCitationsModal] = useState<{ citations: string[]; question: string } | null>(null);
 
-  // If no template selected, redirect to template selection
-  useEffect(() => {
-    if (!templateId && sessionId) {
-      navigate(`/guidance/${sessionId}/template`, { replace: true });
-    }
-  }, [templateId, sessionId, navigate]);
-
-  useEffect(() => {
-    async function fetchSession() {
-      if (!sessionId) {
-        setPageError("No session ID provided");
-        setPageLoading(false);
-        return;
-      }
-      try {
-        const { data, error } = await supabase
-          .from("sessions")
-          .select("case_label, interaction_type, policy_pack_id, guidance_scope, guidance_scope_other")
-          .eq("session_id", sessionId)
-          .maybeSingle();
-
-        if (error) throw error;
-        if (!data) {
-          setPageError("Session not found");
-        } else {
-          setSessionInfo({
-            caseLabel: data.case_label || "Untitled session",
-            interactionType: data.interaction_type,
-            hasPolicyPack: !!data.policy_pack_id,
-            guidanceScope: data.guidance_scope,
-            guidanceScopeOther: data.guidance_scope_other,
-          });
-        }
-      } catch {
-        setPageError("Failed to load session");
-      } finally {
-        setPageLoading(false);
-      }
-    }
-    fetchSession();
-  }, [sessionId]);
-
-  const handleGenerate = useCallback(async () => {
-    setToolState("running");
-    setOutput(null);
-    setErrorMessage(null);
-
-    const delay = 800 + Math.random() * 400;
-    await new Promise((r) => setTimeout(r, delay));
-
-    if (simulateError) {
-      setToolState("error");
-      setErrorMessage("No snippets found — session may not have a compiled policy pack yet.");
-      return;
-    }
-
-    // Inject template_id into mock output
-    setOutput({
-      ...MOCK_GUIDANCE_OUTPUT,
-      generated_at: new Date().toISOString(),
-    });
-    setToolState("success");
-  }, [simulateError]);
-
-  const handleClear = () => {
-    setOutput(null);
-    setErrorMessage(null);
-    setToolState("cleared");
-    setTimeout(() => setToolState("idle"), 300);
-  };
+  // ── Helpers ────────────────────────────────────────────────────
+  const handleBack = () => navigate("/dashboard");
+  const handleChangeTemplate = () => navigate(`/guidance/${sessionId}/template`);
+  const handleSelectTemplate = () => navigate(`/guidance/${sessionId}/template`);
 
   const handleCopyQuestion = async (question: string, qId: string) => {
     await navigator.clipboard.writeText(question);
@@ -143,8 +57,8 @@ export default function Guidance() {
   };
 
   const handleCopyCategory = async (category: GuidanceCategory) => {
-    if (!output) return;
-    const questions = output.questions.filter((q) => q.category === category);
+    if (!session?.guidanceOutput) return;
+    const questions = session.guidanceOutput.questions.filter((q) => q.category === category);
     const text = questions.map((q, i) => `${i + 1}. ${q.question}`).join("\n");
     await navigator.clipboard.writeText(text);
     setCopiedId(`cat-${category}`);
@@ -152,7 +66,8 @@ export default function Guidance() {
   };
 
   const handleCopyAll = async () => {
-    if (!output) return;
+    if (!session?.guidanceOutput) return;
+    const output = session.guidanceOutput;
     const text = GUIDANCE_CATEGORIES.map((cat) => {
       const qs = output.questions.filter((q) => q.category === cat);
       if (qs.length === 0) return "";
@@ -165,11 +80,14 @@ export default function Guidance() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const handleBack = () => navigate("/dashboard");
-  const handleChangeTemplate = () => navigate(`/guidance/${sessionId}/template`);
+  const formatScope = (scope: string | null, scopeOther: string | null) => {
+    if (!scope) return null;
+    if (scope === "other" && scopeOther) return scopeOther;
+    return scope.replace(/_/g, " ");
+  };
 
-  // ── Page-level loading/error ──
-  if (pageLoading) {
+  // ── Page-level loading/error ──────────────────────────────────
+  if (loading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
@@ -180,16 +98,26 @@ export default function Guidance() {
     );
   }
 
-  if (pageError || !sessionInfo) {
+  if (fetchError || !session) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center max-w-md">
-          <p className="text-destructive mb-4">{pageError || "Session not found"}</p>
+          <p className="text-destructive mb-4">{fetchError || "Session not found"}</p>
           <Button onClick={handleBack}>Back to Dashboard</Button>
         </div>
       </div>
     );
   }
+
+  // ── Derived state ─────────────────────────────────────────────
+  const hasTemplate = !!session.templateId;
+  const hasScope = !!session.guidanceScope;
+  const output = session.guidanceOutput;
+  const scopeLabel = formatScope(session.guidanceScope, session.guidanceScopeOther);
+
+  // Determine if we should show a specific error banner
+  const isTemplateRequired = runError?.code === "TEMPLATE_REQUIRED";
+  const isScopeRequired = runError?.code === "SCOPE_REQUIRED";
 
   // Group questions by category
   const groupedQuestions: Record<GuidanceCategory, GuidanceQuestion[]> = {} as any;
@@ -215,17 +143,27 @@ export default function Guidance() {
                   <h1 className="text-xl font-semibold text-foreground">Generate Guidance</h1>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  {sessionInfo.caseLabel}
-                  {sessionInfo.interactionType && ` · ${sessionInfo.interactionType}`}
+                  {session.caseLabel}
+                  {session.interactionType && ` · ${session.interactionType}`}
                 </p>
               </div>
             </div>
 
-            {sessionId && (
+            <div className="flex items-center gap-2">
+              {scopeLabel && (
+                <Badge variant="secondary" className="text-xs">
+                  Scope: {scopeLabel}
+                </Badge>
+              )}
+              {session.templateName && (
+                <Badge variant="outline" className="text-xs">
+                  Template: {session.templateName.length > 20 ? session.templateName.slice(0, 20) + "…" : session.templateName}
+                </Badge>
+              )}
               <Badge variant="outline" className="text-xs font-mono text-muted-foreground">
-                Session: {sessionId.slice(0, 8)}…
+                Session: {sessionId?.slice(0, 8)}…
               </Badge>
-            )}
+            </div>
           </div>
         </div>
       </header>
@@ -244,31 +182,68 @@ export default function Guidance() {
             </AlertDescription>
           </Alert>
 
+          {/* Template required banner */}
+          {isTemplateRequired && (
+            <Alert className="mb-6 border-destructive/30 bg-destructive/5">
+              <AlertTriangle className="h-4 w-4 text-destructive" />
+              <AlertDescription className="text-sm">
+                A template is required before generating guidance.{" "}
+                <button onClick={handleSelectTemplate} className="text-primary hover:underline font-medium">
+                  Select a template →
+                </button>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Scope required banner */}
+          {isScopeRequired && (
+            <Alert className="mb-6 border-destructive/30 bg-destructive/5">
+              <AlertTriangle className="h-4 w-4 text-destructive" />
+              <AlertDescription className="text-sm">
+                This session was created before the scope requirement was added.
+                Please create a new session with a scope to use guidance.
+              </AlertDescription>
+            </Alert>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
             {/* ── Left: Context Panel ── */}
             <div className="lg:col-span-2 space-y-4">
-              {/* Template pill */}
+              {/* Template card */}
               <Card>
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base">Template</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-primary shrink-0" />
-                    <Badge variant="secondary" className="text-xs max-w-full truncate">
-                      {templateName || "Unknown template"}
-                    </Badge>
-                  </div>
-                  <button
-                    onClick={handleChangeTemplate}
-                    className="text-xs text-primary hover:underline flex items-center gap-1"
-                  >
-                    <Pencil className="h-3 w-3" />
-                    Change template
-                  </button>
+                  {hasTemplate ? (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-primary shrink-0" />
+                        <Badge variant="secondary" className="text-xs max-w-full truncate">
+                          {session.templateName || "Template attached"}
+                        </Badge>
+                      </div>
+                      <button
+                        onClick={handleChangeTemplate}
+                        className="text-xs text-primary hover:underline flex items-center gap-1"
+                      >
+                        <Pencil className="h-3 w-3" />
+                        Change template
+                      </button>
+                    </>
+                  ) : (
+                    <div className="text-center py-4">
+                      <FileText className="h-8 w-8 mx-auto text-muted-foreground/30 mb-2" />
+                      <p className="text-sm text-muted-foreground mb-3">No template selected</p>
+                      <Button size="sm" onClick={handleSelectTemplate}>
+                        Select Template
+                      </Button>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
+              {/* Session context */}
               <Card>
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base">Session Context</CardTitle>
@@ -279,28 +254,26 @@ export default function Guidance() {
                 <CardContent className="space-y-4">
                   <div>
                     <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Session</p>
-                    <p className="text-sm font-medium text-foreground">{sessionInfo.caseLabel}</p>
+                    <p className="text-sm font-medium text-foreground">{session.caseLabel}</p>
                   </div>
-                  {sessionInfo.interactionType && (
+                  {session.interactionType && (
                     <div>
                       <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Type</p>
-                      <p className="text-sm font-medium text-foreground">{sessionInfo.interactionType}</p>
+                      <p className="text-sm font-medium text-foreground">{session.interactionType}</p>
                     </div>
                   )}
-                  {sessionInfo.guidanceScope && (
+                  {scopeLabel && (
                     <div>
                       <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Scope</p>
-                      <Badge variant="outline" className="text-xs">
-                        {sessionInfo.guidanceScope === "other" && sessionInfo.guidanceScopeOther
-                          ? sessionInfo.guidanceScopeOther
-                          : sessionInfo.guidanceScope.replace(/_/g, " ")}
+                      <Badge variant="outline" className="text-xs capitalize">
+                        {scopeLabel}
                       </Badge>
                     </div>
                   )}
                   <div>
                     <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Policy Pack</p>
-                    <Badge variant={sessionInfo.hasPolicyPack ? "default" : "secondary"} className="text-xs">
-                      {sessionInfo.hasPolicyPack ? "Compiled" : "Not assigned"}
+                    <Badge variant={session.hasPolicyPack ? "default" : "secondary"} className="text-xs">
+                      {session.hasPolicyPack ? "Compiled" : "Not assigned"}
                     </Badge>
                   </div>
                   <Separator />
@@ -310,34 +283,33 @@ export default function Guidance() {
                   </p>
                 </CardContent>
               </Card>
-
-              {/* Dev toggle */}
-              {import.meta.env.DEV && (
-                <Card className="border-dashed border-muted-foreground/30">
-                  <CardContent className="py-3">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={simulateError}
-                        onChange={(e) => setSimulateError(e.target.checked)}
-                        className="rounded"
-                      />
-                      <span className="text-xs text-muted-foreground">Simulate error (dev only)</span>
-                    </label>
-                  </CardContent>
-                </Card>
-              )}
             </div>
 
             {/* ── Right: Output Panel ── */}
             <div className="lg:col-span-3">
-              {/* Idle */}
-              {(toolState === "idle" || toolState === "cleared") && (
+              {/* No template */}
+              {!hasTemplate && runState !== "error" && (
+                <Card className="border-dashed">
+                  <CardContent className="py-16 text-center">
+                    <FileText className="h-10 w-10 mx-auto text-muted-foreground/30 mb-4" />
+                    <p className="text-sm text-muted-foreground mb-4">
+                      Select a template first, then generate interview questions.
+                    </p>
+                    <Button onClick={handleSelectTemplate}>
+                      <FileText className="h-4 w-4 mr-2" />
+                      Select Template
+                    </Button>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Idle (template selected, no output yet) */}
+              {hasTemplate && runState === "idle" && !output && (
                 <Card className="border-dashed">
                   <CardContent className="py-16 text-center">
                     <Sparkles className="h-10 w-10 mx-auto text-muted-foreground/30 mb-4" />
                     <p className="text-sm text-muted-foreground">
-                      Click <strong>Generate Guidance</strong> below to produce interview questions
+                      Click <strong>Generate 12 Questions</strong> below to produce interview questions
                       from your session's policy pack.
                     </p>
                   </CardContent>
@@ -345,46 +317,54 @@ export default function Guidance() {
               )}
 
               {/* Running */}
-              {toolState === "running" && (
+              {runState === "running" && (
                 <Card>
                   <CardContent className="py-16 text-center">
                     <Loader2 className="h-10 w-10 mx-auto text-primary animate-spin mb-4" />
-                    <p className="text-sm text-muted-foreground">Generating guidance from policy pack…</p>
-                    <p className="text-xs text-muted-foreground mt-1">This usually takes a few seconds.</p>
+                    <p className="text-sm text-muted-foreground">Generating questions from policy pack…</p>
+                    <p className="text-xs text-muted-foreground mt-1">This usually takes 10–20 seconds.</p>
                   </CardContent>
                 </Card>
               )}
 
               {/* Error */}
-              {toolState === "error" && (
+              {runState === "error" && !isTemplateRequired && !isScopeRequired && (
                 <Card className="border-destructive/30">
                   <CardContent className="py-10 text-center">
                     <AlertTriangle className="h-10 w-10 mx-auto text-destructive/50 mb-4" />
                     <p className="text-sm text-destructive font-medium mb-1">Generation failed</p>
-                    <p className="text-xs text-muted-foreground">{errorMessage}</p>
-                    <Button variant="outline" size="sm" className="mt-4" onClick={handleGenerate}>
-                      Try again
-                    </Button>
+                    <p className="text-xs text-muted-foreground mb-1">{runError?.message}</p>
+                    {runError?.code && (
+                      <Badge variant="outline" className="text-[10px] font-mono mb-3">
+                        {runError.code}
+                      </Badge>
+                    )}
+                    <div>
+                      <Button variant="outline" size="sm" className="mt-2" onClick={runGuidance}>
+                        <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                        Try again
+                      </Button>
+                    </div>
                   </CardContent>
                 </Card>
               )}
 
-              {/* Success */}
-              {toolState === "success" && output && (
+              {/* Success — Questions display */}
+              {runState === "success" && output && (
                 <div className="space-y-4">
                   {/* Summary bar */}
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <Badge variant="secondary" className="text-xs">
                         {output.questions.length} questions
                       </Badge>
                       <Badge variant="outline" className="text-xs font-mono">
                         {output.model}
                       </Badge>
-                      {templateName && (
-                        <Badge variant="outline" className="text-xs">
-                          Template: {templateName.length > 30 ? templateName.slice(0, 30) + "…" : templateName}
-                        </Badge>
+                      {output.generated_at && (
+                        <span className="text-[10px] text-muted-foreground">
+                          {new Date(output.generated_at).toLocaleString()}
+                        </span>
                       )}
                     </div>
                     <Button
@@ -440,20 +420,32 @@ export default function Guidance() {
                                 </span>
                                 <div className="flex-1">
                                   <p className="text-sm text-foreground leading-relaxed">{q.question}</p>
-                                  <div className="flex items-center gap-2 mt-1.5">
+                                  <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                                     {q.citations.length > 0 && (
-                                      <div className="flex items-center gap-1">
+                                      <div className="flex items-center gap-1 flex-wrap">
                                         <BookOpen className="h-3 w-3 text-muted-foreground" />
-                                        {q.citations.map((cit) => (
+                                        {q.citations.slice(0, 2).map((cit) => (
                                           <Badge key={cit} variant="outline" className="text-[10px] font-mono px-1.5 py-0">
-                                            Snippet: {cit}
+                                            {cit.length > 12 ? cit.slice(0, 12) + "…" : cit}
                                           </Badge>
                                         ))}
+                                        {q.citations.length > 2 && (
+                                          <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                                            +{q.citations.length - 2}
+                                          </Badge>
+                                        )}
+                                        <button
+                                          onClick={() => setCitationsModal({ citations: q.citations, question: q.question })}
+                                          className="text-[10px] text-primary hover:underline flex items-center gap-0.5"
+                                        >
+                                          <ExternalLink className="h-2.5 w-2.5" />
+                                          View sources
+                                        </button>
                                       </div>
                                     )}
                                     <button
                                       onClick={() => handleCopyQuestion(q.question, qId)}
-                                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground ml-auto"
                                       title="Copy question"
                                     >
                                       {copiedId === qId ? (
@@ -486,25 +478,35 @@ export default function Guidance() {
             Back to Dashboard
           </Button>
           <div className="flex items-center gap-2">
-            {(toolState === "success" || toolState === "error") && (
-              <Button variant="outline" onClick={handleClear}>
+            {runState === "success" && output && (
+              <Button variant="outline" onClick={clearResults}>
                 <RotateCcw className="h-4 w-4 mr-2" />
                 Clear
               </Button>
             )}
             <Button
-              onClick={handleGenerate}
-              disabled={toolState === "running"}
+              onClick={runGuidance}
+              disabled={runState === "running" || !hasTemplate}
             >
-              {toolState === "running" ? (
+              {runState === "running" ? (
                 <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Generating…</>
               ) : (
-                <><Sparkles className="h-4 w-4 mr-2" /> Generate Guidance</>
+                <><Sparkles className="h-4 w-4 mr-2" /> Generate 12 Questions</>
               )}
             </Button>
           </div>
         </div>
       </div>
+
+      {/* Citations modal */}
+      {citationsModal && (
+        <CitationsModal
+          open={!!citationsModal}
+          onOpenChange={(open) => !open && setCitationsModal(null)}
+          citations={citationsModal.citations}
+          questionText={citationsModal.question}
+        />
+      )}
     </div>
   );
 }
