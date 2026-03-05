@@ -17,6 +17,7 @@ import AccessPending from "./pages/AccessPending";
 import Index from "./pages/Index";
 import Calendar from "./pages/Calendar";
 import Guidance from "./pages/Guidance";
+import GuidanceTemplateSelection from "./pages/GuidanceTemplateSelection";
 import Reviewer from "./pages/Reviewer";
 import Supervisor from "./pages/Supervisor";
 import Auditor from "./pages/Auditor";
@@ -116,6 +117,11 @@ const App = () => (
                 <Route path="/calendar" element={
                   <RouteGuard allowedRoles={["caseworker"]}>
                     <Calendar />
+                  </RouteGuard>
+                } />
+                <Route path="/guidance/:sessionId/template" element={
+                  <RouteGuard allowedRoles={["caseworker"]}>
+                    <GuidanceTemplateSelection />
                   </RouteGuard>
                 } />
                 <Route path="/guidance/:sessionId" element={

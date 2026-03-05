@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -44,20 +45,19 @@ interface TimelineCandidate {
 
 interface GuidanceSectionProps {
   isTemplateSelected: boolean;
+  sessionId?: string;
 }
 
-export function GuidanceSection({ isTemplateSelected }: GuidanceSectionProps) {
+export function GuidanceSection({ isTemplateSelected, sessionId }: GuidanceSectionProps) {
+  const navigate = useNavigate();
   const [isGenerating, setIsGenerating] = useState(false);
   const [guidanceGenerated, setGuidanceGenerated] = useState(false);
   const [timelineCandidates, setTimelineCandidates] = useState<TimelineCandidate[]>([]);
 
-  const handleGenerateGuidance = async () => {
-    setIsGenerating(true);
-    // Simulate async generation (1.2s)
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    setTimelineCandidates(PLACEHOLDER_TIMELINE_CANDIDATES);
-    setGuidanceGenerated(true);
-    setIsGenerating(false);
+  const handleGenerateGuidance = () => {
+    if (sessionId) {
+      navigate(`/guidance/${sessionId}/template`);
+    }
   };
 
   const handleTimelineAction = (id: string, action: "CONFIRMED" | "DENIED") => {

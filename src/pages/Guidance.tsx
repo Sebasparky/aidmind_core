@@ -1,5 +1,17 @@
-import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Sparkles, Info, Loader2, Copy, Check, RotateCcw, BookOpen, AlertTriangle } from "lucide-react";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
+import {
+  ArrowLeft,
+  Sparkles,
+  Info,
+  Loader2,
+  Copy,
+  Check,
+  RotateCcw,
+  BookOpen,
+  AlertTriangle,
+  FileText,
+  Pencil,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,19 +36,39 @@ interface SessionInfo {
   hasPolicyPack: boolean;
 }
 
+interface LocationState {
+  templateId?: string;
+  templateName?: string;
+  templateSource?: string;
+}
+
 export default function Guidance() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const locState = (location.state as LocationState) || {};
+
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
   const [pageLoading, setPageLoading] = useState(true);
   const [pageError, setPageError] = useState<string | null>(null);
+
+  // Template info from selection screen
+  const [templateName] = useState(locState.templateName || null);
+  const [templateId] = useState(locState.templateId || null);
 
   // Tool state
   const [toolState, setToolState] = useState<ToolState>("idle");
   const [output, setOutput] = useState<GuidanceOutput | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [copiedCategory, setCopiedCategory] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [simulateError, setSimulateError] = useState(false);
+
+  // If no template selected, redirect to template selection
+  useEffect(() => {
+    if (!templateId && sessionId) {
+      navigate(`/guidance/${sessionId}/template`, { replace: true });
+    }
+  }, [templateId, sessionId, navigate]);
 
   useEffect(() => {
     async function fetchSession() {
@@ -76,7 +108,6 @@ export default function Guidance() {
     setOutput(null);
     setErrorMessage(null);
 
-    // Mock: simulate 800-1200ms delay
     const delay = 800 + Math.random() * 400;
     await new Promise((r) => setTimeout(r, delay));
 
@@ -86,7 +117,11 @@ export default function Guidance() {
       return;
     }
 
-    setOutput(MOCK_GUIDANCE_OUTPUT);
+    // Inject template_id into mock output
+    setOutput({
+      ...MOCK_GUIDANCE_OUTPUT,
+      generated_at: new Date().toISOString(),
+    });
     setToolState("success");
   }, [simulateError]);
 
@@ -94,8 +129,13 @@ export default function Guidance() {
     setOutput(null);
     setErrorMessage(null);
     setToolState("cleared");
-    // Reset to idle after brief feedback
     setTimeout(() => setToolState("idle"), 300);
+  };
+
+  const handleCopyQuestion = async (question: string, qId: string) => {
+    await navigator.clipboard.writeText(question);
+    setCopiedId(qId);
+    setTimeout(() => setCopiedId(null), 2000);
   };
 
   const handleCopyCategory = async (category: GuidanceCategory) => {
@@ -103,8 +143,8 @@ export default function Guidance() {
     const questions = output.questions.filter((q) => q.category === category);
     const text = questions.map((q, i) => `${i + 1}. ${q.question}`).join("\n");
     await navigator.clipboard.writeText(text);
-    setCopiedCategory(category);
-    setTimeout(() => setCopiedCategory(null), 2000);
+    setCopiedId(`cat-${category}`);
+    setTimeout(() => setCopiedId(null), 2000);
   };
 
   const handleCopyAll = async () => {
@@ -117,11 +157,12 @@ export default function Guidance() {
       .filter(Boolean)
       .join("\n\n");
     await navigator.clipboard.writeText(text);
-    setCopiedCategory("__all__");
-    setTimeout(() => setCopiedCategory(null), 2000);
+    setCopiedId("__all__");
+    setTimeout(() => setCopiedId(null), 2000);
   };
 
   const handleBack = () => navigate("/dashboard");
+  const handleChangeTemplate = () => navigate(`/guidance/${sessionId}/template`);
 
   // ── Page-level loading/error ──
   if (pageLoading) {
@@ -146,7 +187,7 @@ export default function Guidance() {
     );
   }
 
-  // Group questions by category for output display
+  // Group questions by category
   const groupedQuestions: Record<GuidanceCategory, GuidanceQuestion[]> = {} as any;
   if (output) {
     for (const cat of GUIDANCE_CATEGORIES) {
@@ -176,7 +217,6 @@ export default function Guidance() {
               </div>
             </div>
 
-            {/* Session badge */}
             {sessionId && (
               <Badge variant="outline" className="text-xs font-mono text-muted-foreground">
                 Session: {sessionId.slice(0, 8)}…
@@ -201,8 +241,30 @@ export default function Guidance() {
           </Alert>
 
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-            {/* ── Left: Input Panel ── */}
+            {/* ── Left: Context Panel ── */}
             <div className="lg:col-span-2 space-y-4">
+              {/* Template pill */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Template</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4 text-primary shrink-0" />
+                    <Badge variant="secondary" className="text-xs max-w-full truncate">
+                      {templateName || "Unknown template"}
+                    </Badge>
+                  </div>
+                  <button
+                    onClick={handleChangeTemplate}
+                    className="text-xs text-primary hover:underline flex items-center gap-1"
+                  >
+                    <Pencil className="h-3 w-3" />
+                    Change template
+                  </button>
+                </CardContent>
+              </Card>
+
               <Card>
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base">Session Context</CardTitle>
@@ -227,11 +289,9 @@ export default function Guidance() {
                       {sessionInfo.hasPolicyPack ? "Compiled" : "Not assigned"}
                     </Badge>
                   </div>
-
                   <Separator />
-
                   <p className="text-xs text-muted-foreground">
-                    No input required — the tool reads policy snippets from your session's compiled policy pack
+                    The tool reads policy snippets from your session's compiled policy pack
                     and generates 12 targeted interview questions across 6 categories.
                   </p>
                 </CardContent>
@@ -258,25 +318,13 @@ export default function Guidance() {
             {/* ── Right: Output Panel ── */}
             <div className="lg:col-span-3">
               {/* Idle */}
-              {toolState === "idle" && (
+              {(toolState === "idle" || toolState === "cleared") && (
                 <Card className="border-dashed">
                   <CardContent className="py-16 text-center">
                     <Sparkles className="h-10 w-10 mx-auto text-muted-foreground/30 mb-4" />
                     <p className="text-sm text-muted-foreground">
                       Click <strong>Generate Guidance</strong> below to produce interview questions
                       from your session's policy pack.
-                    </p>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Cleared */}
-              {toolState === "cleared" && (
-                <Card className="border-dashed">
-                  <CardContent className="py-16 text-center">
-                    <RotateCcw className="h-10 w-10 mx-auto text-muted-foreground/30 mb-4" />
-                    <p className="text-sm text-muted-foreground">
-                      Cleared. Ready to generate again.
                     </p>
                   </CardContent>
                 </Card>
@@ -319,6 +367,11 @@ export default function Guidance() {
                       <Badge variant="outline" className="text-xs font-mono">
                         {output.model}
                       </Badge>
+                      {templateName && (
+                        <Badge variant="outline" className="text-xs">
+                          Template: {templateName.length > 30 ? templateName.slice(0, 30) + "…" : templateName}
+                        </Badge>
+                      )}
                     </div>
                     <Button
                       variant="outline"
@@ -326,7 +379,7 @@ export default function Guidance() {
                       onClick={handleCopyAll}
                       className="gap-1.5"
                     >
-                      {copiedCategory === "__all__" ? (
+                      {copiedId === "__all__" ? (
                         <><Check className="h-3.5 w-3.5" /> Copied</>
                       ) : (
                         <><Copy className="h-3.5 w-3.5" /> Copy all</>
@@ -334,7 +387,7 @@ export default function Guidance() {
                     </Button>
                   </div>
 
-                  {/* Review before using */}
+                  {/* Review notice */}
                   <p className="text-xs text-muted-foreground italic">
                     Review and edit before using — these are AI-generated suggestions, not final documentation.
                   </p>
@@ -355,7 +408,7 @@ export default function Guidance() {
                               className="h-7 px-2 text-xs text-muted-foreground"
                               onClick={() => handleCopyCategory(category)}
                             >
-                              {copiedCategory === category ? (
+                              {copiedId === `cat-${category}` ? (
                                 <><Check className="h-3 w-3 mr-1" /> Copied</>
                               ) : (
                                 <><Copy className="h-3 w-3 mr-1" /> Copy</>
@@ -364,26 +417,42 @@ export default function Guidance() {
                           </div>
                         </CardHeader>
                         <CardContent className="space-y-3">
-                          {questions.map((q, i) => (
-                            <div key={i} className="flex gap-3">
-                              <span className="text-xs font-mono text-muted-foreground mt-0.5 shrink-0 w-5 text-right">
-                                {i + 1}.
-                              </span>
-                              <div className="flex-1">
-                                <p className="text-sm text-foreground leading-relaxed">{q.question}</p>
-                                {q.citations.length > 0 && (
-                                  <div className="flex items-center gap-1 mt-1.5">
-                                    <BookOpen className="h-3 w-3 text-muted-foreground" />
-                                    {q.citations.map((cit) => (
-                                      <Badge key={cit} variant="outline" className="text-[10px] font-mono px-1.5 py-0">
-                                        {cit}
-                                      </Badge>
-                                    ))}
+                          {questions.map((q, i) => {
+                            const qId = `${category}-${i}`;
+                            return (
+                              <div key={i} className="flex gap-3 group">
+                                <span className="text-xs font-mono text-muted-foreground mt-0.5 shrink-0 w-5 text-right">
+                                  {i + 1}.
+                                </span>
+                                <div className="flex-1">
+                                  <p className="text-sm text-foreground leading-relaxed">{q.question}</p>
+                                  <div className="flex items-center gap-2 mt-1.5">
+                                    {q.citations.length > 0 && (
+                                      <div className="flex items-center gap-1">
+                                        <BookOpen className="h-3 w-3 text-muted-foreground" />
+                                        {q.citations.map((cit) => (
+                                          <Badge key={cit} variant="outline" className="text-[10px] font-mono px-1.5 py-0">
+                                            Snippet: {cit}
+                                          </Badge>
+                                        ))}
+                                      </div>
+                                    )}
+                                    <button
+                                      onClick={() => handleCopyQuestion(q.question, qId)}
+                                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                                      title="Copy question"
+                                    >
+                                      {copiedId === qId ? (
+                                        <Check className="h-3.5 w-3.5 text-primary" />
+                                      ) : (
+                                        <Copy className="h-3.5 w-3.5" />
+                                      )}
+                                    </button>
                                   </div>
-                                )}
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </CardContent>
                       </Card>
                     );

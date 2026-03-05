@@ -449,7 +449,7 @@ export default function Session() {
             />
 
             {/* B) Guidance Section */}
-            <GuidanceSection isTemplateSelected={selectedTemplate !== ""} />
+            <GuidanceSection isTemplateSelected={selectedTemplate !== ""} sessionId={data.sessionId} />
 
             {/* C) Work Area Section */}
             <WorkAreaSection
