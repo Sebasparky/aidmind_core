@@ -9,12 +9,6 @@ import { useRecentNotes } from "@/hooks/useRecentNotes";
 import { cn } from "@/lib/utils";
 import { useDashboard } from "@/contexts/DashboardContext";
 
-/**
- * Session History: Closed sessions (completed, cancelled, abandoned).
- * 
- * IMPORTANT: This is READ-ONLY.
- */
-
 interface HistoricalSession {
   id: string;
   sessionId: string;
@@ -65,43 +59,6 @@ function getOutcomeLabel(outcome: HistoricalSession["outcome"]) {
   }
 }
 
-/**
- * Demo placeholder history sessions with stable canonical IDs.
- * These match relatedSessionId values in Work Radar obligations.
- */
-const placeholderHistorySessions: HistoricalSession[] = [
-  {
-    id: "demo_history_1",
-    sessionId: "session_4823",
-    caseLabel: "Job Placement Review",
-    interactionType: "In-person",
-    outcome: "completed",
-    completedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
-    guidanceUsed: true,
-    reviewerUsed: true,
-  },
-  {
-    id: "demo_history_2",
-    sessionId: "session_4820",
-    caseLabel: "Emergency Shelter Intake",
-    interactionType: "Phone call",
-    outcome: "completed",
-    completedAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
-    guidanceUsed: true,
-    reviewerUsed: true,
-  },
-  {
-    id: "demo_history_3",
-    sessionId: "session_4819",
-    caseLabel: "Veteran Outreach Assessment",
-    interactionType: "Video call",
-    outcome: "cancelled",
-    completedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-    guidanceUsed: false,
-    reviewerUsed: false,
-  },
-];
-
 interface SessionHistoryPanelProps {
   className?: string;
   searchQuery?: string;
@@ -117,31 +74,27 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
   const [highlightedSessionId, setHighlightedSessionId] = useState<string | null>(null);
   const rowRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
 
-  // Build session list from DB notes + demo placeholders
-  const dbHistoricalSessions: HistoricalSession[] = notes
-    .filter((note) => 
-      note.status === "exported" || 
-      note.status === "cancelled"
-    )
-    .map((note) => ({
-      id: note.id,
-      sessionId: note.sessionId,
-      caseLabel: note.title,
-      interactionType: note.interactionType || "Documentation",
-      outcome: note.status === "exported" ? "completed" : "cancelled",
-      completedAt: note.updatedAt,
-      guidanceUsed: note.status === "exported",
-      reviewerUsed: note.status === "exported",
-    }));
-
-  // Always include placeholders so Work Radar obligation links remain valid.
-  const historicalSessions = useMemo(() => {
-    return [...dbHistoricalSessions, ...placeholderHistorySessions];
-  }, [dbHistoricalSessions]);
+  // Build session list from real DB data only (no placeholders)
+  const historicalSessions: HistoricalSession[] = useMemo(() => {
+    return notes
+      .filter((note) => note.status === "exported" || note.status === "cancelled")
+      .map((note) => ({
+        id: note.id,
+        sessionId: note.sessionId,
+        caseLabel: note.title,
+        interactionType: note.interactionType || "Documentation",
+        outcome: note.status === "exported" ? "completed" as const : "cancelled" as const,
+        completedAt: note.updatedAt,
+        guidanceUsed: note.status === "exported",
+        reviewerUsed: note.status === "exported",
+      }));
+  }, [notes]);
 
   // Register history session IDs into context for cross-panel lookup
   useEffect(() => {
-    registerHistorySessionIds(historicalSessions.map((s) => s.sessionId), "SessionHistoryPanel");
+    if (historicalSessions.length > 0) {
+      registerHistorySessionIds(historicalSessions.map((s) => s.sessionId), "SessionHistoryPanel");
+    }
   }, [historicalSessions, registerHistorySessionIds]);
 
   // React to highlight requests targeting history sessions
@@ -152,7 +105,6 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
     const historySession = historicalSessions.find((s) => s.sessionId === targetId);
     if (!historySession) return;
 
-    // Open drawer with this session selected
     setSelectedSession(historySession);
     setDrawerOpen(true);
     setHighlightedSessionId(targetId);
@@ -172,7 +124,7 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
     return () => clearTimeout(timer);
   }, [sessionHighlightTarget, historicalSessions, clearSessionHighlight]);
 
-  // Apply search filter (combine local + global search)
+  // Apply search filter
   const combinedQuery = (globalSearchQuery.trim() || searchQuery.trim()).toLowerCase();
   const filteredSessions = combinedQuery
     ? historicalSessions.filter((session) =>
@@ -268,7 +220,7 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
                 <History className="h-6 w-6 text-muted-foreground/50" />
               </div>
               <p className="text-sm text-muted-foreground">
-                {combinedQuery ? "No matches in Session History" : "No session history"}
+                {combinedQuery ? "No matches in Session History" : "No session history yet"}
               </p>
               <p className="text-xs text-muted-foreground/70 mt-1">
                 {combinedQuery 
