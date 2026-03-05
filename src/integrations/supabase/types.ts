@@ -271,12 +271,14 @@ export type Database = {
           content_hash: string | null
           content_type: string
           created_at: string
+          created_by: string | null
           extraction_status: string
           file_path: string | null
           id: string
           is_active: boolean
           metadata: Json
           name: string
+          storage_path: string | null
           tenant_id: string
           updated_at: string
           version: string
@@ -286,12 +288,14 @@ export type Database = {
           content_hash?: string | null
           content_type?: string
           created_at?: string
+          created_by?: string | null
           extraction_status?: string
           file_path?: string | null
           id?: string
           is_active?: boolean
           metadata?: Json
           name: string
+          storage_path?: string | null
           tenant_id: string
           updated_at?: string
           version: string
@@ -301,12 +305,14 @@ export type Database = {
           content_hash?: string | null
           content_type?: string
           created_at?: string
+          created_by?: string | null
           extraction_status?: string
           file_path?: string | null
           id?: string
           is_active?: boolean
           metadata?: Json
           name?: string
+          storage_path?: string | null
           tenant_id?: string
           updated_at?: string
           version?: string

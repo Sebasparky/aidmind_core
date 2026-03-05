@@ -17,3 +17,9 @@ verify_jwt = true
 
 [functions.llm-gateway]
 verify_jwt = true
+
+[functions.select-template]
+verify_jwt = false
+
+[functions.generate-guidance-phase1]
+verify_jwt = false
