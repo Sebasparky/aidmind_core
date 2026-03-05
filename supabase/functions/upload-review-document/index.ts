@@ -151,15 +151,20 @@ serve(async (req) => {
 
     // 6) Eye event (best-effort)
     try {
-      await logEyeEvent(supabase, session_id, "REVIEW_DOCUMENT_UPLOADED", {
-        actor: "upload-review-document",
-        review_document_id,
-        tenant_id,
-        storage_bucket: bucket,
-        storage_object_key: objectKey,
-        original_filename: originalFilename,
-        mime_type: mimeType,
-        file_size_bytes: fileSizeBytes,
+      await logEyeEvent(supabase, {
+        session_id,
+        event_type: "review_document.uploaded",
+        serviceName: "upload-review-document",
+        payload: {
+          result: "success",
+          review_document_id,
+          tenant_id,
+          storage_bucket: bucket,
+          storage_object_key: objectKey,
+          original_filename: originalFilename,
+          mime_type: mimeType,
+          file_size_bytes: fileSizeBytes,
+        },
       });
     } catch (e) {
       console.error("[upload-review-document] eye event failed:", e);
