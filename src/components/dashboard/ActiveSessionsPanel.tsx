@@ -350,48 +350,37 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                       {usage.reviewerUsed && <Check className="h-3 w-3 ml-0.5" />}
                     </Button>
                     
-                    <div className="ml-auto flex items-center gap-1">
+                    <div className="ml-auto">
                       <TooltipProvider>
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <span>
+                            {allToolsUsed ? (
                               <Button
                                 variant="default"
                                 size="sm"
                                 className="gap-1.5 text-xs"
                                 onClick={() => handleMarkDoneClick(session)}
-                                disabled={!allToolsUsed || closingSessionId === session.sessionId}
+                                disabled={closingSessionId === session.sessionId}
+                                data-tour="close-session"
                               >
                                 <CheckCircle2 className="h-3.5 w-3.5" />
                                 Done
                               </Button>
-                            </span>
-                          </TooltipTrigger>
-                          {!allToolsUsed && (
-                            <TooltipContent>
-                              <p>Use both tools to mark as done</p>
-                            </TooltipContent>
-                          )}
-                        </Tooltip>
-                      </TooltipProvider>
-
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-                              onClick={() => handleCloseSessionClick(session)}
-                              disabled={closingSessionId === session.sessionId}
-                              data-tour="close-session"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                              Close
-                            </Button>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                onClick={() => handleCloseSessionClick(session)}
+                                disabled={closingSessionId === session.sessionId}
+                                data-tour="close-session"
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            )}
                           </TooltipTrigger>
                           <TooltipContent>
-                            <p>Close early without completing workflow</p>
+                            <p>{allToolsUsed ? "Mark session as done" : "Close early"}</p>
                           </TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
