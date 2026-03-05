@@ -140,6 +140,11 @@ const App = () => (
                     <Platform />
                   </RouteGuard>
                 } />
+                <Route path="/kb/bulk-upload" element={
+                  <RouteGuard allowedRoles={["caseworker", "supervisor"]}>
+                    <KbBulkUpload />
+                  </RouteGuard>
+                } />
 
                 {/* Supervisor route */}
                 <Route path="/supervisor" element={
