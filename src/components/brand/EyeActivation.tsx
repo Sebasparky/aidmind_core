@@ -1,5 +1,6 @@
 /**
- * EyeActivation — Animated spiral-eye SVG + typing wordmark.
+ * EyeActivation — Animated AidMind spiral-eye mark + typing wordmark.
+ * Recreates the filled aperture-style eye logo as inline SVG.
  * Runs once on page load (~1.4s), then stays static.
  * Pure CSS keyframes — no external animation libraries.
  */
@@ -8,55 +9,39 @@ export function EyeActivation() {
   return (
     <div className="flex flex-row items-center gap-3">
       <style>{`
-        @keyframes eye-draw {
-          to { stroke-dashoffset: 0; }
+        @keyframes eye-reveal {
+          from { opacity: 0; }
+          to   { opacity: 1; }
         }
-        @keyframes eye-fade {
-          to { opacity: 1; }
-        }
-        @keyframes eye-pulse {
-          0%   { transform: scale(1); }
-          50%  { transform: scale(1.1); }
-          100% { transform: scale(1); }
+        @keyframes eye-scale-reveal {
+          from { opacity: 0; transform: scale(0.85); }
+          to   { opacity: 1; transform: scale(1); }
         }
         @keyframes eye-typing {
           from { width: 0; }
           to   { width: 7ch; }
         }
 
-        /* Layer 1: Outer eye outline */
-        .eye-layer-1 {
-          stroke-dasharray: 420;
-          stroke-dashoffset: 420;
-          animation: eye-draw 0.45s ease-out 0s forwards;
-        }
-        /* Layer 2: Inner band */
-        .eye-layer-2 {
-          stroke-dasharray: 320;
-          stroke-dashoffset: 320;
-          animation: eye-draw 0.35s ease-out 0.2s forwards;
-        }
-        /* Layer 3: Iris ring */
-        .eye-layer-3 {
-          stroke-dasharray: 190;
-          stroke-dashoffset: 190;
-          animation: eye-draw 0.35s ease-out 0.4s forwards;
-        }
-        /* Layer 4: Spiral tail */
-        .eye-layer-4 {
-          stroke-dasharray: 120;
-          stroke-dashoffset: 120;
-          animation: eye-draw 0.3s ease-out 0.55s forwards;
-        }
-        /* Layer 5: Center pupil */
-        .eye-layer-5 {
+        .eye-silhouette {
           opacity: 0;
-          transform-origin: center;
-          animation:
-            eye-fade 0.15s ease-out 0.85s forwards,
-            eye-pulse 1.4s ease-in-out 1.0s 1 forwards;
+          animation: eye-scale-reveal 0.35s ease-out 0.05s forwards;
         }
-        /* Wordmark typing — no caret */
+        .eye-spiral {
+          opacity: 0;
+          animation: eye-reveal 0.3s ease-out 0.35s forwards;
+        }
+        .eye-wedge-left {
+          opacity: 0;
+          animation: eye-reveal 0.25s ease-out 0.6s forwards;
+        }
+        .eye-wedge-right {
+          opacity: 0;
+          animation: eye-reveal 0.25s ease-out 0.7s forwards;
+        }
+        .eye-center-dot {
+          opacity: 0;
+          animation: eye-reveal 0.2s ease-out 0.9s forwards;
+        }
         .eye-wordmark-text {
           display: inline-block;
           overflow: hidden;
@@ -66,61 +51,100 @@ export function EyeActivation() {
         }
       `}</style>
 
-      {/* Spiral Eye SVG */}
+      {/* AidMind spiral-eye mark — filled paths with negative space */}
       <svg
         className="w-12 h-12 flex-shrink-0"
-        viewBox="0 0 200 120"
+        viewBox="0 0 200 200"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
         aria-hidden="true"
       >
-        {/* Outer eye outline — almond shape */}
+        {/* 1) Outer eye silhouette — thick filled almond shape */}
         <path
-          className="eye-layer-1"
-          d="M10 60 Q50 5 100 5 Q150 5 190 60 Q150 115 100 115 Q50 115 10 60Z"
-          stroke="currentColor"
-          strokeWidth="4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
+          className="eye-silhouette"
+          d="
+            M100 20
+            C140 20, 175 55, 185 100
+            C175 145, 140 180, 100 180
+            C60 180, 25 145, 15 100
+            C25 55, 60 20, 100 20Z
+          "
+          fill="currentColor"
         />
-        {/* Inner band — smaller almond */}
+
+        {/* Negative space cutout — inner eye cavity (rendered as background color) */}
         <path
-          className="eye-layer-2"
-          d="M30 60 Q55 22 100 22 Q145 22 170 60 Q145 98 100 98 Q55 98 30 60Z"
-          stroke="currentColor"
-          strokeWidth="3.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
+          className="eye-silhouette"
+          d="
+            M100 42
+            C130 42, 158 65, 166 100
+            C158 135, 130 158, 100 158
+            C70 158, 42 135, 34 100
+            C42 65, 70 42, 100 42Z
+          "
+          fill="hsl(222.2 47.4% 11.2%)"
         />
-        {/* Iris ring */}
-        <circle
-          className="eye-layer-3"
-          cx="100"
-          cy="60"
-          r="30"
-          stroke="currentColor"
-          strokeWidth="3.5"
-        />
-        {/* Spiral tail — connects iris to inner band */}
+
+        {/* 2) Spiral aperture band — thick filled spiral that wraps inward */}
         <path
-          className="eye-layer-4"
-          d="M130 60 Q135 38 118 28 Q100 20 82 32 Q68 44 72 60 Q76 76 92 80 Q108 82 116 70"
+          className="eye-spiral"
+          d="
+            M140 68
+            C155 82, 158 100, 150 118
+            C142 136, 122 148, 100 148
+            C78 148, 58 132, 52 112
+            C46 92, 54 72, 70 60
+            C86 48, 108 50, 124 62
+            C136 72, 138 88, 132 104
+            C126 118, 112 126, 96 126
+            C82 126, 74 116, 72 104
+            C70 92, 76 80, 88 74
+            C98 70, 108 74, 114 84
+            C118 92, 116 102, 108 108
+          "
           stroke="currentColor"
-          strokeWidth="3"
+          strokeWidth="10"
           strokeLinecap="round"
           fill="none"
         />
-        {/* Center pupil */}
+
+        {/* 3a) Left wedge/chevron — curved triangle pointing inward */}
+        <path
+          className="eye-wedge-left"
+          d="
+            M42 100
+            C44 78, 56 58, 76 50
+            C62 62, 52 80, 50 100
+            C52 120, 62 138, 76 150
+            C56 142, 44 122, 42 100Z
+          "
+          fill="currentColor"
+        />
+
+        {/* 3b) Right wedge/chevron — curved triangle pointing inward */}
+        <path
+          className="eye-wedge-right"
+          d="
+            M158 100
+            C156 78, 144 58, 124 50
+            C138 62, 148 80, 150 100
+            C148 120, 138 138, 124 150
+            C144 142, 156 122, 158 100Z
+          "
+          fill="currentColor"
+        />
+
+        {/* 4) Center awareness dot */}
         <circle
-          className="eye-layer-5"
+          className="eye-center-dot"
           cx="100"
-          cy="60"
-          r="8"
+          cy="100"
+          r="7"
           fill="currentColor"
         />
       </svg>
 
-      {/* Wordmark */}
+      {/* Wordmark — no caret */}
       <span className="text-2xl font-semibold tracking-tight text-current">
         <span className="eye-wordmark-text">AidMind</span>
       </span>
