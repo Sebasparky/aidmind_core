@@ -1,46 +1,26 @@
 
 
-## Update EyeActivation: Real Spiral Eye + Horizontal Layout
+## Add Tour Steps for Tool Completion, Session History Statuses, and Search Bar
 
-### Changes to `src/components/brand/EyeActivation.tsx`
+### Changes
 
-**A) Replace SVG with spiral eye mark**
+**1. `src/components/tour/tour-steps.ts`** — Add/update 3 steps in `caseworkerTour`:
 
-The current SVG has 3 simple elements (almond outline, arc, circle). Replace with a multi-layered spiral eye matching the uploaded reference image. The SVG will have ~5 paths:
+- **Update "Close a session" step** (step index 3): Revise description to explain that once both tools (Guidance + Reviewer) are used, the session status changes to "Done" (shown as tool progress 2/2), and that closing gives two outcomes: "Completed" (both tools used) or "Closed early" (not all tools used).
 
-1. **Outer eye outline** — the almond/leaf shape (outermost contour)
-2. **Second band** — inner almond contour (slightly smaller)
-3. **Iris ring** — large circle/oval inside the eye
-4. **Spiral tail** — the characteristic spiral curl connecting iris to inner band
-5. **Pupil/center dot** — small filled or stroked circle at center
+- **Update "Session History" step** (step index 5): Revise description to mention that sessions appear here as either "Completed" or "Closed early" depending on tool usage at time of closing.
 
-All paths use `stroke="currentColor"`, `fill="none"`, `strokeWidth="~4-5"` (scaled to a ~200×120 viewBox for more detail).
+- **Add new "Search" step**: Insert a step (after "Start a new session", as step index 1) anchored to a `dashboard-search` data-tour attribute. Title: "Search across dashboard". Description explains it filters all three columns in real-time by keyword.
 
-**B) Animation classes (5 layers, staggered draw)**
+**2. `src/components/layout/Header.tsx`** — Add `data-tour="dashboard-search"` to the search input container so the tour can anchor to it.
 
-```
-.eye-layer-1  stroke-dashoffset animation  0.0s → 0.45s   (outer outline)
-.eye-layer-2  stroke-dashoffset animation  0.2s → 0.55s   (second band)
-.eye-layer-3  stroke-dashoffset animation  0.4s → 0.75s   (iris ring)
-.eye-layer-4  stroke-dashoffset animation  0.55s → 0.85s  (spiral tail)
-.eye-layer-5  opacity fade-in              0.85s → 1.0s   (center dot, optional subtle pulse)
-```
+### Updated step order
 
-Each layer uses the same `draw` keyframe (`stroke-dashoffset: 0`). `dasharray` values will be set per-path based on approximate path length.
-
-**C) Layout change: horizontal (eye left, text right)**
-
-Change container from `flex-col` to `flex-row` with `items-center gap-3`.
-
-SVG sized at roughly `w-12 h-12` (48px) to sit beside the text naturally.
-
-**D) Wordmark: no caret**
-
-Remove `border-right` and `blink-caret` animation entirely. Keep only the `typing` width animation (`0ch → 7ch`, `steps(7)`, delay `0.95s`).
-
-**E) No changes to Login.tsx** — the component swap is already done.
-
-### Summary of edits
-
-- **1 file**: `src/components/brand/EyeActivation.tsx` — full rewrite of SVG paths, animation CSS, and layout.
+1. Start a new session (`create-session`)
+2. Search across dashboard (`dashboard-search`) — **NEW**
+3. Generate Guidance (`guidance-button`)
+4. Run Reviewer (`reviewer-button`)
+5. Close a session (`close-session`) — **UPDATED text**
+6. Derived Signals (`derived-signals`)
+7. Session History (`session-history`) — **UPDATED text**
 
