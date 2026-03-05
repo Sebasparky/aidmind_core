@@ -744,6 +744,21 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      claim_next_kb_job: {
+        Args: { p_worker_id: string }
+        Returns: {
+          attempts: number
+          id: number
+          kb_document_id: string
+          max_attempts: number
+          priority: number
+          tenant_id: string
+        }[]
+      }
+      complete_kb_job: {
+        Args: { p_error?: string; p_job_id: number; p_status: string }
+        Returns: undefined
+      }
       get_my_profile: { Args: never; Returns: Json }
       get_my_role: {
         Args: never
