@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/integrations/supabase/client";
 
 // ── Mock data ────────────────────────────────────────────────
 const MOCK_TEMPLATES = [
@@ -72,7 +73,27 @@ export default function GuidanceTemplateSelection() {
   const [fileError, setFileError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [scopeLabel, setScopeLabel] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch session scope for display
+  useEffect(() => {
+    if (!sessionId) return;
+    supabase
+      .from("sessions")
+      .select("guidance_scope, guidance_scope_other")
+      .eq("session_id", sessionId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data?.guidance_scope) {
+          setScopeLabel(
+            data.guidance_scope === "other" && data.guidance_scope_other
+              ? data.guidance_scope_other
+              : data.guidance_scope.replace(/_/g, " ")
+          );
+        }
+      });
+  }, [sessionId]);
 
   // Cleanup objectURL on unmount
   useEffect(() => {
@@ -204,11 +225,18 @@ export default function GuidanceTemplateSelection() {
                 </p>
               </div>
             </div>
-            {sessionId && (
-              <Badge variant="outline" className="text-xs font-mono text-muted-foreground">
-                Session: {sessionId.slice(0, 8)}…
-              </Badge>
-            )}
+            <div className="flex items-center gap-2">
+              {scopeLabel && (
+                <Badge variant="secondary" className="text-xs">
+                  Scope: {scopeLabel}
+                </Badge>
+              )}
+              {sessionId && (
+                <Badge variant="outline" className="text-xs font-mono text-muted-foreground">
+                  Session: {sessionId.slice(0, 8)}…
+                </Badge>
+              )}
+            </div>
           </div>
         </div>
       </header>

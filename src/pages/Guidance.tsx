@@ -34,6 +34,8 @@ interface SessionInfo {
   caseLabel: string;
   interactionType: string | null;
   hasPolicyPack: boolean;
+  guidanceScope: string | null;
+  guidanceScopeOther: string | null;
 }
 
 interface LocationState {
@@ -80,7 +82,7 @@ export default function Guidance() {
       try {
         const { data, error } = await supabase
           .from("sessions")
-          .select("case_label, interaction_type, policy_pack_id")
+          .select("case_label, interaction_type, policy_pack_id, guidance_scope, guidance_scope_other")
           .eq("session_id", sessionId)
           .maybeSingle();
 
@@ -92,6 +94,8 @@ export default function Guidance() {
             caseLabel: data.case_label || "Untitled session",
             interactionType: data.interaction_type,
             hasPolicyPack: !!data.policy_pack_id,
+            guidanceScope: data.guidance_scope,
+            guidanceScopeOther: data.guidance_scope_other,
           });
         }
       } catch {
@@ -281,6 +285,16 @@ export default function Guidance() {
                     <div>
                       <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Type</p>
                       <p className="text-sm font-medium text-foreground">{sessionInfo.interactionType}</p>
+                    </div>
+                  )}
+                  {sessionInfo.guidanceScope && (
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Scope</p>
+                      <Badge variant="outline" className="text-xs">
+                        {sessionInfo.guidanceScope === "other" && sessionInfo.guidanceScopeOther
+                          ? sessionInfo.guidanceScopeOther
+                          : sessionInfo.guidanceScope.replace(/_/g, " ")}
+                      </Badge>
                     </div>
                   )}
                   <div>

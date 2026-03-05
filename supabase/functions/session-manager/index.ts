@@ -4,6 +4,13 @@ import { logEyeEvent } from "../_shared/eye.ts";
 
 type SessionAction = "create" | "get" | "update_status" | "close" | "cancel";
 
+const ALLOWED_SCOPES = new Set([
+  "social_welfare", "substance_use", "housing_homelessness",
+  "domestic_violence", "child_welfare", "mental_health",
+  "immigration_refugee", "employment_income", "disability_services",
+  "elder_services", "reentry_justice", "other",
+]);
+
 interface SessionRequest {
   action: SessionAction;
   session_id?: string;
@@ -14,6 +21,8 @@ interface SessionRequest {
     template_id?: string | null;
     interview_notes?: string | null;
     metadata_patch?: Record<string, unknown>;
+    guidance_scope?: string;
+    guidance_scope_other?: string;
   };
 }
 
@@ -72,14 +81,34 @@ Deno.serve(async (req) => {
       case "create": {
         if (!data?.tenant_id) return json(400, { success: false, error: "data.tenant_id is required" });
 
+        // Validate guidance_scope
+        const scope = data.guidance_scope;
+        if (scope && !ALLOWED_SCOPES.has(scope)) {
+          return json(400, { success: false, error: "Invalid guidance_scope", code: "INVALID_SCOPE" });
+        }
+        if (scope === "other") {
+          const otherText = (data.guidance_scope_other ?? "").trim();
+          if (otherText.length < 3) {
+            return json(400, { success: false, error: "guidance_scope_other required (min 3 chars) when scope is other", code: "SCOPE_OTHER_REQUIRED" });
+          }
+        }
+
+        const insertData: Record<string, unknown> = {
+          tenant_id: data.tenant_id,
+          user_id: data.user_id ?? null,
+          status: "initialized",
+          metadata: {},
+        };
+
+        if (scope) {
+          insertData.guidance_scope = scope;
+          insertData.guidance_scope_other = scope === "other" ? (data.guidance_scope_other ?? "").trim() : null;
+          insertData.guidance_scope_set_by = data.user_id ?? null;
+        }
+
         const { data: session, error } = await supabase
           .from("sessions")
-          .insert({
-            tenant_id: data.tenant_id,
-            user_id: data.user_id ?? null,
-            status: "initialized",
-            metadata: {},
-          })
+          .insert(insertData)
           .select("*")
           .single();
 
@@ -87,9 +116,15 @@ Deno.serve(async (req) => {
 
         await logEyeEvent(supabase, {
           session_id: session.id,
-          event_type: "SESSION_STARTED",
+          event_type: "session.created",
           serviceName: "session-manager",
-          payload: { tenant_id: data.tenant_id, user_id: data.user_id ?? null },
+          payload: {
+            tenant_id: data.tenant_id,
+            user_id: data.user_id ?? null,
+            guidance_scope: scope ?? null,
+            ...(scope === "other" ? { guidance_scope_other: (data.guidance_scope_other ?? "").trim() } : {}),
+            result: "success",
+          },
         });
 
         return json(200, { success: true, session });
