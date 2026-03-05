@@ -23,6 +23,7 @@ import Supervisor from "./pages/Supervisor";
 import Auditor from "./pages/Auditor";
 import Platform from "./pages/Platform";
 import NotFound from "./pages/NotFound";
+import KbBulkUpload from "./pages/KbBulkUpload";
 import { AuthLoadingScreen } from "@/components/auth/AuthLoadingScreen";
 
 const queryClient = new QueryClient();
