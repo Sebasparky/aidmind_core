@@ -399,6 +399,74 @@ export type Database = {
         }
         Relationships: []
       }
+      review_documents: {
+        Row: {
+          created_at: string
+          error: string | null
+          extracted_text: string | null
+          extraction_metadata: Json
+          file_size_bytes: number | null
+          id: string
+          mime_type: string
+          original_filename: string | null
+          review_metadata: Json
+          review_report: Json | null
+          reviewer_model: string | null
+          session_id: string
+          status: string
+          storage_bucket: string
+          storage_object_key: string
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          error?: string | null
+          extracted_text?: string | null
+          extraction_metadata?: Json
+          file_size_bytes?: number | null
+          id?: string
+          mime_type?: string
+          original_filename?: string | null
+          review_metadata?: Json
+          review_report?: Json | null
+          reviewer_model?: string | null
+          session_id: string
+          status?: string
+          storage_bucket?: string
+          storage_object_key: string
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          error?: string | null
+          extracted_text?: string | null
+          extraction_metadata?: Json
+          file_size_bytes?: number | null
+          id?: string
+          mime_type?: string
+          original_filename?: string | null
+          review_metadata?: Json
+          review_report?: Json | null
+          reviewer_model?: string | null
+          session_id?: string
+          status?: string
+          storage_bucket?: string
+          storage_object_key?: string
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "review_documents_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       sessions: {
         Row: {
           cancelled_at: string | null
@@ -416,6 +484,7 @@ export type Database = {
           interview_notes: string | null
           metadata: Json
           policy_pack_id: string | null
+          review_document_id: string | null
           session_id: string
           state: string
           status: string
@@ -441,6 +510,7 @@ export type Database = {
           interview_notes?: string | null
           metadata?: Json
           policy_pack_id?: string | null
+          review_document_id?: string | null
           session_id?: string
           state?: string
           status?: string
@@ -466,6 +536,7 @@ export type Database = {
           interview_notes?: string | null
           metadata?: Json
           policy_pack_id?: string | null
+          review_document_id?: string | null
           session_id?: string
           state?: string
           status?: string
@@ -475,7 +546,15 @@ export type Database = {
           updated_at?: string
           user_id?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "sessions_review_document_id_fkey"
+            columns: ["review_document_id"]
+            isOneToOne: false
+            referencedRelation: "review_documents"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       tenant_users: {
         Row: {

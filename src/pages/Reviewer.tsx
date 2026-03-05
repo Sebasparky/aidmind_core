@@ -1,3 +1,4 @@
+import React from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Shield, Info, Loader2, Copy, Check, RotateCcw,
@@ -61,15 +62,36 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** Highlight a snippet within text by wrapping matches in <mark> */
-function highlightSnippet(text: string, snippet: string): string {
-  if (!snippet || snippet.length < 3) return text;
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function renderHighlightedText(fullText: string, snippet: string | null): React.ReactNode {
+  if (!snippet || snippet.trim().length < 3) return fullText;
   try {
-    const escaped = snippet.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const re = new RegExp(`(${escaped})`, "gi");
-    return text.replace(re, '<mark class="bg-yellow-200 dark:bg-yellow-700/50 rounded px-0.5">$1</mark>');
+    const re = new RegExp(escapeRegExp(snippet), "gi");
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    let key = 0;
+    while ((match = re.exec(fullText)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(fullText.slice(lastIndex, match.index));
+      }
+      parts.push(
+        <mark key={key++} className="bg-yellow-200 dark:bg-yellow-700/50 rounded px-0.5">
+          {match[0]}
+        </mark>
+      );
+      lastIndex = re.lastIndex;
+      if (match[0].length === 0) { re.lastIndex++; }
+    }
+    if (lastIndex < fullText.length) {
+      parts.push(fullText.slice(lastIndex));
+    }
+    return parts.length > 0 ? parts : fullText;
   } catch {
-    return text;
+    return fullText;
   }
 }
 
@@ -580,21 +602,11 @@ export default function Reviewer() {
                             <Badge variant="outline" className="text-xs mb-2">
                               Page {page.pageNumber}
                             </Badge>
-                            {activeSnippet ? (
-                              <p
-                                className="text-foreground whitespace-pre-wrap break-words"
-                                dangerouslySetInnerHTML={{
-                                  __html: highlightSnippet(
-                                    page.text.replace(/</g, "&lt;").replace(/>/g, "&gt;"),
-                                    activeSnippet
-                                  ),
-                                }}
-                              />
-                            ) : (
-                              <p className="text-foreground whitespace-pre-wrap break-words">
-                                {page.text || <span className="text-muted-foreground italic">(no text on this page)</span>}
-                              </p>
-                            )}
+                            <p className="text-foreground whitespace-pre-wrap break-words">
+                              {page.text
+                                ? renderHighlightedText(page.text, activeSnippet)
+                                : <span className="text-muted-foreground italic">(no text on this page)</span>}
+                            </p>
                           </div>
                         ))}
                       </div>
