@@ -8,6 +8,39 @@ import type { KbIngestionMetadata } from "./types";
 
 const BUCKET = "kb-documents";
 
+/**
+ * Sanitize a filename for use as a Supabase Storage object key.
+ * - NFKD normalize + strip diacritics
+ * - Replace any char not in [A-Za-z0-9._-] with _
+ * - Collapse consecutive underscores
+ * - Trim to 200 chars (before extension)
+ * - Guarantee .pdf extension
+ */
+export function sanitizeForStorageKey(name: string): string {
+  // NFKD normalize and strip combining marks (diacritics)
+  let s = name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+
+  // Remove .pdf suffix so we can re-add it
+  s = s.replace(/\.pdf$/i, "");
+
+  // Replace disallowed chars
+  s = s.replace(/[^A-Za-z0-9._-]/g, "_");
+
+  // Collapse consecutive underscores
+  s = s.replace(/_+/g, "_");
+
+  // Trim leading/trailing underscores
+  s = s.replace(/^_+|_+$/g, "");
+
+  // Limit length
+  if (s.length > 200) s = s.slice(0, 200);
+
+  // Fallback if empty
+  if (!s) s = "document";
+
+  return `${s}.pdf`;
+}
+
 /** 1. Create a kb_documents row (file_path null initially) */
 export async function createKbDocument(
   tenantId: string,
