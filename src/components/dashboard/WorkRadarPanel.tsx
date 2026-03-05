@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback } from "react";
-import { AlertCircle, Clock, FileWarning, ChevronRight, ChevronDown, Info } from "lucide-react";
+import { AlertCircle, Clock, FileWarning, ChevronRight, ChevronDown, Info, Database, BookOpen } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
   Tooltip,
@@ -11,24 +12,29 @@ import {
 import { ObligationPanel, type ObligationData, type ObligationStatus } from "./ObligationPanel";
 import { toast } from "@/hooks/use-toast";
 import { useDashboard } from "@/contexts/DashboardContext";
+import { useRecentEyeEvents } from "@/hooks/useRecentEyeEvents";
+import { useKbStatus } from "@/hooks/useKbStatus";
 
 /**
- * Derived Signals: Informational indicators derived from policy and session context.
+ * Work Radar: Derived signals from Eye events + KB status.
  * 
- * Clicking a signal opens the Obligation Detail Panel (right slide-over).
- * Flow: Radar → Obligation → Action → Resolution
+ * In the Zero Retention model, signals are derived from:
+ * - Eye audit events (metadata only)
+ * - KB document status
+ * - Session state transitions
+ * 
+ * No client/case data is referenced.
  */
 
 export interface DerivedSignalItem {
   id: string;
   obligation: string;
   source: {
-    type: "session" | "policy" | "timeline";
+    type: "session" | "policy" | "timeline" | "kb" | "system";
     label: string;
     id?: string;
   };
   timeContext?: string;
-  /** Due/SLA context string, e.g. "Due in 48 hours", "Overdue by 3 hours" */
   dueContext?: string;
   urgency: "low" | "medium" | "high";
   obligationDetail?: {
@@ -63,60 +69,96 @@ interface DerivedSignalsPanelProps {
   searchQuery?: string;
 }
 
+function formatRelativeTime(date: Date): string {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffHours = Math.floor(diffMs / 1000 / 60 / 60);
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffHours < 1) return "Just now";
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays === 1) return "Yesterday";
+  return `${diffDays}d ago`;
+}
+
 /**
- * Placeholder data for v1 demonstration.
- * 
- * IMPORTANT: relatedSession.sessionId values must match canonical IDs
- * used in ActiveSessionsPanel and SessionHistoryPanel demo data.
+ * Derive signals from real data sources.
+ * - Eye events with failure results
+ * - KB status (stale documents)
+ * - Session events (abandoned, failed)
  */
-const placeholderItems: DerivedSignalItem[] = [
-  {
-    id: "1",
-    obligation: "Consent form still missing",
-    source: { type: "session", label: "Intake session #4821", id: "session_4821" },
-    timeContext: "Triggered 2 days ago",
-    dueContext: "Overdue by 2 days",
-    urgency: "high",
-    obligationDetail: {
-      description: "This intake session is missing a required consent form under Policy 4.2. Documentation cannot be finalized until consent is recorded.",
-      relatedSession: {
-        label: "Intake session #4821",
-        caseLabel: "Smith Family Intake",
-        sessionId: "session_4821",
+function deriveSignals(
+  events: { id: string; eventType: string; createdAt: Date; eventData: Record<string, unknown> | null }[],
+  kbStatus: { lastUpdated: Date | null; documentCount: number; templateCount: number }
+): DerivedSignalItem[] {
+  const signals: DerivedSignalItem[] = [];
+
+  // Signal: KB documents are stale (not updated in 30+ days)
+  if (kbStatus.lastUpdated) {
+    const daysSinceUpdate = Math.floor((Date.now() - kbStatus.lastUpdated.getTime()) / (1000 * 60 * 60 * 24));
+    if (daysSinceUpdate > 30) {
+      signals.push({
+        id: "kb-stale",
+        obligation: "Knowledge base may be outdated",
+        source: { type: "kb", label: "KB Health" },
+        timeContext: `Last updated ${daysSinceUpdate} days ago`,
+        urgency: daysSinceUpdate > 90 ? "high" : "medium",
+        obligationDetail: {
+          description: `The knowledge base has not been updated in ${daysSinceUpdate} days. Policy documents may be outdated. Contact your administrator to review and update KB content.`,
+          allowedActions: { canOpenSession: false },
+        },
+      });
+    }
+  } else if (kbStatus.documentCount === 0) {
+    signals.push({
+      id: "kb-empty",
+      obligation: "No knowledge base documents available",
+      source: { type: "kb", label: "KB Health" },
+      urgency: "high",
+      obligationDetail: {
+        description: "No policy documents have been ingested into the knowledge base. Guidance and review tools will not have policy context. Contact your administrator.",
+        allowedActions: { canOpenSession: false },
       },
-      allowedActions: { canOpenSession: true },
-    },
-  },
-  {
-    id: "2",
-    obligation: "Supervisor sign-off required",
-    source: { type: "policy", label: "Policy threshold reached" },
-    timeContext: "Triggered 1 day ago",
-    dueContext: "Due in 24 hours",
-    urgency: "high",
-    obligationDetail: {
-      description: "A policy threshold has been reached that requires supervisor sign-off before the case can proceed. This is a mandatory compliance step under Policy 7.1.",
-      allowedActions: { canOpenSession: false },
-    },
-  },
-  {
-    id: "3",
-    obligation: "Follow-up documentation due",
-    source: { type: "timeline", label: "Follow-up session #4823", id: "session_4823" },
-    timeContext: "Triggered 3 days ago",
-    dueContext: "Due in 48 hours",
-    urgency: "medium",
-    obligationDetail: {
-      description: "A scheduled follow-up is approaching. Documentation should be prepared to ensure continuity of care and compliance with the established timeline.",
-      relatedSession: {
-        label: "Follow-up session #4823",
-        caseLabel: "Job placement review",
-        sessionId: "session_4823",
+    });
+  }
+
+  // Signal: Recent failures from Eye events
+  const failureEvents = events.filter(
+    (e) => e.eventData?.result === "failure" && 
+    (e.eventType.includes("FAILED") || e.eventType.includes("FAILURE"))
+  );
+
+  if (failureEvents.length > 0) {
+    const latestFailure = failureEvents[0];
+    signals.push({
+      id: `failure-${latestFailure.id}`,
+      obligation: `Tool run failed: ${latestFailure.eventType.replace(/_/g, " ").toLowerCase()}`,
+      source: { type: "system", label: "System Health" },
+      timeContext: `Occurred ${formatRelativeTime(latestFailure.createdAt)}`,
+      urgency: failureEvents.length > 3 ? "high" : "medium",
+      obligationDetail: {
+        description: `${failureEvents.length} recent failure(s) detected. The most recent was "${latestFailure.eventType}". If this persists, contact your administrator.`,
+        allowedActions: { canOpenSession: false },
       },
-      allowedActions: { canOpenSession: true },
-    },
-  },
-];
+    });
+  }
+
+  // Signal: No templates available
+  if (kbStatus.templateCount === 0) {
+    signals.push({
+      id: "no-templates",
+      obligation: "No active templates configured",
+      source: { type: "policy", label: "Configuration" },
+      urgency: "medium",
+      obligationDetail: {
+        description: "No active guidance templates are configured for your organization. The Guidance tool requires at least one active template. Contact your administrator.",
+        allowedActions: { canOpenSession: false },
+      },
+    });
+  }
+
+  return signals;
+}
 
 function getUrgencyStyles(urgency: DerivedSignalItem["urgency"]) {
   switch (urgency) {
@@ -135,6 +177,8 @@ function getSourceIcon(type: DerivedSignalItem["source"]["type"]) {
     case "session": return FileWarning;
     case "policy": return AlertCircle;
     case "timeline": return Clock;
+    case "kb": return Database;
+    case "system": return AlertCircle;
     default: return AlertCircle;
   }
 }
@@ -144,6 +188,8 @@ function getSourceBadgeVariant(type: DerivedSignalItem["source"]["type"]) {
     case "session": return "secondary";
     case "policy": return "outline";
     case "timeline": return "secondary";
+    case "kb": return "outline";
+    case "system": return "destructive";
     default: return "secondary";
   }
 }
@@ -176,12 +222,28 @@ function formatResolvedTime(date: Date): string {
 
 export function DerivedSignalsPanel({ className, items, onItemClick, searchQuery = "" }: DerivedSignalsPanelProps) {
   const { requestSessionHighlight } = useDashboard();
-  const [allItems, setAllItems] = useState<DerivedSignalItem[]>(items ?? placeholderItems);
+  const { events, loading: eventsLoading } = useRecentEyeEvents(50);
+  const { kbStatus, loading: kbLoading } = useKbStatus();
+
+  const loading = eventsLoading || kbLoading;
+
+  // Derive signals from real data (or use provided items for testing)
+  const derivedItems = useMemo(() => {
+    if (items) return items;
+    return deriveSignals(events, kbStatus);
+  }, [items, events, kbStatus]);
+
+  const [allItems, setAllItems] = useState<DerivedSignalItem[]>([]);
   const [selectedObligation, setSelectedObligation] = useState<ObligationData | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [resolvedItems, setResolvedItems] = useState<ResolvedObligation[]>([]);
   const [resolvedExpanded, setResolvedExpanded] = useState(false);
   const [fadingOutId, setFadingOutId] = useState<string | null>(null);
+
+  // Sync derived items into local state
+  useMemo(() => {
+    setAllItems(derivedItems);
+  }, [derivedItems]);
 
   const displayItems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -276,7 +338,7 @@ export function DerivedSignalsPanel({ className, items, onItemClick, searchQuery
               </TooltipTrigger>
               <TooltipContent side="right" className="max-w-xs">
                 <p className="text-xs">
-                  Derived signals are informational indicators based on current policy context. They do not replace official documentation requirements or professional judgment.
+                  Derived signals are informational indicators based on system health, KB status, and audit events. They do not reference case content.
                 </p>
               </TooltipContent>
             </Tooltip>
@@ -288,18 +350,27 @@ export function DerivedSignalsPanel({ className, items, onItemClick, searchQuery
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-3">
-          {displayItems.length === 0 && !fadingOutId ? (
+          {loading ? (
+            <div className="space-y-3">
+              {[1, 2].map((i) => (
+                <div key={i} className="p-4 rounded-lg border-l-4 border-l-muted">
+                  <Skeleton className="h-4 w-3/4 mb-2" />
+                  <Skeleton className="h-3 w-1/2" />
+                </div>
+              ))}
+            </div>
+          ) : displayItems.length === 0 && !fadingOutId ? (
             <div className="flex flex-col items-center justify-center py-12 text-center px-4">
               <div className="w-12 h-12 rounded-full bg-muted/50 flex items-center justify-center mb-4">
                 <AlertCircle className="h-6 w-6 text-muted-foreground/50" />
               </div>
               <p className="text-sm text-muted-foreground">
-                {searchQuery.trim() ? "No matches in Derived Signals" : "No derived signals at this time."}
+                {searchQuery.trim() ? "No matches in Work Radar" : "All clear — no signals at this time."}
               </p>
               <p className="text-xs text-muted-foreground/70 mt-1">
                 {searchQuery.trim()
                   ? "Try adjusting your search"
-                  : "Available policy context does not indicate outstanding documentation considerations."}
+                  : "System health, KB status, and audit events are nominal."}
               </p>
             </div>
           ) : (
@@ -329,7 +400,7 @@ export function DerivedSignalsPanel({ className, items, onItemClick, searchQuery
                         </p>
                         <div className="flex items-center gap-2 mt-2 flex-wrap">
                           <Badge 
-                            variant={getSourceBadgeVariant(item.source.type)}
+                            variant={getSourceBadgeVariant(item.source.type) as any}
                             className="text-xs gap-1"
                           >
                             <SourceIcon className="h-3 w-3" />
@@ -337,7 +408,7 @@ export function DerivedSignalsPanel({ className, items, onItemClick, searchQuery
                           </Badge>
                           {item.dueContext && (
                             <Badge
-                              variant={item.dueContext.toLowerCase().startsWith("overdue") ? "destructive" : "warning"}
+                              variant={item.dueContext.toLowerCase().startsWith("overdue") ? "destructive" : "outline"}
                               className="text-xs gap-1"
                             >
                               <Clock className="h-3 w-3" />

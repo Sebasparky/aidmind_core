@@ -58,33 +58,6 @@ function getToolsUsedColor(guidanceUsed: boolean, reviewerUsed: boolean): string
   return "bg-primary text-primary-foreground";
 }
 
-/**
- * Demo placeholder active sessions with stable canonical IDs.
- * These match the relatedSessionId values in Work Radar obligations.
- */
-const placeholderActiveSessions: ActiveSession[] = [
-  {
-    id: "demo_active_1",
-    sessionId: "session_4821",
-    caseLabel: "Smith Family Intake",
-    interactionType: "In-person",
-    lastAccessed: new Date(Date.now() - 2 * 60 * 60 * 1000),
-    createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
-    guidanceUsed: false,
-    reviewerUsed: false,
-  },
-  {
-    id: "demo_active_2",
-    sessionId: "session_4822",
-    caseLabel: "Housing Assistance Follow-up",
-    interactionType: "Phone call",
-    lastAccessed: new Date(Date.now() - 5 * 60 * 60 * 1000),
-    createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
-    guidanceUsed: true,
-    reviewerUsed: false,
-  },
-];
-
 interface ActiveSessionsPanelProps {
   className?: string;
   searchQuery?: string;
@@ -101,32 +74,30 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
   const [highlightedSessionId, setHighlightedSessionId] = useState<string | null>(null);
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
-  // Build session list from DB notes + demo placeholders
-  const dbSessions: ActiveSession[] = notes
-    .filter((note) => note.status === "in_progress" || note.status === "saved")
-    .map((note) => ({
-      id: note.id,
-      sessionId: note.sessionId,
-      caseLabel: note.title,
-      interactionType: note.interactionType || "Documentation",
-      lastAccessed: note.updatedAt,
-      createdAt: note.updatedAt,
-      guidanceUsed: false,
-      reviewerUsed: false,
-    }));
-
-  // Always include placeholders so Work Radar obligation links remain valid.
-  // DB sessions are shown first, placeholders follow.
-  const activeSessions = useMemo(() => {
-    return [...dbSessions, ...placeholderActiveSessions];
-  }, [dbSessions]);
+  // Build session list from real DB data only (no placeholders)
+  const activeSessions: ActiveSession[] = useMemo(() => {
+    return notes
+      .filter((note) => note.status === "in_progress" || note.status === "saved")
+      .map((note) => ({
+        id: note.id,
+        sessionId: note.sessionId,
+        caseLabel: note.title,
+        interactionType: note.interactionType || "Documentation",
+        lastAccessed: note.updatedAt,
+        createdAt: note.updatedAt,
+        guidanceUsed: false,
+        reviewerUsed: false,
+      }));
+  }, [notes]);
 
   // Register session IDs into context for cross-panel lookup
   useEffect(() => {
-    registerActiveSessionIds(activeSessions.map((s) => s.sessionId), "ActiveSessionsPanel");
+    if (activeSessions.length > 0) {
+      registerActiveSessionIds(activeSessions.map((s) => s.sessionId), "ActiveSessionsPanel");
+    }
   }, [activeSessions, registerActiveSessionIds]);
 
-  // React to highlight requests from context (state-based, no DOM scraping)
+  // React to highlight requests from context
   useEffect(() => {
     if (!sessionHighlightTarget || sessionHighlightTarget.location !== "active") return;
 
