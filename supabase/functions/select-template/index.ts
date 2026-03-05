@@ -1,22 +1,19 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { corsHeaders } from "../_shared/cors.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
+import { corsSecurityHeaders } from "../_shared/security-headers.ts";
+import { validateUuid, validatePlainText } from "../_shared/input-validation.ts";
 
-interface SelectTemplateRequest {
-  session_id?: string;
-  template_id?: string;
-  template_version?: string;
-}
+const MAX_TEMPLATE_SIZE = 20 * 1024 * 1024; // 20 MB
 
 function json(status: number, body: Record<string, unknown>) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
   });
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsSecurityHeaders });
   if (req.method !== "POST") return json(405, { success: false, error: "Method not allowed" });
 
   const supabase = createClient(
@@ -24,113 +21,229 @@ Deno.serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
-  let payload: SelectTemplateRequest;
-  try {
-    payload = await req.json();
-  } catch {
-    return json(400, { success: false, error: "Invalid JSON body" });
+  // ── Parse multipart or JSON ──────────────────────────────────
+  let sessionId: string | undefined;
+  let templateId: string | undefined;
+  let templateVersion: string | undefined;
+  let templateName: string | undefined;
+  let uploadFile: File | null = null;
+
+  const contentType = req.headers.get("content-type") ?? "";
+
+  if (contentType.includes("multipart/form-data")) {
+    // Upload path: multipart with optional PDF
+    const form = await req.formData();
+    sessionId = form.get("session_id")?.toString();
+    templateId = form.get("template_id")?.toString() || undefined;
+    templateName = form.get("template_name")?.toString() || undefined;
+    templateVersion = form.get("template_version")?.toString() || undefined;
+    const fileField = form.get("template_upload");
+    if (fileField instanceof File && fileField.size > 0) {
+      uploadFile = fileField;
+    }
+  } else {
+    // JSON path: existing template selection
+    try {
+      const body = await req.json();
+      sessionId = body.session_id;
+      templateId = body.template_id;
+      templateVersion = body.template_version;
+      templateName = body.template_name;
+    } catch {
+      return json(400, { success: false, error: "Invalid JSON body", code: "INVALID_JSON" });
+    }
   }
 
-  const { session_id, template_id, template_version } = payload;
+  // ── Validate session_id ──────────────────────────────────────
+  if (!sessionId) return json(400, { success: false, error: "session_id is required", code: "SESSION_ID_REQUIRED" });
 
-  if (!session_id) return json(400, { success: false, error: "session_id is required" });
-  if (!template_id) return json(400, { success: false, error: "template_id is required" });
+  const sessionIdResult = validateUuid("session_id", sessionId);
+  if (!sessionIdResult.ok) {
+    return json(400, { success: false, error: "Invalid session_id format", code: "INVALID_SESSION_ID" });
+  }
+
+  // Must provide either template_id OR upload
+  if (!templateId && !uploadFile) {
+    return json(400, { success: false, error: "Provide template_id or template_upload", code: "TEMPLATE_INPUT_REQUIRED" });
+  }
 
   try {
-    // 1. Fetch session
+    // ── 1. Fetch session ───────────────────────────────────────
     const { data: session, error: sessionErr } = await supabase
       .from("sessions")
-      .select("id, tenant_id, status, metadata")
-      .eq("id", session_id)
+      .select("id, tenant_id, status, metadata, user_id")
+      .eq("id", sessionIdResult.value)
       .maybeSingle();
 
     if (sessionErr) throw new Error(`Failed to fetch session: ${sessionErr.message}`);
-    if (!session) return json(404, { success: false, error: "Session not found" });
+    if (!session) return json(404, { success: false, error: "Session not found", code: "SESSION_NOT_FOUND" });
 
-    // 2. Status gate
-    if (session.status !== "initialized") {
-      return json(409, {
-        success: false,
-        error: `Invalid status: expected "initialized", got "${session.status}"`,
-      });
+    const tenantId = session.tenant_id;
+    if (!tenantId) return json(400, { success: false, error: "Session has no tenant", code: "NO_TENANT" });
+
+    // ── 2. Resolve template_id ─────────────────────────────────
+    let resolvedTemplateId: string;
+    let resolvedTemplateName: string;
+    let resolvedTemplateVersion: string;
+
+    if (uploadFile) {
+      // ── Upload path ──────────────────────────────────────────
+      if (uploadFile.type !== "application/pdf") {
+        return json(400, { success: false, error: "Only PDF files are accepted", code: "INVALID_FILE_TYPE" });
+      }
+      if (uploadFile.size > MAX_TEMPLATE_SIZE) {
+        return json(400, { success: false, error: "File exceeds 20MB limit", code: "FILE_TOO_LARGE" });
+      }
+
+      // Validate template_name if provided
+      const safeName = templateName
+        ? (() => {
+            const r = validatePlainText("template_name", templateName, { maxLength: 100, minLength: 1 });
+            return r.ok ? r.value : uploadFile.name.replace(/\.pdf$/i, "");
+          })()
+        : uploadFile.name.replace(/\.pdf$/i, "");
+
+      // Generate safe storage path
+      const fileId = crypto.randomUUID();
+      const storagePath = `${tenantId}/${fileId}.pdf`;
+
+      // Upload to storage
+      const fileBytes = new Uint8Array(await uploadFile.arrayBuffer());
+      const { error: uploadErr } = await supabase.storage
+        .from("templates")
+        .upload(storagePath, fileBytes, {
+          contentType: "application/pdf",
+          upsert: false,
+        });
+
+      if (uploadErr) throw new Error(`Failed to upload template: ${uploadErr.message}`);
+
+      // Create kb_templates record
+      const { data: newTemplate, error: insertErr } = await supabase
+        .from("kb_templates")
+        .insert({
+          tenant_id: tenantId,
+          name: safeName,
+          version: "1.0",
+          storage_path: storagePath,
+          created_by: session.user_id,
+          content: "", // Content will be extracted later by a separate pipeline
+          content_type: "pdf",
+          extraction_status: "pending",
+          is_active: true,
+          metadata: { source: "upload", original_filename: uploadFile.name },
+        })
+        .select("id, name, version")
+        .single();
+
+      if (insertErr) throw new Error(`Failed to create template record: ${insertErr.message}`);
+
+      resolvedTemplateId = newTemplate.id;
+      resolvedTemplateName = newTemplate.name;
+      resolvedTemplateVersion = newTemplate.version;
+    } else {
+      // ── Existing template selection path ─────────────────────
+      const tidResult = validateUuid("template_id", templateId);
+      if (!tidResult.ok) {
+        return json(400, { success: false, error: "Invalid template_id format", code: "INVALID_TEMPLATE_ID" });
+      }
+
+      const { data: template, error: templateErr } = await supabase
+        .from("kb_templates")
+        .select("id, tenant_id, name, version, content_hash, is_active, extraction_status")
+        .eq("id", tidResult.value)
+        .maybeSingle();
+
+      if (templateErr) throw new Error(`Failed to fetch template: ${templateErr.message}`);
+      if (!template) return json(404, { success: false, error: "Template not found", code: "TEMPLATE_NOT_FOUND" });
+
+      // Tenant isolation
+      if (template.tenant_id !== tenantId) {
+        await logEyeEvent(supabase, {
+          session_id: sessionIdResult.value,
+          event_type: "template.selected",
+          serviceName: "select-template",
+          payload: { template_id: tidResult.value, result: "denied", reason_code: "TENANT_MISMATCH" },
+        });
+        return json(403, { success: false, error: "Template does not belong to this tenant", code: "TENANT_MISMATCH" });
+      }
+
+      if (!template.is_active) {
+        return json(409, { success: false, error: "Template is not active", code: "TEMPLATE_INACTIVE" });
+      }
+
+      if (template.extraction_status !== "ready") {
+        return json(409, {
+          success: false,
+          error: `Template extraction not ready (status: "${template.extraction_status}")`,
+          code: "TEMPLATE_NOT_READY",
+        });
+      }
+
+      // Optional version check
+      if (templateVersion !== undefined && templateVersion !== template.version) {
+        return json(409, {
+          success: false,
+          error: `Version mismatch: expected "${templateVersion}", got "${template.version}"`,
+          code: "VERSION_MISMATCH",
+        });
+      }
+
+      resolvedTemplateId = template.id;
+      resolvedTemplateName = template.name;
+      resolvedTemplateVersion = template.version;
     }
 
-    // 3. Fetch template
-    const { data: template, error: templateErr } = await supabase
-      .from("kb_templates")
-      .select("id, tenant_id, name, version, content_hash, is_active, extraction_status")
-      .eq("id", template_id)
-      .maybeSingle();
-
-    if (templateErr) throw new Error(`Failed to fetch template: ${templateErr.message}`);
-    if (!template) return json(404, { success: false, error: "Template not found" });
-
-    // 4. Template validations
-    if (template.tenant_id !== session.tenant_id) {
-      return json(403, { success: false, error: "Template does not belong to this tenant" });
-    }
-    if (!template.is_active) {
-      return json(409, { success: false, error: "Template is not active" });
-    }
-    if (template.extraction_status !== "ready") {
-      return json(409, {
-        success: false,
-        error: `Template extraction not ready (status: "${template.extraction_status}")`,
-      });
-    }
-
-    // 5. Optional version check
-    if (template_version !== undefined && template_version !== template.version) {
-      return json(409, {
-        success: false,
-        error: `Version mismatch: expected "${template_version}", got "${template.version}"`,
-      });
-    }
-
-    // 6. Update session
+    // ── 3. Update session with template_id ─────────────────────
     const mergedMetadata = {
       ...(session.metadata ?? {}),
       template_snapshot: {
-        template_id: template.id,
-        name: template.name,
-        version: template.version,
-        content_hash: template.content_hash,
+        template_id: resolvedTemplateId,
+        name: resolvedTemplateName,
+        version: resolvedTemplateVersion,
       },
     };
 
     const { error: updateErr } = await supabase
       .from("sessions")
       .update({
-        template_id: template.id,
+        template_id: resolvedTemplateId,
         status: "template_selected",
         metadata: mergedMetadata,
       })
-      .eq("id", session_id);
+      .eq("id", sessionIdResult.value);
 
     if (updateErr) throw new Error(`Failed to update session: ${updateErr.message}`);
 
-    // 7. Eye event
+    // ── 4. Eye event ───────────────────────────────────────────
     await logEyeEvent(supabase, {
-      session_id,
-      event_type: "TEMPLATE_SELECTED",
+      session_id: sessionIdResult.value,
+      event_type: "template.selected",
       serviceName: "select-template",
-      payload: { template_id: template.id, template_name: template.name, template_version: template.version },
+      payload: {
+        template_id: resolvedTemplateId,
+        template_name: resolvedTemplateName,
+        template_version: resolvedTemplateVersion,
+        result: "success",
+        source: uploadFile ? "upload" : "existing",
+      },
     });
 
-    // 8. Response
+    // ── 5. Response ────────────────────────────────────────────
     return json(200, {
       success: true,
-      session_id,
+      session_id: sessionIdResult.value,
+      template_id: resolvedTemplateId,
       status: "template_selected",
       template: {
-        id: template.id,
-        name: template.name,
-        version: template.version,
+        id: resolvedTemplateId,
+        name: resolvedTemplateName,
+        version: resolvedTemplateVersion,
       },
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
     console.error("[select-template] error:", message);
-    return json(500, { success: false, error: message });
+    return json(500, { success: false, error: message, code: "INTERNAL_ERROR" });
   }
 });
