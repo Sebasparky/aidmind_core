@@ -114,12 +114,12 @@ describe("mapStateToStatus", () => {
     expect(mapStateToStatus(session)).toBe("cancelled");
   });
 
-  it("returns 'exported' when closed_at is set", () => {
+  it("returns 'closed_early' when closed_at is set", () => {
     const session = createMockSession({ 
       closed_at: new Date().toISOString(),
       state: "DRAFT_READY" // State should be ignored
     });
-    expect(mapStateToStatus(session)).toBe("exported");
+    expect(mapStateToStatus(session)).toBe("closed_early");
   });
 
   it("prioritizes cancelled_at over closed_at", () => {
