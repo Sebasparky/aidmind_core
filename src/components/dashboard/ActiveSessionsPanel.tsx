@@ -1,11 +1,14 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Sparkles, Shield, Clock, RefreshCw, Check, X } from "lucide-react";
+import { Plus, Sparkles, Shield, Clock, RefreshCw, Check, X, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { StartNoteModal } from "./StartNoteModal";
 import { useRecentNotes } from "@/hooks/useRecentNotes";
+import { useSessionToolUsage, getToolUsage } from "@/hooks/useSessionToolUsage";
+import { useEyeLogger } from "@/hooks/useEyeLogger";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
@@ -28,8 +31,6 @@ interface ActiveSession {
   interactionType: string;
   lastAccessed: Date;
   createdAt: Date;
-  guidanceUsed: boolean;
-  reviewerUsed: boolean;
 }
 
 function formatRelativeTime(date: Date): string {
@@ -46,13 +47,7 @@ function formatRelativeTime(date: Date): string {
   return `${diffDays}d ago`;
 }
 
-function getToolsUsedLabel(guidanceUsed: boolean, reviewerUsed: boolean): string {
-  const count = (guidanceUsed ? 1 : 0) + (reviewerUsed ? 1 : 0);
-  return `Tools Used: ${count} of 2`;
-}
-
-function getToolsUsedColor(guidanceUsed: boolean, reviewerUsed: boolean): string {
-  const count = (guidanceUsed ? 1 : 0) + (reviewerUsed ? 1 : 0);
+function getToolsUsedColor(count: number): string {
   if (count === 0) return "bg-muted text-muted-foreground";
   if (count === 1) return "bg-primary/20 text-primary";
   return "bg-primary text-primary-foreground";
@@ -67,14 +62,16 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
   const navigate = useNavigate();
   const { notes, loading, error, refresh } = useRecentNotes(20);
   const { registerActiveSessionIds, sessionHighlightTarget, clearSessionHighlight } = useDashboard();
+  const { logEvent } = useEyeLogger();
   const [startSessionOpen, setStartSessionOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
   const [sessionToClose, setSessionToClose] = useState<ActiveSession | null>(null);
+  const [closeAction, setCloseAction] = useState<"close_early" | "done">("close_early");
   const [highlightedSessionId, setHighlightedSessionId] = useState<string | null>(null);
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
-  // Build session list from real DB data only (no placeholders)
+  // Build session list from real DB data only
   const activeSessions: ActiveSession[] = useMemo(() => {
     return notes
       .filter((note) => note.status === "in_progress" || note.status === "saved")
@@ -85,10 +82,12 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         interactionType: note.interactionType || "Documentation",
         lastAccessed: note.updatedAt,
         createdAt: note.updatedAt,
-        guidanceUsed: false,
-        reviewerUsed: false,
       }));
   }, [notes]);
+
+  // Derive tool usage from eye_events
+  const sessionIds = useMemo(() => activeSessions.map((s) => s.sessionId), [activeSessions]);
+  const { usageMap } = useSessionToolUsage(sessionIds);
 
   // Register session IDs into context for cross-panel lookup
   useEffect(() => {
@@ -144,27 +143,44 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
 
   const handleCloseSessionClick = (session: ActiveSession) => {
     setSessionToClose(session);
+    setCloseAction("close_early");
+  };
+
+  const handleMarkDoneClick = (session: ActiveSession) => {
+    setSessionToClose(session);
+    setCloseAction("done");
   };
 
   const handleConfirmCloseSession = async () => {
     if (!sessionToClose) return;
     
     setClosingSessionId(sessionToClose.sessionId);
+    const isDone = closeAction === "done";
     
     try {
       const { error } = await supabase
         .from("sessions")
         .update({ 
           state: "CLOSING",
+          status: isDone ? "completed" : "closed_early",
           closed_at: new Date().toISOString(),
         })
         .eq("session_id", sessionToClose.sessionId);
 
       if (error) throw error;
 
+      // Log eye event
+      await logEvent({
+        eventType: isDone ? "session.completed" : "session.closed_early",
+        sessionId: sessionToClose.sessionId,
+        result: "success",
+      });
+
       toast({
-        title: "Session closed",
-        description: "Session moved to history.",
+        title: isDone ? "Session completed" : "Session closed early",
+        description: isDone 
+          ? "Session marked as done and moved to history."
+          : "Session moved to history.",
       });
 
       await refresh();
@@ -183,19 +199,23 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
 
   return (
     <div className={cn("flex flex-col h-full overflow-hidden bg-card rounded-xl border border-border", className)}>
-      {/* Close Session Confirmation Dialog */}
+      {/* Close/Done Session Confirmation Dialog */}
       <AlertDialog open={!!sessionToClose} onOpenChange={(open) => !open && setSessionToClose(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Close this session?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {closeAction === "done" ? "Mark session as done?" : "Close this session early?"}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              This will move the session to history. You won't be able to use the tools on this session anymore.
+              {closeAction === "done"
+                ? "This will mark the session as completed and move it to history."
+                : "This will close the session without completing the full workflow and move it to history."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Keep open</AlertDialogCancel>
             <AlertDialogAction onClick={handleConfirmCloseSession}>
-              Close session
+              {closeAction === "done" ? "Mark as done" : "Close early"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -265,84 +285,121 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
           </div>
         ) : (
           <div className="space-y-3">
-            {filteredActiveSessions.map((session) => (
-              <div
-                key={session.id}
-                ref={(el) => {
-                  if (el) cardRefs.current.set(session.sessionId, el);
-                  else cardRefs.current.delete(session.sessionId);
-                }}
-                data-session-id={session.sessionId}
-                className={cn(
-                  "p-4 rounded-lg border border-border bg-background hover:bg-accent/30 transition-all duration-300",
-                  highlightedSessionId === session.sessionId && "ring-2 ring-primary/40 bg-primary/5"
-                )}
-              >
-                {/* Session info */}
-                <div className="mb-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="text-sm font-medium text-foreground">
-                      {session.caseLabel}
-                    </p>
-                    <Badge 
-                      variant="secondary"
-                      className={cn(
-                        "text-xs shrink-0",
-                        getToolsUsedColor(session.guidanceUsed, session.reviewerUsed)
-                      )}
-                    >
-                      {getToolsUsedLabel(session.guidanceUsed, session.reviewerUsed)}
-                    </Badge>
-                  </div>
-                  <div className="flex items-center gap-2 mt-1">
-                    <Badge variant="outline" className="text-xs">
-                      {session.interactionType}
-                    </Badge>
-                    <span className="text-xs text-muted-foreground">
-                      Accessed {formatRelativeTime(session.lastAccessed)}
-                    </span>
-                  </div>
-                </div>
+            {filteredActiveSessions.map((session) => {
+              const usage = getToolUsage(usageMap, session.sessionId);
+              const allToolsUsed = usage.toolCount >= 2;
 
-                {/* Two explicit tool actions */}
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    variant={session.guidanceUsed ? "secondary" : "outline"}
-                    size="sm"
-                    className="gap-1.5 text-xs"
-                    onClick={() => handleGenerateGuidance(session)}
-                    data-tour="guidance-button"
-                  >
-                    <Sparkles className="h-3.5 w-3.5" />
-                    Guidance
-                    {session.guidanceUsed && <Check className="h-3 w-3 ml-0.5" />}
-                  </Button>
-                  <Button
-                    variant={session.reviewerUsed ? "secondary" : "outline"}
-                    size="sm"
-                    className="gap-1.5 text-xs"
-                    onClick={() => handleRunReviewer(session)}
-                    data-tour="reviewer-button"
-                  >
-                    <Shield className="h-3.5 w-3.5" />
-                    Reviewer
-                    {session.reviewerUsed && <Check className="h-3 w-3 ml-0.5" />}
-                  </Button>
-                  
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="gap-1.5 text-xs text-muted-foreground hover:text-foreground ml-auto"
-                    onClick={() => handleCloseSessionClick(session)}
-                    disabled={closingSessionId === session.sessionId}
-                    data-tour="close-session"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                    Close
-                  </Button>
+              return (
+                <div
+                  key={session.id}
+                  ref={(el) => {
+                    if (el) cardRefs.current.set(session.sessionId, el);
+                    else cardRefs.current.delete(session.sessionId);
+                  }}
+                  data-session-id={session.sessionId}
+                  className={cn(
+                    "p-4 rounded-lg border border-border bg-background hover:bg-accent/30 transition-all duration-300",
+                    highlightedSessionId === session.sessionId && "ring-2 ring-primary/40 bg-primary/5"
+                  )}
+                >
+                  {/* Session info */}
+                  <div className="mb-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-sm font-medium text-foreground">
+                        {session.caseLabel}
+                      </p>
+                      <Badge 
+                        variant="secondary"
+                        className={cn("text-xs shrink-0", getToolsUsedColor(usage.toolCount))}
+                      >
+                        Tools: {usage.toolCount}/2
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <Badge variant="outline" className="text-xs">
+                        {session.interactionType}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">
+                        Accessed {formatRelativeTime(session.lastAccessed)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Tool actions + session actions */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant={usage.guidanceUsed ? "secondary" : "outline"}
+                      size="sm"
+                      className="gap-1.5 text-xs"
+                      onClick={() => handleGenerateGuidance(session)}
+                      data-tour="guidance-button"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      Guidance
+                      {usage.guidanceUsed && <Check className="h-3 w-3 ml-0.5" />}
+                    </Button>
+                    <Button
+                      variant={usage.reviewerUsed ? "secondary" : "outline"}
+                      size="sm"
+                      className="gap-1.5 text-xs"
+                      onClick={() => handleRunReviewer(session)}
+                      data-tour="reviewer-button"
+                    >
+                      <Shield className="h-3.5 w-3.5" />
+                      Reviewer
+                      {usage.reviewerUsed && <Check className="h-3 w-3 ml-0.5" />}
+                    </Button>
+                    
+                    <div className="ml-auto flex items-center gap-1">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span>
+                              <Button
+                                variant="default"
+                                size="sm"
+                                className="gap-1.5 text-xs"
+                                onClick={() => handleMarkDoneClick(session)}
+                                disabled={!allToolsUsed || closingSessionId === session.sessionId}
+                              >
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                                Done
+                              </Button>
+                            </span>
+                          </TooltipTrigger>
+                          {!allToolsUsed && (
+                            <TooltipContent>
+                              <p>Use both tools to mark as done</p>
+                            </TooltipContent>
+                          )}
+                        </Tooltip>
+                      </TooltipProvider>
+
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+                              onClick={() => handleCloseSessionClick(session)}
+                              disabled={closingSessionId === session.sessionId}
+                              data-tour="close-session"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                              Close
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Close early without completing workflow</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

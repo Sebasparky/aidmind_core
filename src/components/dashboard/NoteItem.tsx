@@ -1,8 +1,8 @@
-import { Upload, Save, XCircle, Clock } from "lucide-react";
+import { Upload, Save, XCircle, Clock, CheckCircle2, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 
-export type NoteStatus = "exported" | "saved" | "cancelled" | "in_progress";
+export type NoteStatus = "completed" | "closed_early" | "exported" | "saved" | "cancelled" | "in_progress";
 
 export interface Note {
   id: string;
@@ -24,6 +24,20 @@ const statusConfig: Record<NoteStatus, {
   badgeVariant: "success" | "warning" | "neutral" | "default";
   label: string;
 }> = {
+  completed: {
+    icon: CheckCircle2,
+    iconClass: "text-status-success",
+    bgClass: "bg-[hsl(var(--status-success-muted))]",
+    badgeVariant: "success",
+    label: "Completed",
+  },
+  closed_early: {
+    icon: LogOut,
+    iconClass: "text-status-warning",
+    bgClass: "bg-[hsl(var(--status-warning-muted))]",
+    badgeVariant: "warning",
+    label: "Closed early",
+  },
   exported: {
     icon: Upload,
     iconClass: "text-status-success",

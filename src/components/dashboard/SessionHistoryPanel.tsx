@@ -1,23 +1,24 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { History, CheckCircle2, XCircle, Clock, RefreshCw, Search, X } from "lucide-react";
+import { History, CheckCircle2, XCircle, Clock, LogOut, RefreshCw, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SessionDetailDrawer } from "./SessionDetailDrawer";
 import { useRecentNotes } from "@/hooks/useRecentNotes";
+import { useSessionToolUsage, getToolUsage } from "@/hooks/useSessionToolUsage";
 import { cn } from "@/lib/utils";
 import { useDashboard } from "@/contexts/DashboardContext";
+
+export type SessionOutcome = "completed" | "closed_early" | "cancelled";
 
 interface HistoricalSession {
   id: string;
   sessionId: string;
   caseLabel: string;
   interactionType: string;
-  outcome: "completed" | "cancelled" | "abandoned";
+  outcome: SessionOutcome;
   completedAt: Date;
-  guidanceUsed: boolean;
-  reviewerUsed: boolean;
 }
 
 function formatDate(date: Date): string {
@@ -32,29 +33,29 @@ function formatDate(date: Date): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-function getOutcomeIcon(outcome: HistoricalSession["outcome"]) {
+function getOutcomeIcon(outcome: SessionOutcome) {
   switch (outcome) {
     case "completed": return CheckCircle2;
+    case "closed_early": return LogOut;
     case "cancelled": return XCircle;
-    case "abandoned": return Clock;
     default: return History;
   }
 }
 
-function getOutcomeBadgeVariant(outcome: HistoricalSession["outcome"]) {
+function getOutcomeBadgeVariant(outcome: SessionOutcome) {
   switch (outcome) {
     case "completed": return "default" as const;
-    case "cancelled": return "secondary" as const;
-    case "abandoned": return "outline" as const;
+    case "closed_early": return "secondary" as const;
+    case "cancelled": return "outline" as const;
     default: return "secondary" as const;
   }
 }
 
-function getOutcomeLabel(outcome: HistoricalSession["outcome"]) {
+function getOutcomeLabel(outcome: SessionOutcome) {
   switch (outcome) {
     case "completed": return "Completed";
+    case "closed_early": return "Closed early";
     case "cancelled": return "Cancelled";
-    case "abandoned": return "Abandoned";
     default: return outcome;
   }
 }
@@ -74,30 +75,40 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
   const [highlightedSessionId, setHighlightedSessionId] = useState<string | null>(null);
   const rowRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
 
-  // Build session list from real DB data only (no placeholders)
+  // Build session list from real DB data
   const historicalSessions: HistoricalSession[] = useMemo(() => {
     return notes
-      .filter((note) => note.status === "exported" || note.status === "cancelled")
-      .map((note) => ({
-        id: note.id,
-        sessionId: note.sessionId,
-        caseLabel: note.title,
-        interactionType: note.interactionType || "Documentation",
-        outcome: note.status === "exported" ? "completed" as const : "cancelled" as const,
-        completedAt: note.updatedAt,
-        guidanceUsed: note.status === "exported",
-        reviewerUsed: note.status === "exported",
-      }));
+      .filter((note) => note.status === "completed" || note.status === "closed_early" || note.status === "exported" || note.status === "cancelled")
+      .map((note) => {
+        let outcome: SessionOutcome;
+        if (note.status === "completed") outcome = "completed";
+        else if (note.status === "cancelled") outcome = "cancelled";
+        else if (note.status === "closed_early") outcome = "closed_early";
+        else outcome = "completed"; // legacy "exported" maps to completed
+
+        return {
+          id: note.id,
+          sessionId: note.sessionId,
+          caseLabel: note.title,
+          interactionType: note.interactionType || "Documentation",
+          outcome,
+          completedAt: note.updatedAt,
+        };
+      });
   }, [notes]);
 
-  // Register history session IDs into context for cross-panel lookup
+  // Derive tool usage from eye_events
+  const sessionIds = useMemo(() => historicalSessions.map((s) => s.sessionId), [historicalSessions]);
+  const { usageMap } = useSessionToolUsage(sessionIds);
+
+  // Register history session IDs into context
   useEffect(() => {
     if (historicalSessions.length > 0) {
       registerHistorySessionIds(historicalSessions.map((s) => s.sessionId), "SessionHistoryPanel");
     }
   }, [historicalSessions, registerHistorySessionIds]);
 
-  // React to highlight requests targeting history sessions
+  // React to highlight requests
   useEffect(() => {
     if (!sessionHighlightTarget || sessionHighlightTarget.location !== "history") return;
 
@@ -124,7 +135,6 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
     return () => clearTimeout(timer);
   }, [sessionHighlightTarget, historicalSessions, clearSessionHighlight]);
 
-  // Apply search filter
   const combinedQuery = (globalSearchQuery.trim() || searchQuery.trim()).toLowerCase();
   const filteredSessions = combinedQuery
     ? historicalSessions.filter((session) =>
@@ -232,6 +242,7 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
             <div className="space-y-1">
               {filteredSessions.map((session) => {
                 const OutcomeIcon = getOutcomeIcon(session.outcome);
+                const usage = getToolUsage(usageMap, session.sessionId);
                 return (
                   <button
                     key={session.id}
@@ -250,8 +261,8 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
                       <div className={cn(
                         "w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0",
                         session.outcome === "completed" && "bg-primary/10 text-primary",
-                        session.outcome === "cancelled" && "bg-muted text-muted-foreground",
-                        session.outcome === "abandoned" && "bg-warning/10 text-warning"
+                        session.outcome === "closed_early" && "bg-muted text-muted-foreground",
+                        session.outcome === "cancelled" && "bg-muted text-muted-foreground"
                       )}>
                         <OutcomeIcon className="h-4 w-4" />
                       </div>
@@ -264,7 +275,7 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
                             {getOutcomeLabel(session.outcome)}
                           </Badge>
                           <span className="text-xs text-muted-foreground">
-                            {session.interactionType}
+                            Tools: {usage.toolCount}/2
                           </span>
                           <span className="text-xs text-muted-foreground">
                             {formatDate(session.completedAt)}
@@ -284,7 +295,7 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
       <SessionDetailDrawer
         open={drawerOpen}
         onOpenChange={setDrawerOpen}
-        session={selectedSession}
+        session={selectedSession ? { ...selectedSession, ...getToolUsage(usageMap, selectedSession.sessionId) } : null}
       />
     </>
   );

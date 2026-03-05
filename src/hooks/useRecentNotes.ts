@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
 
-export type NoteStatus = "exported" | "saved" | "cancelled" | "in_progress";
+export type NoteStatus = "completed" | "closed_early" | "exported" | "saved" | "cancelled" | "in_progress";
 
 export interface RecentNote {
   id: string;
@@ -20,19 +20,23 @@ type SessionRow = Tables<"sessions">;
  * Priority: cancelled_at > closed_at > state-based mapping
  */
 export function mapStateToStatus(session: SessionRow): NoteStatus {
-  // Check timestamps first (most authoritative)
+  // Check status field first (new semantics)
+  if (session.status === "completed") return "completed";
+  if (session.status === "closed_early") return "closed_early";
+
+  // Check timestamps (legacy compat)
   if (session.cancelled_at) return "cancelled";
-  if (session.closed_at) return "exported";
+  if (session.closed_at) return "closed_early"; // Legacy close without explicit status
   
   // Then check state field
   switch (session.state) {
     case "EXPORTED":
     case "PURGED":
-      return "exported";
+      return "completed";
     case "CANCELLED":
       return "cancelled";
     case "ABANDONED":
-      return "cancelled"; // Treat abandoned as cancelled for UI purposes
+      return "cancelled";
     case "SAVED_FOR_LATER":
       return "saved";
     default:

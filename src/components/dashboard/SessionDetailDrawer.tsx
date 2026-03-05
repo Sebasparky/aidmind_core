@@ -1,4 +1,4 @@
-import { History, CheckCircle2, XCircle, Clock, X } from "lucide-react";
+import { History, CheckCircle2, XCircle, LogOut, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -8,14 +8,11 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
+import type { SessionOutcome } from "./SessionHistoryPanel";
 
 /**
  * Session Detail Drawer: Read-only summary of a closed session.
- * 
- * IMPORTANT: This is NOT an entry point to reopen work.
- * - No "Generate Guidance" or "Run Reviewer" actions
- * - No "Resume" functionality
- * - Read-only summary only
+ * Shows accurate outcome status and tool usage derived from eye_events.
  */
 
 interface SessionDetailDrawerProps {
@@ -26,34 +23,36 @@ interface SessionDetailDrawerProps {
     sessionId: string;
     caseLabel: string;
     interactionType: string;
-    outcome: "completed" | "cancelled" | "abandoned";
+    outcome: SessionOutcome;
     completedAt: Date;
     guidanceUsed: boolean;
     reviewerUsed: boolean;
+    toolCount: number;
   } | null;
 }
 
-function getOutcomeIcon(outcome: "completed" | "cancelled" | "abandoned") {
+function getOutcomeIcon(outcome: SessionOutcome) {
   switch (outcome) {
-    case "completed":
-      return CheckCircle2;
-    case "cancelled":
-      return XCircle;
-    case "abandoned":
-      return Clock;
-    default:
-      return History;
+    case "completed": return CheckCircle2;
+    case "closed_early": return LogOut;
+    case "cancelled": return XCircle;
+    default: return History;
   }
 }
 
-function getOutcomeLabel(outcome: "completed" | "cancelled" | "abandoned") {
+function getOutcomeLabel(outcome: SessionOutcome) {
   switch (outcome) {
-    case "completed":
-      return "Completed";
-    case "cancelled":
-      return "Cancelled";
-    case "abandoned":
-      return "Abandoned";
+    case "completed": return "Completed";
+    case "closed_early": return "Closed early";
+    case "cancelled": return "Cancelled";
+  }
+}
+
+function getOutcomeBadgeVariant(outcome: SessionOutcome) {
+  switch (outcome) {
+    case "completed": return "default" as const;
+    case "closed_early": return "secondary" as const;
+    case "cancelled": return "outline" as const;
   }
 }
 
@@ -87,8 +86,8 @@ export function SessionDetailDrawer({
                 className={cn(
                   "w-10 h-10 rounded-full flex items-center justify-center",
                   session.outcome === "completed" && "bg-primary/10 text-primary",
-                  session.outcome === "cancelled" && "bg-muted text-muted-foreground",
-                  session.outcome === "abandoned" && "bg-warning/10 text-warning"
+                  session.outcome === "closed_early" && "bg-muted text-muted-foreground",
+                  session.outcome === "cancelled" && "bg-muted text-muted-foreground"
                 )}
               >
                 <OutcomeIcon className="h-5 w-5" />
@@ -96,9 +95,7 @@ export function SessionDetailDrawer({
               <div>
                 <SheetTitle className="text-left">Session Summary</SheetTitle>
                 <Badge
-                  variant={
-                    session.outcome === "completed" ? "default" : "secondary"
-                  }
+                  variant={getOutcomeBadgeVariant(session.outcome)}
                   className="mt-1"
                 >
                   {getOutcomeLabel(session.outcome)}
@@ -112,7 +109,7 @@ export function SessionDetailDrawer({
           {/* Session Info */}
           <div className="space-y-4">
             <div>
-              <p className="text-sm text-muted-foreground">Case</p>
+              <p className="text-sm text-muted-foreground">Session</p>
               <p className="text-sm font-medium text-foreground mt-1">
                 {session.caseLabel}
               </p>
@@ -135,18 +132,23 @@ export function SessionDetailDrawer({
 
           {/* Tool Usage Summary */}
           <div className="border-t border-border pt-6">
-            <p className="text-sm font-medium text-foreground mb-3">
-              Tools Used
-            </p>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm font-medium text-foreground">
+                Tools Used
+              </p>
+              <span className="text-xs text-muted-foreground">
+                {session.toolCount}/2
+              </span>
+            </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-muted/50">
-                <span className="text-sm text-foreground">Generate Guidance</span>
+                <span className="text-sm text-foreground">Guidance</span>
                 <Badge variant={session.guidanceUsed ? "default" : "outline"}>
                   {session.guidanceUsed ? "Used" : "Not used"}
                 </Badge>
               </div>
               <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-muted/50">
-                <span className="text-sm text-foreground">Run Reviewer</span>
+                <span className="text-sm text-foreground">Reviewer</span>
                 <Badge variant={session.reviewerUsed ? "default" : "outline"}>
                   {session.reviewerUsed ? "Used" : "Not used"}
                 </Badge>
