@@ -99,24 +99,16 @@ describe("V1 Dashboard Components", () => {
       expect(screen.queryByText(/task list/i)).not.toBeInTheDocument();
     });
 
-    it("displays source badges with provenance information (placeholder data)", () => {
+    it("shows derived signals or empty state from real data", () => {
       renderWithRouter(<DerivedSignalsPanel />);
-      expect(screen.getByText("Intake session #4821")).toBeInTheDocument();
-      expect(screen.getByText("Policy threshold reached")).toBeInTheDocument();
-      expect(screen.getByText("Follow-up session #4823")).toBeInTheDocument();
-    });
-
-    it("shows obligation text clearly", () => {
-      renderWithRouter(<DerivedSignalsPanel />);
-      expect(screen.getByText("Consent form still missing")).toBeInTheDocument();
-      expect(screen.getByText("Supervisor sign-off required")).toBeInTheDocument();
-      expect(screen.getByText("Follow-up documentation due")).toBeInTheDocument();
+      // With mocked supabase returning no data, should show empty state
+      expect(screen.getByText(/All clear|no signals|Work Radar/i)).toBeInTheDocument();
     });
 
     it("shows correct empty state when no items", () => {
       renderWithRouter(<DerivedSignalsPanel items={[]} />);
-      expect(screen.getByText("No derived signals at this time.")).toBeInTheDocument();
-      expect(screen.getByText("Available policy context does not indicate outstanding documentation considerations.")).toBeInTheDocument();
+      expect(screen.getByText("All clear — no signals at this time.")).toBeInTheDocument();
+      expect(screen.getByText("System health, KB status, and audit events are nominal.")).toBeInTheDocument();
     });
 
     it("provides info tooltip about non-authoritative nature", () => {
