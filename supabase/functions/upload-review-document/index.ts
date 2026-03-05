@@ -87,7 +87,7 @@ serve(async (req) => {
         original_filename: originalFilename,
         mime_type: mimeType,
         file_size_bytes: fileSizeBytes,
-        status: "uploading",
+        status: "extracting",
       })
       .select("*")
       .single();
