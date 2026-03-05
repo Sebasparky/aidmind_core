@@ -1,73 +1,46 @@
 
 
-## Animated Eye Logo for Login Screen
+## Update EyeActivation: Real Spiral Eye + Horizontal Layout
 
-### What Changes
+### Changes to `src/components/brand/EyeActivation.tsx`
 
-Replace the static `AidMindBrand` logo on the login page with a custom inline SVG eye animation + CSS typing wordmark. The animation runs once on page load (~1.4s), then becomes fully static.
+**A) Replace SVG with spiral eye mark**
 
-### New Component
+The current SVG has 3 simple elements (almond outline, arc, circle). Replace with a multi-layered spiral eye matching the uploaded reference image. The SVG will have ~5 paths:
 
-**`src/components/brand/EyeActivation.tsx`**
+1. **Outer eye outline** — the almond/leaf shape (outermost contour)
+2. **Second band** — inner almond contour (slightly smaller)
+3. **Iris ring** — large circle/oval inside the eye
+4. **Spiral tail** — the characteristic spiral curl connecting iris to inner band
+5. **Pupil/center dot** — small filled or stroked circle at center
 
-A self-contained React component with inline SVG and scoped CSS keyframes:
+All paths use `stroke="currentColor"`, `fill="none"`, `strokeWidth="~4-5"` (scaled to a ~200×120 viewBox for more detail).
 
-1. **SVG Structure** — three elements drawn with `stroke-dasharray`/`stroke-dashoffset`:
-   - Outer eye outline (almond shape)
-   - Inner arc (upper lid detail)
-   - Center ring (the "awareness" circle)
+**B) Animation classes (5 layers, staggered draw)**
 
-2. **Draw Animation Timing**:
-   - `0–0.5s`: Outer eye outline draws via dashoffset → 0
-   - `0.45–0.8s`: Inner arc draws (slight overlap for fluidity)
-   - `0.85–1.05s`: Center ring fades in (opacity 0→1)
-   - `1.05–3s`: Center ring does one very subtle scale pulse (1→1.12→1), then stops
-
-3. **Wordmark Typing** (`<span>`):
-   - Starts at `0.9s` delay
-   - CSS `steps(7)` animation on `width: 0ch → 7ch` over ~0.5s
-   - Thin caret via `border-right`, blink animation that stops after typing completes (use `animation-iteration-count` or `forwards` fill to freeze)
-
-4. **All CSS**: Defined in a `<style>` tag within the component (or as CSS-in-JS via a scoped class block in `index.css`). No external libraries.
-
-5. **Color**: Uses `currentColor` inheriting from the login page's light-on-dark scheme (`hsl(210,40%,98%)`).
-
-### Login Page Update
-
-**`src/pages/Login.tsx`** — lines 61–68:
-
-Replace:
-```tsx
-<div className="flex justify-center mb-10">
-  <AidMindBrand size="lg" showWordmark={false} className="..." />
-</div>
+```
+.eye-layer-1  stroke-dashoffset animation  0.0s → 0.45s   (outer outline)
+.eye-layer-2  stroke-dashoffset animation  0.2s → 0.55s   (second band)
+.eye-layer-3  stroke-dashoffset animation  0.4s → 0.75s   (iris ring)
+.eye-layer-4  stroke-dashoffset animation  0.55s → 0.85s  (spiral tail)
+.eye-layer-5  opacity fade-in              0.85s → 1.0s   (center dot, optional subtle pulse)
 ```
 
-With:
-```tsx
-<div className="flex justify-center mb-10">
-  <EyeActivation />
-</div>
-```
+Each layer uses the same `draw` keyframe (`stroke-dashoffset: 0`). `dasharray` values will be set per-path based on approximate path length.
 
-Remove the `AidMindBrand` import (if no longer used on this page).
+**C) Layout change: horizontal (eye left, text right)**
 
-### Layout
+Change container from `flex-col` to `flex-row` with `items-center gap-3`.
 
-The component renders as a centered flex column:
-```
-   [SVG Eye ~120×60]
-      AidMind
-```
+SVG sized at roughly `w-12 h-12` (48px) to sit beside the text naturally.
 
-Eye SVG sized at roughly `w-28 h-14` (112×56px). Wordmark below in `text-2xl font-semibold tracking-tight` matching the existing brand typography.
+**D) Wordmark: no caret**
 
-### Technical Details
+Remove `border-right` and `blink-caret` animation entirely. Keep only the `typing` width animation (`0ch → 7ch`, `steps(7)`, delay `0.95s`).
 
-- All animations use `animation-fill-mode: forwards` so elements stay visible after drawing
-- SVG paths start with `opacity: 0` or full `stroke-dashoffset`, animated to final state
-- The pulse on the center ring uses `transform-origin: center` and a very gentle keyframe
-- Caret uses `border-right: 2px solid currentColor` with a blink keyframe that runs 2-3 times then stops via `animation-iteration-count: 3`
-- `overflow: hidden` on the wordmark container to hide text beyond current width during typing
-- No `useEffect` or JS timers needed — pure CSS animation driven by `animation-delay`
+**E) No changes to Login.tsx** — the component swap is already done.
+
+### Summary of edits
+
+- **1 file**: `src/components/brand/EyeActivation.tsx` — full rewrite of SVG paths, animation CSS, and layout.
 
