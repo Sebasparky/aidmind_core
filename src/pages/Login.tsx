@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2 } from "lucide-react";
-import { EyeActivation } from "@/components/brand/EyeActivation";
+import { AidMindBrand } from "@/components/brand/AidMindBrand";
 
 export default function Login() {
   const { isAuthenticated, loading: authLoading } = useAuth();
@@ -58,9 +58,13 @@ export default function Login() {
     <div className="login-bg min-h-screen flex items-center justify-center px-4">
       <div className="relative z-10 w-full max-w-[440px]">
         <div className="login-card px-8 py-10 sm:px-10 sm:py-12">
-          {/* Animated logo */}
-          <div className="flex justify-center mb-10 text-[hsl(210,40%,98%)]">
-            <EyeActivation />
+          {/* Logo */}
+          <div className="flex justify-center mb-10">
+            <AidMindBrand
+              size="lg"
+              showWordmark={false}
+              className="text-[hsl(210,40%,98%)]"
+            />
           </div>
 
           {/* Form */}
