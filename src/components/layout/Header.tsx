@@ -16,6 +16,8 @@ import { useDashboard } from "@/contexts/DashboardContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTourReplay } from "@/components/tour/useTourReplay";
 import { useRecentEyeEvents } from "@/hooks/useRecentEyeEvents";
+import { useUnreadActivity } from "@/hooks/useUnreadActivity";
+import { useTenant } from "@/hooks/useTenant";
 import { Map } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 import { useDebounce } from "@/hooks/use-debounce";
@@ -24,6 +26,7 @@ import { useDebounce } from "@/hooks/use-debounce";
 function humanizeEventType(eventType: string): string {
   return eventType
     .replace(/_/g, " ")
+    .replace(/\./g, " ")
     .toLowerCase()
     .replace(/^\w/, (c) => c.toUpperCase());
 }
@@ -48,9 +51,21 @@ export function Header() {
   const { searchQuery, setSearchQuery, clearSearch } = useDashboard();
   const { profile, role, signOut } = useAuth();
   const { replayTour } = useTourReplay("caseworker");
+  const { tenant } = useTenant();
   const { events } = useRecentEyeEvents(10);
   const [localSearch, setLocalSearch] = useState(searchQuery);
   const debouncedSearch = useDebounce(localSearch, 200);
+
+  // Derive latest activity timestamp from events
+  const latestActivityAt = useMemo(() => {
+    if (events.length === 0) return null;
+    return events[0].createdAt; // events are ordered desc by createdAt
+  }, [events]);
+
+  const { hasUnread, markSeen } = useUnreadActivity({
+    tenantId: tenant?.tenantId ?? null,
+    latestActivityAt,
+  });
 
   useEffect(() => {
     setSearchQuery(debouncedSearch);
@@ -80,6 +95,12 @@ export function Header() {
   const handleSignOut = async () => {
     await signOut();
     navigate("/login");
+  };
+
+  const handleActivityOpen = (open: boolean) => {
+    if (open) {
+      markSeen();
+    }
   };
 
   return (
@@ -114,18 +135,32 @@ export function Header() {
       {/* Right: Activity + User */}
       <div className="flex items-center gap-4">
         {/* Recent Activity Dropdown */}
-        <DropdownMenu>
+        <DropdownMenu onOpenChange={handleActivityOpen}>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="relative" aria-label="Recent activity">
               <Activity className="h-5 w-5 text-muted-foreground" />
-              {events.length > 0 && (
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-primary rounded-full" />
+              {hasUnread && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-primary rounded-full animate-pulse" />
               )}
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-80 bg-popover">
             <div className="flex items-center justify-between px-3 py-2 border-b border-border">
               <span className="text-sm font-medium text-foreground">Recent Activity</span>
+              {events.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    markSeen();
+                  }}
+                >
+                  <Check className="h-3 w-3 mr-1" />
+                  Mark all read
+                </Button>
+              )}
             </div>
             <div className="max-h-[300px] overflow-y-auto">
               {events.length === 0 ? (
