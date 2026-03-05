@@ -14,6 +14,7 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     client_label: null,
     interaction_type: null,
     interview_notes: null,
+    review_document_id: null,
     metadata: {},
     policy_pack_id: null,
     status: "initialized",
