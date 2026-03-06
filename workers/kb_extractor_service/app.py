@@ -18,8 +18,7 @@ Env vars:
   RUN_REGION              — Cloud Run region (default us-central1)
   RUN_JOB_NAME            — Cloud Run Job name (default kb-extractor-job)
   RUN_API_BASE            — Run API base URL (default https://run.googleapis.com)
-  RUN_API_AUDIENCE        — Audience for metadata token (default https://run.googleapis.com/)
-  RUN_REQUEST_TIMEOUT_SECS — Timeout for Run API call (default 10)
+  RUN_REQUEST_TIMEOUT_SECS — Timeout for Run API call (default 5)
 """
 
 from __future__ import annotations
@@ -43,8 +42,7 @@ GCP_PROJECT = os.environ.get("GCP_PROJECT", "")
 RUN_REGION = os.environ.get("RUN_REGION", "us-central1")
 RUN_JOB_NAME = os.environ.get("RUN_JOB_NAME", "kb-extractor-job")
 RUN_API_BASE = os.environ.get("RUN_API_BASE", "https://run.googleapis.com")
-RUN_API_AUDIENCE = os.environ.get("RUN_API_AUDIENCE", "https://run.googleapis.com/")
-RUN_REQUEST_TIMEOUT_SECS = int(os.environ.get("RUN_REQUEST_TIMEOUT_SECS", "10"))
+RUN_REQUEST_TIMEOUT_SECS = int(os.environ.get("RUN_REQUEST_TIMEOUT_SECS", "5"))
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -84,20 +82,23 @@ def _check_auth() -> str | None:
 # Cloud Run Job helpers
 # ---------------------------------------------------------------------------
 
-def _fetch_metadata_token(audience: str) -> str:
-    """Fetch an identity token from the GCE metadata server."""
+def _fetch_access_token() -> str:
+    """Fetch an OAuth2 access token from the GCE metadata server.
+
+    Uses the access token endpoint (not identity token) because the
+    Cloud Run Jobs API requires standard OAuth2 bearer tokens.
+    """
     url = (
         "http://metadata.google.internal/computeMetadata/v1/"
-        "instance/service-accounts/default/identity"
+        "instance/service-accounts/default/token"
     )
     resp = http_requests.get(
         url,
-        params={"audience": audience, "format": "full"},
         headers={"Metadata-Flavor": "Google"},
-        timeout=5,
+        timeout=2,
     )
     resp.raise_for_status()
-    return resp.text.strip()
+    return resp.json()["access_token"]
 
 
 def _run_cloud_run_job() -> dict:
@@ -111,10 +112,10 @@ def _run_cloud_run_job() -> dict:
     )
 
     try:
-        token = _fetch_metadata_token(RUN_API_AUDIENCE)
+        token = _fetch_access_token()
     except Exception as exc:
-        log.error("Failed to fetch metadata token: %s", exc)
-        return {"ok": False, "error": "metadata_token_failed", "details": str(exc)}
+        log.error("Failed to fetch access token: %s", exc)
+        return {"ok": False, "error": "access_token_failed", "details": str(exc)}
 
     try:
         resp = http_requests.post(

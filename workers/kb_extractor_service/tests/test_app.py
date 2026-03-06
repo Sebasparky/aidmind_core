@@ -98,10 +98,11 @@ class TestRunTrigger(unittest.TestCase):
         self.assertFalse(data["ok"])
         self.assertEqual(data["error"], "job_trigger_failed")
 
-    @patch("app._fetch_metadata_token")
+    @patch("app._fetch_access_token")
     @patch("app.http_requests.post")
-    def test_run_end_to_end_mocked(self, mock_post, mock_token):
-        mock_token.return_value = "fake-token"
+    def test_run_end_to_end_with_access_token(self, mock_post, mock_token):
+        """Verify the service uses an OAuth2 access token (not identity token)."""
+        mock_token.return_value = "ya29.fake-access-token"
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {"name": "executions/exec-123"}
@@ -113,10 +114,27 @@ class TestRunTrigger(unittest.TestCase):
         self.assertTrue(data["ok"])
         self.assertIn("exec-123", data["execution"])
 
-        # Verify the API call
+        # Verify the API call used access token
         mock_post.assert_called_once()
         call_kwargs = mock_post.call_args
-        self.assertIn("Bearer fake-token", call_kwargs.kwargs.get("headers", {}).get("Authorization", ""))
+        auth_header = call_kwargs.kwargs.get("headers", {}).get("Authorization", "")
+        self.assertEqual(auth_header, "Bearer ya29.fake-access-token")
+
+    @patch("app._fetch_access_token")
+    @patch("app.http_requests.post")
+    def test_run_502_when_jobs_api_returns_401(self, mock_post, mock_token):
+        """Verify 502 when Cloud Run Jobs API returns 401."""
+        mock_token.return_value = "ya29.fake-access-token"
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
+        mock_resp.text = '{"error": {"code": 401, "message": "UNAUTHENTICATED"}}'
+        mock_post.return_value = mock_resp
+
+        resp = self.client.post("/run", headers={"X-AIDMIND-KICK-SECRET": "test-secret"})
+        self.assertEqual(resp.status_code, 502)
+        data = json.loads(resp.data)
+        self.assertFalse(data["ok"])
+        self.assertEqual(data["error"], "job_trigger_failed")
 
 
 class TestStatus(unittest.TestCase):
