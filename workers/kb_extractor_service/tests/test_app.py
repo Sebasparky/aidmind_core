@@ -49,7 +49,8 @@ class TestIndex(unittest.TestCase):
         data = json.loads(resp.data)
         self.assertEqual(data["service"], "kb-extractor-service")
         endpoints = data["endpoints"]
-        self.assertIn("/healthz", endpoints)
+        # Canonical /healthz/ must appear
+        self.assertIn("/healthz/", endpoints)
         self.assertIn("/run", endpoints)
 
     def test_routes_endpoint(self):
