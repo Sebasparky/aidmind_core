@@ -1,21 +1,17 @@
-"""Tests for kb-extractor-service Flask app."""
+"""Tests for kb-extractor-service Flask app (Cloud Run Job trigger)."""
 
 import json
 import os
-import threading
-import time
 import unittest
 from unittest.mock import patch, MagicMock
 
 # Set env before importing app
 os.environ["KICK_SECRET"] = "test-secret"
-os.environ["DRAIN_MAX_LOOPS"] = "3"
-os.environ["DRAIN_MAX_SECONDS"] = "10"
-os.environ["DRAIN_EMPTY_STREAK"] = "2"
-os.environ["DRAIN_SLEEP_MS"] = "50"
+os.environ["GCP_PROJECT"] = "test-project"
+os.environ["RUN_REGION"] = "us-central1"
+os.environ["RUN_JOB_NAME"] = "kb-extractor-job"
 
-from app import app, _lock, _drain_loop
-import app as app_module
+from app import app
 
 
 class TestHealthz(unittest.TestCase):
@@ -25,14 +21,12 @@ class TestHealthz(unittest.TestCase):
         self.client = app.test_client()
 
     def test_healthz_canonical_trailing_slash(self):
-        """Primary check — /healthz/ must return 200 + ok:true."""
         resp = self.client.get("/healthz/")
         self.assertEqual(resp.status_code, 200)
         data = json.loads(resp.data)
         self.assertTrue(data["ok"])
 
     def test_healthz_no_trailing_slash_still_works(self):
-        """Backward compat — /healthz also returns 200."""
         resp = self.client.get("/healthz")
         self.assertEqual(resp.status_code, 200)
         data = json.loads(resp.data)
@@ -48,10 +42,8 @@ class TestIndex(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         data = json.loads(resp.data)
         self.assertEqual(data["service"], "kb-extractor-service")
-        endpoints = data["endpoints"]
-        # Canonical /healthz/ must appear
-        self.assertIn("/healthz/", endpoints)
-        self.assertIn("/run", endpoints)
+        self.assertIn("/healthz/", data["endpoints"])
+        self.assertIn("/run", data["endpoints"])
 
     def test_routes_endpoint(self):
         resp = self.client.get("/_routes")
@@ -65,9 +57,6 @@ class TestIndex(unittest.TestCase):
 class TestRunAuth(unittest.TestCase):
     def setUp(self):
         self.client = app.test_client()
-        # Reset running state
-        with _lock:
-            app_module._running = False
 
     def test_run_401_missing_header(self):
         resp = self.client.post("/run")
@@ -77,57 +66,57 @@ class TestRunAuth(unittest.TestCase):
         resp = self.client.post("/run", headers={"X-AIDMIND-KICK-SECRET": "wrong"})
         self.assertEqual(resp.status_code, 401)
 
-    @patch("app.threading.Thread")
-    def test_run_202_correct_secret(self, mock_thread_cls):
-        mock_thread = MagicMock()
-        mock_thread_cls.return_value = mock_thread
+
+class TestRunTrigger(unittest.TestCase):
+    def setUp(self):
+        self.client = app.test_client()
+
+    @patch("app._run_cloud_run_job")
+    def test_run_202_on_success(self, mock_trigger):
+        mock_trigger.return_value = {
+            "ok": True,
+            "execution": "projects/test/locations/us-central1/jobs/kb-extractor-job/executions/exec-abc",
+        }
         resp = self.client.post("/run", headers={"X-AIDMIND-KICK-SECRET": "test-secret"})
         self.assertEqual(resp.status_code, 202)
         data = json.loads(resp.data)
         self.assertTrue(data["ok"])
-        self.assertEqual(data["status"], "draining")
-        # Reset
-        with _lock:
-            app_module._running = False
+        self.assertEqual(data["status"], "job_triggered")
+        self.assertIn("exec-abc", data["execution"])
 
-    @patch("app.threading.Thread")
-    def test_run_409_already_running(self, mock_thread_cls):
-        mock_thread = MagicMock()
-        mock_thread_cls.return_value = mock_thread
-        # First call
-        resp1 = self.client.post("/run", headers={"X-AIDMIND-KICK-SECRET": "test-secret"})
-        self.assertEqual(resp1.status_code, 202)
-        # Second call while "running"
-        resp2 = self.client.post("/run", headers={"X-AIDMIND-KICK-SECRET": "test-secret"})
-        self.assertEqual(resp2.status_code, 409)
-        data = json.loads(resp2.data)
-        self.assertEqual(data["error"], "already_running")
-        # Reset
-        with _lock:
-            app_module._running = False
+    @patch("app._run_cloud_run_job")
+    def test_run_502_on_api_failure(self, mock_trigger):
+        mock_trigger.return_value = {
+            "ok": False,
+            "error": "api_non_2xx",
+            "status_code": 403,
+            "details": "Permission denied",
+        }
+        resp = self.client.post("/run", headers={"X-AIDMIND-KICK-SECRET": "test-secret"})
+        self.assertEqual(resp.status_code, 502)
+        data = json.loads(resp.data)
+        self.assertFalse(data["ok"])
+        self.assertEqual(data["error"], "job_trigger_failed")
 
+    @patch("app._fetch_metadata_token")
+    @patch("app.http_requests.post")
+    def test_run_end_to_end_mocked(self, mock_post, mock_token):
+        mock_token.return_value = "fake-token"
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"name": "executions/exec-123"}
+        mock_post.return_value = mock_resp
 
-class TestDrainLoop(unittest.TestCase):
-    def setUp(self):
-        with _lock:
-            app_module._running = True
-            app_module._last = {}
+        resp = self.client.post("/run", headers={"X-AIDMIND-KICK-SECRET": "test-secret"})
+        self.assertEqual(resp.status_code, 202)
+        data = json.loads(resp.data)
+        self.assertTrue(data["ok"])
+        self.assertIn("exec-123", data["execution"])
 
-    @patch("app.subprocess.run")
-    def test_drain_stops_on_empty_streak(self, mock_run):
-        """Drain should stop after DRAIN_EMPTY_STREAK consecutive no-job runs."""
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout="some output\nNO_JOBS_AVAILABLE=true\n",
-            stderr="",
-        )
-        _drain_loop()
-
-        with _lock:
-            self.assertFalse(app_module._running)
-            self.assertEqual(app_module._last["stopped_reason"], "queue_empty")
-            # With DRAIN_EMPTY_STREAK=2, should run exactly 2 iterations
-            self.assertEqual(app_module._last["loops_completed"], 2)
+        # Verify the API call
+        mock_post.assert_called_once()
+        call_kwargs = mock_post.call_args
+        self.assertIn("Bearer fake-token", call_kwargs.kwargs.get("headers", {}).get("Authorization", ""))
 
 
 class TestStatus(unittest.TestCase):
@@ -138,9 +127,9 @@ class TestStatus(unittest.TestCase):
         resp = self.client.get("/status")
         self.assertEqual(resp.status_code, 200)
         data = json.loads(resp.data)
-        self.assertIn("running", data)
-        self.assertIn("status", data)
-        self.assertIn("last", data)
+        self.assertFalse(data["running"])
+        self.assertEqual(data["status"], "idle")
+        self.assertIn("last_trigger", data)
 
 
 if __name__ == "__main__":
