@@ -399,9 +399,9 @@ serve(async (req) => {
 
     // ── 8. Call OpenAI ───────────────────────────────────────────────────
 
-    const textForReview = extraction.text.length > MAX_EXTRACTED_CHARS
-      ? extraction.text.slice(0, MAX_EXTRACTED_CHARS)
-      : extraction.text;
+    const textForReview = extractedText!.length > MAX_EXTRACTED_CHARS
+      ? extractedText!.slice(0, MAX_EXTRACTED_CHARS)
+      : extractedText!;
 
     const llmResponse = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
