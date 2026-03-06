@@ -744,20 +744,38 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      append_kb_document_content: {
+        Args: { p_chunk: string; p_doc_id: string }
+        Returns: undefined
+      }
       claim_next_kb_job: {
         Args: { p_worker_id: string }
         Returns: {
           attempts: number
+          dedupe_key: string
+          end_page: number
           id: number
+          job_type: string
           kb_document_id: string
           max_attempts: number
           priority: number
+          start_page: number
           tenant_id: string
         }[]
       }
       complete_kb_job: {
         Args: { p_error?: string; p_job_id: number; p_status: string }
         Returns: undefined
+      }
+      enqueue_kb_continuation_job: {
+        Args: {
+          p_end_page: number
+          p_kb_document_id: string
+          p_priority?: number
+          p_start_page: number
+          p_tenant_id: string
+        }
+        Returns: number
       }
       get_my_profile: { Args: never; Returns: Json }
       get_my_role: {
