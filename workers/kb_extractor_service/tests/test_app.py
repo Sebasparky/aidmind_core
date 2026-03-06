@@ -28,6 +28,34 @@ class TestHealthz(unittest.TestCase):
         data = json.loads(resp.data)
         self.assertTrue(data["ok"])
 
+    def test_healthz_trailing_slash_returns_200(self):
+        resp = self.client.get("/healthz/")
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertTrue(data["ok"])
+
+
+class TestIndex(unittest.TestCase):
+    def setUp(self):
+        self.client = app.test_client()
+
+    def test_index_lists_endpoints(self):
+        resp = self.client.get("/")
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertEqual(data["service"], "kb-extractor-service")
+        endpoints = data["endpoints"]
+        self.assertIn("/healthz", endpoints)
+        self.assertIn("/run", endpoints)
+
+    def test_routes_endpoint(self):
+        resp = self.client.get("/_routes")
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        rules = [r["rule"] for r in data["rules"]]
+        self.assertIn("/healthz", rules)
+        self.assertIn("/run", rules)
+
 
 class TestRunAuth(unittest.TestCase):
     def setUp(self):

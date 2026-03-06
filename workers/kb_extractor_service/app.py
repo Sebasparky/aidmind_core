@@ -183,8 +183,28 @@ def _drain_loop() -> None:
 # ---------------------------------------------------------------------------
 
 @app.route("/healthz", methods=["GET"])
+@app.route("/healthz/", methods=["GET"])
 def healthz():
     return jsonify({"ok": True}), 200
+
+
+@app.get("/")
+def index():
+    return jsonify({
+        "service": "kb-extractor-service",
+        "endpoints": sorted([str(r) for r in app.url_map.iter_rules()]),
+    })
+
+
+@app.get("/_routes")
+def routes():
+    return jsonify({
+        "rules": sorted([{
+            "rule": r.rule,
+            "methods": sorted([m for m in r.methods if m not in ("HEAD", "OPTIONS")]),
+            "endpoint": r.endpoint,
+        } for r in app.url_map.iter_rules()], key=lambda x: x["rule"])
+    })
 
 
 @app.route("/status", methods=["GET"])

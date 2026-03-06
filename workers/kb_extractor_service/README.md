@@ -11,6 +11,8 @@ until the queue is empty or safety limits are hit.
 | POST   | `/run`     | Start drain loop (returns 202)       |
 | GET    | `/status`  | Current drain state + last run info  |
 | GET    | `/healthz` | Health check                         |
+| GET    | `/`        | Service info + registered endpoints  |
+| GET    | `/_routes` | Debug: full Flask route map          |
 
 ## Auth
 
