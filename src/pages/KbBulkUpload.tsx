@@ -2,10 +2,12 @@
  * KbBulkUploadPage — Minimal UI for bulk-uploading PDFs to Knowledge Base.
  */
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useKbBulkUploader } from "@/hooks/useKbBulkUploader";
 import { useTenant } from "@/hooks/useTenant";
+import { kickExtractor } from "@/lib/kb/kbUploadService";
 import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 
 const STATUS_LABELS: Record<string, string> = {
   queued: "⏳ Queued",
@@ -14,12 +16,15 @@ const STATUS_LABELS: Record<string, string> = {
   failed: "❌ Failed",
 };
 
+const IS_DEV = import.meta.env.DEV;
+
 export default function KbBulkUploadPage() {
   const { tenant, loading: tenantLoading } = useTenant();
   const { tasks, enqueueFiles, cancel, isRunning, stats } = useKbBulkUploader(
     tenant?.tenantId ?? null
   );
   const inputRef = useRef<HTMLInputElement>(null);
+  const [kicking, setKicking] = useState(false);
 
   const handleFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -27,6 +32,18 @@ export default function KbBulkUploadPage() {
     enqueueFiles(files);
     // Reset input so user can re-select
     if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const handleKick = async () => {
+    setKicking(true);
+    try {
+      const result = await kickExtractor();
+      toast(result.ok ? "Extractor kicked ✓" : `Kick failed: ${result.detail}`);
+    } catch {
+      toast.error("Kick failed unexpectedly");
+    } finally {
+      setKicking(false);
+    }
   };
 
   if (tenantLoading) {
@@ -61,6 +78,16 @@ export default function KbBulkUploadPage() {
         {isRunning && (
           <Button variant="destructive" size="sm" onClick={cancel}>
             Cancel
+          </Button>
+        )}
+        {IS_DEV && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleKick}
+            disabled={kicking}
+          >
+            {kicking ? "Kicking…" : "Kick extractor now"}
           </Button>
         )}
       </div>
