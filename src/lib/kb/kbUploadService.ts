@@ -175,7 +175,7 @@ export async function createIngestionJob(
   return (data as any).id as number;
 }
 
-/** 5. Stamp job_id back into kb_documents metadata */
+/** 5. Stamp job_id back into kb_documents metadata, then kick extractor */
 export async function stampJobId(
   kbDocumentId: string,
   jobId: number
@@ -197,6 +197,9 @@ export async function stampJobId(
     .eq("id", kbDocumentId);
 
   if (error) throw new Error(`Stamp job_id failed: ${error.message}`);
+
+  // Non-blocking kick to Cloud Run extractor (debounced)
+  kickExtractor().catch(() => {});
 }
 
 /** Mark a document as failed in metadata */
