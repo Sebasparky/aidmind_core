@@ -1,9 +1,12 @@
 """
-KB Ingestion Worker — PDF text extraction via PyMuPDF.
+KB Ingestion Worker — PDF text extraction via PyMuPDF with continuation support.
 
 Runs as a Google Cloud Run Job. Processes queued rows in kb_ingestion_jobs,
-downloads PDFs from Supabase Storage, extracts native text, updates
-kb_documents.content and metadata.ingestion, and marks jobs succeeded/failed.
+downloads PDFs from Supabase Storage, extracts native text in page-range chunks,
+updates kb_documents.content and metadata.ingestion, and marks jobs succeeded/failed.
+
+For documents exceeding MAX_PAGES, the worker automatically enqueues continuation
+jobs to process the next page range until all pages are extracted.
 
 Environment variables:
   SUPABASE_URL              (required)
@@ -41,10 +44,11 @@ DRY_RUN = os.environ.get("DRY_RUN", "false").lower() in ("true", "1", "yes")
 
 # Hard limits
 MAX_PDF_BYTES = 150 * 1024 * 1024  # 150 MB
-MAX_PAGES = 1000
-MAX_SECONDS_PER_DOC = 600  # 10 minutes
+MAX_PAGES = 1000  # pages per chunk/job
+MAX_SECONDS_PER_DOC = 600  # 10 minutes per chunk
 MIN_PAGE_CHARS = 30
 TEXT_QUALITY_THRESHOLD = 0.70
+MAX_TOTAL_CHUNKS_PER_DOC = 20  # prevent infinite continuation spam
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -118,21 +122,50 @@ def update_document(doc_id: str, updates: dict) -> None:
     sb.table("kb_documents").update(updates).eq("id", doc_id).execute()
 
 
+def append_document_content(doc_id: str, chunk_text: str) -> None:
+    """Append text to kb_documents.content server-side (no download)."""
+    sb.rpc(
+        "append_kb_document_content",
+        {"p_doc_id": doc_id, "p_chunk": chunk_text},
+    ).execute()
+
+
+def enqueue_continuation(
+    doc_id: str, tenant_id: str, start_page: int, end_page: int, priority: int = 50
+) -> int | None:
+    """Enqueue the next continuation job via RPC. Returns job id."""
+    resp = sb.rpc(
+        "enqueue_kb_continuation_job",
+        {
+            "p_kb_document_id": doc_id,
+            "p_tenant_id": tenant_id,
+            "p_start_page": start_page,
+            "p_end_page": end_page,
+            "p_priority": priority,
+        },
+    ).execute()
+    return resp.data
+
+
 def download_pdf(file_path: str) -> bytes:
     """Download a file from Supabase Storage and return raw bytes."""
     return sb.storage.from_(STORAGE_BUCKET).download(file_path)
 
 
 # ---------------------------------------------------------------------------
-# Extraction
+# Extraction (page range)
 # ---------------------------------------------------------------------------
 
-def extract_text(pdf_bytes: bytes, job_id: int) -> dict:
-    """Extract native text from a PDF using PyMuPDF.
+def extract_text_range(
+    pdf_bytes: bytes,
+    start_page: int,
+    end_page: int | None,
+) -> dict:
+    """Extract native text from pages [start_page, end_page) of a PDF.
 
-    Returns a dict with keys: text, page_count, original_page_count,
+    Returns a dict with keys: text, original_page_count, page_count,
     hit_max_pages, hit_timeout, char_count, non_empty_pages,
-    text_quality_score, native_pages, status, error.
+    text_quality_score, native_pages, status, error, actual_end_page.
     """
     start_time = time.monotonic()
 
@@ -142,6 +175,7 @@ def extract_text(pdf_bytes: bytes, job_id: int) -> dict:
             "text": "",
             "original_page_count": 0,
             "page_count": 0,
+            "actual_end_page": start_page,
             "hit_max_pages": False,
             "hit_timeout": False,
             "char_count": 0,
@@ -159,6 +193,7 @@ def extract_text(pdf_bytes: bytes, job_id: int) -> dict:
             "text": "",
             "original_page_count": 0,
             "page_count": 0,
+            "actual_end_page": start_page,
             "hit_max_pages": False,
             "hit_timeout": False,
             "char_count": 0,
@@ -170,18 +205,24 @@ def extract_text(pdf_bytes: bytes, job_id: int) -> dict:
         }
 
     original_page_count = len(doc)
-    hit_max_pages = original_page_count > MAX_PAGES
-    pages_to_process = min(original_page_count, MAX_PAGES)
+
+    # Compute effective end_page
+    if end_page is None:
+        end_page = min(start_page + MAX_PAGES, original_page_count)
+    end_page = min(end_page, original_page_count)
+
+    hit_max_pages = (end_page - start_page) >= MAX_PAGES and end_page < original_page_count
 
     parts: list[str] = []
     non_empty_pages = 0
     native_pages = 0
     hit_timeout = False
 
-    for i in range(pages_to_process):
+    for i in range(start_page, end_page):
         elapsed = time.monotonic() - start_time
         if elapsed > MAX_SECONDS_PER_DOC:
             hit_timeout = True
+            end_page = i  # update to actual stop point
             break
 
         try:
@@ -189,6 +230,7 @@ def extract_text(pdf_bytes: bytes, job_id: int) -> dict:
         except Exception:
             page_text = ""
 
+        # Use absolute page numbers (1-based) for citation traceability
         parts.append(f"--- Page {i + 1} ---\n{page_text}")
 
         stripped = page_text.strip()
@@ -198,41 +240,35 @@ def extract_text(pdf_bytes: bytes, job_id: int) -> dict:
 
     doc.close()
 
-    page_count = len(parts)  # pages actually processed
+    page_count = len(parts)
     full_text = "\n\n".join(parts)
     char_count = len(full_text)
     quality = non_empty_pages / page_count if page_count else 0.0
 
-    # --- Determine status and error ---
+    # Determine chunk-level status and errors
     errors: list[str] = []
+    needs_review = False
 
     if hit_timeout:
+        needs_review = True
         errors.append(
             f"Hit MAX_SECONDS_PER_DOC cap ({MAX_SECONDS_PER_DOC}s). "
-            f"Extracted {page_count}/{original_page_count} pages."
+            f"Extracted {page_count} pages in this chunk."
         )
 
-    if hit_max_pages:
-        errors.append(
-            f"Hit MAX_PAGES cap ({MAX_PAGES}). "
-            f"Extracted first {page_count} of {original_page_count} pages."
-        )
-
-    needs_review = False
-    if hit_max_pages or hit_timeout:
-        needs_review = True
-    elif page_count == 0 or char_count == 0:
+    if page_count == 0 or char_count == 0:
         needs_review = True
     elif quality < TEXT_QUALITY_THRESHOLD:
         needs_review = True
 
-    status = "needs_review" if needs_review else "ready"
+    status = "needs_review" if needs_review else "ok"
     error = " ".join(errors) if errors else None
 
     return {
         "text": full_text,
         "original_page_count": original_page_count,
         "page_count": page_count,
+        "actual_end_page": end_page,
         "hit_max_pages": hit_max_pages,
         "hit_timeout": hit_timeout,
         "char_count": char_count,
@@ -252,8 +288,14 @@ def process_job(job: dict) -> None:
     job_id = job["id"]
     doc_id = job["kb_document_id"]
     tenant_id = job["tenant_id"]
+    start_page = job.get("start_page", 0)
+    end_page = job.get("end_page")  # may be None for initial jobs
+    job_priority = job.get("priority", 50)
 
-    log.info("Processing job=%s doc=%s tenant=%s", job_id, doc_id, tenant_id)
+    log.info(
+        "Processing job=%s doc=%s tenant=%s pages=[%s, %s)",
+        job_id, doc_id, tenant_id, start_page, end_page,
+    )
 
     # 1. Fetch document
     try:
@@ -271,8 +313,21 @@ def process_job(job: dict) -> None:
         complete_job(job_id, "failed", msg)
         return
 
-    # 2. Mark document as extracting
     existing_meta = doc_row.get("metadata") or {}
+    existing_ingestion = existing_meta.get("ingestion", {})
+    completed_ranges: list[str] = list(existing_ingestion.get("completed_ranges", []))
+
+    # 2. Idempotency check — skip if this range was already processed
+    range_key_preview = f"{start_page}-{end_page}" if end_page is not None else None
+    if range_key_preview and range_key_preview in completed_ranges:
+        log.info(
+            "job=%s range %s already completed, skipping (idempotent)",
+            job_id, range_key_preview,
+        )
+        complete_job(job_id, "succeeded", None)
+        return
+
+    # 3. Mark document as extracting
     extracting_meta = _merge_ingestion_metadata(existing_meta, {
         "status": "extracting",
         "job_id": job_id,
@@ -281,7 +336,7 @@ def process_job(job: dict) -> None:
     })
     update_document(doc_id, {"metadata": extracting_meta})
 
-    # 3. Download PDF
+    # 4. Download PDF
     try:
         pdf_bytes = download_pdf(file_path)
     except Exception as exc:
@@ -300,60 +355,119 @@ def process_job(job: dict) -> None:
 
     log.info("job=%s downloaded %d bytes", job_id, len(pdf_bytes))
 
-    # 4. Extract text
-    result = extract_text(pdf_bytes, job_id)
+    # 5. Extract text for this page range
+    result = extract_text_range(pdf_bytes, start_page, end_page)
+    actual_end = result["actual_end_page"]
+    original_page_count = result["original_page_count"]
+
+    # Build definitive range key using actual end
+    range_key = f"{start_page}-{actual_end}"
 
     log.info(
-        "job=%s original_pages=%d processed_pages=%d chars=%d non_empty=%d "
-        "quality=%.2f hit_max_pages=%s hit_timeout=%s status=%s",
-        job_id,
-        result["original_page_count"],
-        result["page_count"],
-        result["char_count"],
-        result["non_empty_pages"],
-        result["text_quality_score"],
-        result["hit_max_pages"],
-        result["hit_timeout"],
-        result["status"],
+        "job=%s original_pages=%d chunk_pages=%d [%d,%d) chars=%d "
+        "non_empty=%d quality=%.2f hit_timeout=%s status=%s",
+        job_id, original_page_count, result["page_count"],
+        start_page, actual_end, result["char_count"],
+        result["non_empty_pages"], result["text_quality_score"],
+        result["hit_timeout"], result["status"],
     )
 
-    # 5. Update document
+    # Second idempotency check with actual range
+    if range_key in completed_ranges:
+        log.info("job=%s range %s already completed (post-extract), skipping", job_id, range_key)
+        complete_job(job_id, "succeeded", None)
+        return
+
+    # 6. Write content
+    is_first_chunk = start_page == 0
+
+    if not DRY_RUN:
+        if is_first_chunk:
+            # Overwrite content for the first chunk
+            update_document(doc_id, {"content": result["text"]})
+        else:
+            # Append with continuation marker
+            marker = (
+                f"\n\n===== CONTINUATION (pages {start_page + 1}-{actual_end}) =====\n\n"
+            )
+            append_document_content(doc_id, marker + result["text"])
+    else:
+        log.info("job=%s DRY_RUN — skipping content write", job_id)
+
+    # 7. Update metadata
+    completed_ranges.append(range_key)
+    chunks_completed = len(completed_ranges)
+    processed_pages_total = actual_end  # pages 0..actual_end are done
+
+    # Determine overall document status
+    more_pages = actual_end < original_page_count
+    chunk_needs_review = result["status"] == "needs_review"
+    too_many_chunks = chunks_completed >= MAX_TOTAL_CHUNKS_PER_DOC and more_pages
+
+    if chunk_needs_review:
+        doc_status = "needs_review"
+    elif too_many_chunks:
+        doc_status = "needs_review"
+    elif more_pages:
+        doc_status = "extracting"
+    else:
+        doc_status = "ready"
+
     finished_at = _now_iso()
-    ingestion_update = {
-        "status": result["status"],
+    ingestion_update: dict = {
+        "status": doc_status,
         "job_id": job_id,
-        "started_at": extracting_meta["ingestion"].get("started_at"),
         "finished_at": finished_at,
-        "original_page_count": result["original_page_count"],
+        "original_page_count": original_page_count,
         "page_count": result["page_count"],
-        "hit_max_pages": result["hit_max_pages"],
+        "processed_pages_total": processed_pages_total,
+        "next_start_page": actual_end if more_pages else None,
+        "hit_max_pages": more_pages,
         "hit_timeout": result["hit_timeout"],
         "char_count": result["char_count"],
         "non_empty_pages": result["non_empty_pages"],
         "text_quality_score": result["text_quality_score"],
         "native_pages": result["native_pages"],
         "ocr_pages": 0,
+        "chunks_completed": chunks_completed,
+        "completed_ranges": completed_ranges,
+        "last_chunk": {
+            "start_page": start_page,
+            "end_page": actual_end,
+            "pages_extracted": result["page_count"],
+            "char_count": result["char_count"],
+            "job_id": job_id,
+            "finished_at": finished_at,
+        },
         "error": result["error"],
         "file_path": file_path,
     }
 
-    # Re-fetch metadata to avoid race conditions with concurrent metadata writers
+    if too_many_chunks:
+        ingestion_update["error"] = (
+            f"Too many continuation chunks ({chunks_completed}); "
+            f"manual intervention required. Processed {processed_pages_total}/{original_page_count} pages."
+        )
+
+    # Re-fetch metadata to merge safely
     fresh_doc = fetch_document(doc_id)
     fresh_meta = fresh_doc.get("metadata") or {}
     final_meta = _merge_ingestion_metadata(fresh_meta, ingestion_update)
+    update_document(doc_id, {"metadata": final_meta})
 
-    doc_updates: dict = {"metadata": final_meta}
+    # 8. Enqueue continuation if needed
+    if more_pages and not chunk_needs_review and not too_many_chunks:
+        next_start = actual_end
+        next_end = min(next_start + MAX_PAGES, original_page_count)
+        log.info(
+            "job=%s enqueueing continuation [%d, %d) for doc=%s",
+            job_id, next_start, next_end, doc_id,
+        )
+        enqueue_continuation(doc_id, tenant_id, next_start, next_end, job_priority)
 
-    if not DRY_RUN:
-        doc_updates["content"] = result["text"]
-    else:
-        log.info("job=%s DRY_RUN — skipping content write", job_id)
-
-    update_document(doc_id, doc_updates)
-
-    # 6. Complete job
+    # 9. Complete job
     complete_job(job_id, "succeeded", result.get("error"))
-    log.info("job=%s completed status=succeeded", job_id)
+    log.info("job=%s completed status=succeeded doc_status=%s", job_id, doc_status)
 
 
 def _fail_document(doc_id: str, doc_row: dict, job_id: int, error: str) -> None:
