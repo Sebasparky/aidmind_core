@@ -88,11 +88,15 @@ SEVERITY LEVELS:
 
 STRICT RULES:
 1. Produce ONLY a JSON report. No markdown, no commentary.
-2. Do NOT rewrite or suggest replacement text.
-3. Keep excerpts short (≤ 30 words).
-4. Suggestions must be actionable and specific.
-5. Focus on concrete, identifiable issues — not vague impressions.
-6. If the document is well-written and compliant, return zero issues.
+2. Do NOT rewrite any text from the document.
+3. Do NOT suggest replacement text or alternative wording.
+4. Do NOT recommend wording changes.
+5. Do NOT act like an editor — you are an auditor.
+6. Do NOT provide suggestions of any kind.
+7. Only identify and explain issues found in the document.
+8. Keep excerpts short (≤ 30 words).
+9. Focus on concrete, identifiable issues — not vague impressions.
+10. If the document is well-written and compliant, return zero issues.
 
 OUTPUT SCHEMA (return ONLY this JSON):
 {
@@ -105,8 +109,7 @@ OUTPUT SCHEMA (return ONLY this JSON):
       "type": "completeness | policy_language | tone | bias | consistency",
       "severity": "low | medium | high",
       "excerpt": "short excerpt from the document",
-      "explanation": "why this is a problem",
-      "suggestion": "how to fix it"
+      "explanation": "why this is problematic"
     }
   ],
   "metrics": {
