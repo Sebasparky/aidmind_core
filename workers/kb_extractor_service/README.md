@@ -12,7 +12,8 @@ Supabase Edge (kb-kick)
 ```
 
 The service does **no long-running work** itself — it validates the secret,
-fetches a metadata identity token, calls the Jobs API, and returns immediately.
+fetches an **OAuth2 access token** from the GCE metadata server, calls the
+Jobs API, and returns immediately.
 
 ## Health check
 
@@ -40,6 +41,19 @@ fetches a metadata identity token, calls the Jobs API, and returns immediately.
 env var. The service itself can be publicly invocable (no IAM auth needed) since
 the kick secret protects the endpoint.
 
+## Token type
+
+The service uses an **OAuth2 access token** (not an identity token) to call the
+Cloud Run Jobs API. It fetches the token from:
+
+```
+http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token
+```
+
+This returns a standard `access_token` that works with Google APIs. The previous
+identity token approach (`/identity?audience=...`) caused 401 UNAUTHENTICATED
+errors from the Jobs API.
+
 ## Environment Variables
 
 | Name                       | Default                          | Description                            |
@@ -50,13 +64,13 @@ the kick secret protects the endpoint.
 | `RUN_REGION`               | `us-central1`                    | Cloud Run region                       |
 | `RUN_JOB_NAME`             | `kb-extractor-job`               | Cloud Run Job name                     |
 | `RUN_API_BASE`             | `https://run.googleapis.com`     | Run API base URL                       |
-| `RUN_API_AUDIENCE`         | `https://run.googleapis.com/`    | Audience for metadata identity token   |
-| `RUN_REQUEST_TIMEOUT_SECS` | `10`                             | Timeout for Jobs API call (seconds)    |
+| `RUN_REQUEST_TIMEOUT_SECS` | `5`                              | Timeout for Jobs API call (seconds)    |
 
 ## IAM Permissions
 
 The service account used by `kb-extractor-service` must have permission to
-run the Cloud Run Job:
+run the Cloud Run Job. It needs an **OAuth2 access token** scope (default
+on Compute Engine / Cloud Run), plus the correct IAM role:
 
 ```bash
 # Grant roles/run.developer (includes permission to run jobs)
