@@ -148,7 +148,6 @@ function validateReviewReport(parsed: unknown): parsed is {
     if (!VALID_SEVERITIES.has(i.severity as string)) return false;
     if (typeof i.excerpt !== "string") return false;
     if (typeof i.explanation !== "string") return false;
-    if (typeof i.suggestion !== "string") return false;
   }
 
   // metrics
