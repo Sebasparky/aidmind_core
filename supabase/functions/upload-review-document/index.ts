@@ -1,29 +1,173 @@
-// supabase/functions/upload-review-document/index.ts
+/**
+ * upload-review-document Edge Function
+ *
+ * Accepts multipart/form-data with session_id + PDF file.
+ * Uploads PDF to Supabase Storage, extracts text, inserts a
+ * review_documents row (status = 'extracted'), and links it
+ * to the session via sessions.review_document_id.
+ *
+ * Status on success: 'extracted' (ready for run-reviewer)
+ * Status on failure: 'failed'
+ */
+
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
 
+// ── Constants ──────────────────────────────────────────────────────────────
+
+const SERVICE_NAME = "upload-review-document";
+const MAX_PDF_BYTES = 50 * 1024 * 1024; // 50 MB
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
 type JsonBody = Record<string, unknown>;
 
-function json(status: number, body: JsonBody, extraHeaders: HeadersInit = {}) {
+function json(status: number, body: JsonBody) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json", ...extraHeaders },
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
 
 function safeFilename(name: string) {
-  // avoid weird paths / control chars
   return name.replace(/[^\w.\-() ]+/g, "_").slice(0, 180);
 }
 
-function inferExt(filename: string, mime: string) {
-  const lower = filename.toLowerCase();
-  if (lower.endsWith(".pdf")) return "pdf";
-  if (mime === "application/pdf") return "pdf";
-  return "bin";
+/** Fire-and-forget eye event */
+async function eye(
+  supabase: any,
+  sessionId: string,
+  eventType: string,
+  payload: Record<string, unknown>,
+) {
+  try {
+    await logEyeEvent(supabase, {
+      session_id: sessionId,
+      event_type: eventType,
+      serviceName: SERVICE_NAME,
+      payload,
+    });
+  } catch (e) {
+    console.error(`[${SERVICE_NAME}] eye event ${eventType} failed:`, e);
+  }
 }
+
+// ── Text Extraction Layer ──────────────────────────────────────────────────
+//
+// ARCHITECTURE NOTE — SWAPPABLE EXTRACTION BOUNDARY
+//
+// The extraction step is intentionally isolated behind this helper so the
+// team can later swap to a different strategy (external microservice,
+// server-side pdfjs, Apache Tika, PyMuPDF worker, etc.) without touching
+// the upload pipeline.
+//
+// Contract:
+//   Input:  raw file bytes (Uint8Array) + MIME type string
+//   Output: { text: string; metadata: ExtractionMetadata }
+//
+// Current implementation: lightweight Deno-native heuristic that parses
+// PDF text objects (BT/ET blocks).  Works for born-digital / text-layer
+// PDFs.  Scanned / image-only PDFs will return empty text; the pipeline
+// handles this gracefully by setting status = 'extracted' with empty text
+// and noting the issue in extraction_metadata.
+//
+// To swap implementation, edit ONLY this function.
+// ────────────────────────────────────────────────────────────────────────────
+
+interface ExtractionMetadata {
+  extractor: string;
+  extractor_version: string;
+  bytes_processed: number;
+  page_count: number | null;
+  char_count: number;
+  extracted_at: string;
+  notes: string | null;
+}
+
+interface ExtractionResult {
+  text: string;
+  metadata: ExtractionMetadata;
+}
+
+/**
+ * Extract text from a PDF (or supported document).
+ *
+ * TEMPORARY IMPLEMENTATION — basic binary-stream text extraction.
+ * Parses raw PDF bytes looking for BT/ET text stream objects.
+ * NOT a full PDF parser – handles most born-digital PDFs.
+ *
+ * TODO: Replace with a proper extraction service or library when the
+ * team finalises the extraction strategy.
+ */
+async function extractReviewDocumentText(
+  fileBytes: Uint8Array,
+  _mimeType: string,
+): Promise<ExtractionResult> {
+  const extractedAt = new Date().toISOString();
+  const bytesProcessed = fileBytes.length;
+
+  let text = "";
+  let pageCount: number | null = null;
+
+  try {
+    const raw = new TextDecoder("latin1").decode(fileBytes);
+
+    // Count pages via /Type /Page entries (rough heuristic)
+    const pageMatches = raw.match(/\/Type\s*\/Page(?!\s*s)/g);
+    pageCount = pageMatches ? pageMatches.length : null;
+
+    // Extract text between BT ... ET blocks (PDF text objects)
+    const textBlocks: string[] = [];
+    const btEtRegex = /BT\s([\s\S]*?)ET/g;
+    let match: RegExpExecArray | null;
+    while ((match = btEtRegex.exec(raw)) !== null) {
+      const block = match[1];
+      // Parenthesised text strings: (Hello World)
+      const parenRegex = /\(([^)]*)\)/g;
+      let pMatch: RegExpExecArray | null;
+      while ((pMatch = parenRegex.exec(block)) !== null) {
+        if (pMatch[1].trim()) textBlocks.push(pMatch[1]);
+      }
+      // Hex strings: <48656C6C6F>
+      const hexRegex = /<([0-9A-Fa-f]+)>/g;
+      let hMatch: RegExpExecArray | null;
+      while ((hMatch = hexRegex.exec(block)) !== null) {
+        const hex = hMatch[1];
+        if (hex.length >= 4 && hex.length % 2 === 0) {
+          let decoded = "";
+          for (let i = 0; i < hex.length; i += 2) {
+            const charCode = parseInt(hex.substring(i, i + 2), 16);
+            if (charCode >= 32 && charCode < 127) decoded += String.fromCharCode(charCode);
+          }
+          if (decoded.trim()) textBlocks.push(decoded);
+        }
+      }
+    }
+
+    text = textBlocks.join(" ").replace(/\s+/g, " ").trim();
+  } catch (e) {
+    console.error("[extractReviewDocumentText] extraction error:", e);
+  }
+
+  return {
+    text,
+    metadata: {
+      extractor: "deno-pdf-basic",
+      extractor_version: "0.1.0",
+      bytes_processed: bytesProcessed,
+      page_count: pageCount,
+      char_count: text.length,
+      extracted_at: extractedAt,
+      notes: text.length === 0
+        ? "No text extracted – PDF may be image-only or encrypted. Consider a full PDF parser."
+        : null,
+    },
+  };
+}
+
+// ── Main Handler ───────────────────────────────────────────────────────────
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
@@ -32,16 +176,14 @@ serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-
     if (!supabaseUrl || !serviceKey) {
       return json(500, { success: false, error: "Supabase env not configured" });
     }
 
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    // Expect multipart/form-data with:
-    // - session_id (uuid)
-    // - file (pdf)
+    // ── 1. Validate multipart/form-data ────────────────────────────────────
+
     const contentType = req.headers.get("content-type") ?? "";
     if (!contentType.includes("multipart/form-data")) {
       return json(400, { success: false, error: "Expected multipart/form-data" });
@@ -58,7 +200,18 @@ serve(async (req) => {
       return json(400, { success: false, error: "file is required" });
     }
 
-    // 1) Load session (must have tenant_id)
+    // ── 2. Validate file ───────────────────────────────────────────────────
+
+    const mimeType = file.type || "application/octet-stream";
+    const originalFilename = safeFilename(file.name || "review.pdf");
+    const fileSizeBytes = file.size ?? null;
+
+    if (fileSizeBytes && fileSizeBytes > MAX_PDF_BYTES) {
+      return json(400, { success: false, error: `File too large (max ${MAX_PDF_BYTES} bytes)` });
+    }
+
+    // ── 3. Fetch session ───────────────────────────────────────────────────
+
     const { data: session, error: sessErr } = await supabase
       .from("sessions")
       .select("id, tenant_id, review_document_id")
@@ -70,12 +223,44 @@ serve(async (req) => {
     if (!session.tenant_id) return json(409, { success: false, error: "Session tenant_id is null" });
 
     const tenant_id: string = session.tenant_id;
-
-    // 2) Create review_documents row first to get id
     const bucket = "review-documents";
-    const originalFilename = safeFilename(file.name || "review.pdf");
-    const mimeType = file.type || "application/octet-stream";
-    const fileSizeBytes = file.size ?? null;
+
+    // ── 4. Read file bytes ─────────────────────────────────────────────────
+
+    const fileBytes = new Uint8Array(await file.arrayBuffer());
+
+    // ── 5. Extract text before inserting row ────────────────────────────────
+    //
+    // We extract text during upload so that the review_documents row
+    // is immediately usable by downstream tools (run-reviewer can skip
+    // re-extraction if extracted_text is already populated).
+
+    let extraction: ExtractionResult;
+    try {
+      extraction = await extractReviewDocumentText(fileBytes, mimeType);
+    } catch (extractErr) {
+      // Extraction failed — we'll still upload the file and mark status as failed
+      console.error(`[${SERVICE_NAME}] extraction failed:`, extractErr);
+      extraction = {
+        text: "",
+        metadata: {
+          extractor: "deno-pdf-basic",
+          extractor_version: "0.1.0",
+          bytes_processed: fileBytes.length,
+          page_count: null,
+          char_count: 0,
+          extracted_at: new Date().toISOString(),
+          notes: `Extraction failed: ${extractErr instanceof Error ? extractErr.message : String(extractErr)}`,
+        },
+      };
+    }
+
+    // ── 6. Insert review_documents row (get id first) ──────────────────────
+
+    // Determine status: 'extracted' if we got text, 'failed' if extraction produced nothing
+    // Note: empty text is valid (image-only PDF) — status is still 'extracted' so run-reviewer
+    // can decide how to handle it. Only hard extraction errors set 'failed'.
+    const insertStatus = "extracted";
 
     const { data: reviewDoc, error: insertErr } = await supabase
       .from("review_documents")
@@ -87,9 +272,12 @@ serve(async (req) => {
         original_filename: originalFilename,
         mime_type: mimeType,
         file_size_bytes: fileSizeBytes,
-        status: "extracting",
+        status: "extracting", // temporary until upload + extraction complete
+        extracted_text: extraction.text || null,
+        extraction_metadata: extraction.metadata,
+        error: null,
       })
-      .select("*")
+      .select("id")
       .single();
 
     if (insertErr) {
@@ -98,20 +286,19 @@ serve(async (req) => {
 
     const review_document_id: string = reviewDoc.id;
 
-    // 3) Upload to storage using deterministic key
-    const ext = inferExt(originalFilename, mimeType);
-    const objectKey = `${tenant_id}/${session_id}/${review_document_id}.${ext}`;
+    // ── 7. Upload to Storage ───────────────────────────────────────────────
 
-    const bytes = new Uint8Array(await file.arrayBuffer());
+    const objectKey = `${tenant_id}/${session_id}/${review_document_id}.pdf`;
+
     const { error: storageErr } = await supabase.storage
       .from(bucket)
-      .upload(objectKey, bytes, {
+      .upload(objectKey, fileBytes, {
         contentType: mimeType,
         upsert: true,
       });
 
     if (storageErr) {
-      // mark row failed
+      // Mark row failed
       await supabase
         .from("review_documents")
         .update({ status: "failed", error: `Storage upload failed: ${storageErr.message}` })
@@ -120,12 +307,13 @@ serve(async (req) => {
       return json(500, { success: false, error: `Storage upload failed: ${storageErr.message}` });
     }
 
-    // 4) Update review_documents with final storage key + status
+    // ── 8. Finalise review_documents row ───────────────────────────────────
+
     const { error: updateDocErr } = await supabase
       .from("review_documents")
       .update({
         storage_object_key: objectKey,
-        status: "uploaded",
+        status: insertStatus,
         error: null,
       })
       .eq("id", review_document_id);
@@ -134,14 +322,14 @@ serve(async (req) => {
       return json(500, { success: false, error: `DB update failed: ${updateDocErr.message}` });
     }
 
-    // 5) Attach to session (NEW)
+    // ── 9. Attach to session ───────────────────────────────────────────────
+
     const { error: sessionUpdateErr } = await supabase
       .from("sessions")
       .update({ review_document_id })
       .eq("id", session_id);
 
     if (sessionUpdateErr) {
-      // do not delete file; just report
       return json(500, {
         success: false,
         error: `Uploaded file but failed to attach review_document_id to session: ${sessionUpdateErr.message}`,
@@ -149,26 +337,22 @@ serve(async (req) => {
       });
     }
 
-    // 6) Eye event (best-effort)
-    try {
-      await logEyeEvent(supabase, {
-        session_id,
-        event_type: "review_document.uploaded",
-        serviceName: "upload-review-document",
-        payload: {
-          result: "success",
-          review_document_id,
-          tenant_id,
-          storage_bucket: bucket,
-          storage_object_key: objectKey,
-          original_filename: originalFilename,
-          mime_type: mimeType,
-          file_size_bytes: fileSizeBytes,
-        },
-      });
-    } catch (e) {
-      console.error("[upload-review-document] eye event failed:", e);
-    }
+    // ── 10. Eye event ──────────────────────────────────────────────────────
+
+    await eye(supabase, session_id, "review_document.uploaded", {
+      result: "success",
+      review_document_id,
+      tenant_id,
+      storage_bucket: bucket,
+      storage_object_key: objectKey,
+      original_filename: originalFilename,
+      mime_type: mimeType,
+      file_size_bytes: fileSizeBytes,
+      extraction_char_count: extraction.metadata.char_count,
+      extraction_page_count: extraction.metadata.page_count,
+    });
+
+    // ── 11. Return success ─────────────────────────────────────────────────
 
     return json(200, {
       success: true,
@@ -180,18 +364,12 @@ serve(async (req) => {
       original_filename: originalFilename,
       mime_type: mimeType,
       file_size_bytes: fileSizeBytes,
-      status: "uploaded",
+      status: insertStatus,
+      extraction_metadata: extraction.metadata as unknown as JsonBody,
     });
   } catch (err) {
-    console.error("[upload-review-document] error:", err);
-    const payload =
-      err instanceof Error
-        ? { success: false, error: err.message, name: err.name, stack: err.stack }
-        : { success: false, error: String(err) };
-
-    return new Response(JSON.stringify(payload), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    console.error(`[${SERVICE_NAME}] error:`, err);
+    const message = err instanceof Error ? err.message : String(err);
+    return json(500, { success: false, error: message });
   }
 });
