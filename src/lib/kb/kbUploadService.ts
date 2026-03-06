@@ -8,6 +8,39 @@ import type { KbIngestionMetadata } from "./types";
 
 const BUCKET = "kb-documents";
 
+/* ── Debounced kick for kb-extractor-service ─────────────────────── */
+
+/** Module-level timestamp for debouncing kicks (max once per 2s). */
+let lastKickAt = 0;
+
+/**
+ * Fire-and-forget kick to the Cloud Run kb-extractor-service via
+ * the kb-kick Edge Function. Debounced to at most once every 2 seconds
+ * per browser session. Never throws — failures are logged as warnings.
+ */
+export async function kickExtractor(): Promise<{ ok: boolean; detail?: string }> {
+  const now = Date.now();
+  if (now - lastKickAt < 2000) {
+    return { ok: true, detail: "debounced" };
+  }
+  lastKickAt = now;
+
+  try {
+    const { data, error } = await supabase.functions.invoke("kb-kick", {
+      method: "POST",
+    });
+    if (error) {
+      console.warn("[kbUploadService] kb-kick invoke error:", error.message);
+      return { ok: false, detail: error.message };
+    }
+    console.log("[kbUploadService] kb-kick response:", data);
+    return { ok: data?.ok ?? true, detail: JSON.stringify(data) };
+  } catch (err: any) {
+    console.warn("[kbUploadService] kb-kick failed (non-blocking):", err?.message);
+    return { ok: false, detail: err?.message };
+  }
+}
+
 /**
  * Sanitize a filename for use as a Supabase Storage object key.
  * - NFKD normalize + strip diacritics
@@ -142,7 +175,7 @@ export async function createIngestionJob(
   return (data as any).id as number;
 }
 
-/** 5. Stamp job_id back into kb_documents metadata */
+/** 5. Stamp job_id back into kb_documents metadata, then kick extractor */
 export async function stampJobId(
   kbDocumentId: string,
   jobId: number
@@ -164,6 +197,9 @@ export async function stampJobId(
     .eq("id", kbDocumentId);
 
   if (error) throw new Error(`Stamp job_id failed: ${error.message}`);
+
+  // Non-blocking kick to Cloud Run extractor (debounced)
+  kickExtractor().catch(() => {});
 }
 
 /** Mark a document as failed in metadata */
