@@ -3,9 +3,11 @@ kb-extractor-service — Flask supervisor that kicks the KB extractor worker
 and drains the queue until empty (or safety limits hit).
 
 Endpoints:
-  POST /run      — Start drain loop (returns 202 immediately)
-  GET  /status   — Current drain state + last run info
-  GET  /healthz  — Health check
+  POST /run       — Start drain loop (returns 202 immediately)
+  GET  /status    — Current drain state + last run info
+  GET  /healthz/  — Health check (canonical, trailing slash)
+  GET  /          — Service info + registered endpoints
+  GET  /_routes   — Debug: full Flask route map
 
 Env vars:
   KICK_SECRET             — shared secret for X-AIDMIND-KICK-SECRET header auth
