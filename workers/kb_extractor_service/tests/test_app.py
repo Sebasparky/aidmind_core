@@ -19,17 +19,21 @@ import app as app_module
 
 
 class TestHealthz(unittest.TestCase):
+    """Canonical health endpoint is /healthz/ (trailing slash)."""
+
     def setUp(self):
         self.client = app.test_client()
 
-    def test_healthz_returns_200(self):
-        resp = self.client.get("/healthz")
+    def test_healthz_canonical_trailing_slash(self):
+        """Primary check — /healthz/ must return 200 + ok:true."""
+        resp = self.client.get("/healthz/")
         self.assertEqual(resp.status_code, 200)
         data = json.loads(resp.data)
         self.assertTrue(data["ok"])
 
-    def test_healthz_trailing_slash_returns_200(self):
-        resp = self.client.get("/healthz/")
+    def test_healthz_no_trailing_slash_still_works(self):
+        """Backward compat — /healthz also returns 200."""
+        resp = self.client.get("/healthz")
         self.assertEqual(resp.status_code, 200)
         data = json.loads(resp.data)
         self.assertTrue(data["ok"])
