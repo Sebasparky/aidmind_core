@@ -499,6 +499,8 @@ def main() -> None:
         job = claim_job()
         if job is None:
             log.info("No queued jobs found. Exiting.")
+            # Explicit signal for the service drain loop to detect "no work"
+            print("NO_JOBS_AVAILABLE=true", flush=True)
             if SLEEP_NO_JOB_SECONDS > 0:
                 time.sleep(SLEEP_NO_JOB_SECONDS)
             break

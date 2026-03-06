@@ -808,6 +808,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      kb_has_queued_jobs: { Args: never; Returns: boolean }
       match_document_chunks: {
         Args: {
           p_match_count?: number
