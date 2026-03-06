@@ -127,7 +127,7 @@ const VALID_SEVERITIES = new Set(["low", "medium", "high"]);
 
 function validateReviewReport(parsed: unknown): parsed is {
   summary: { overall_risk: string; key_findings: string[] };
-  issues: Array<{ type: string; severity: string; excerpt: string; explanation: string; suggestion: string }>;
+  issues: Array<{ type: string; severity: string; excerpt: string; explanation: string }>;
   metrics: { issue_count: number; high_severity_count: number };
 } {
   if (typeof parsed !== "object" || parsed === null) return false;
