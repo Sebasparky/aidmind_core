@@ -345,43 +345,52 @@ serve(async (req) => {
       tenant_id: session.tenant_id,
     });
 
-    // ── 4. Status → extracting ───────────────────────────────────────────
+    // ── 4. Resolve extracted text ────────────────────────────────────────
+    //
+    // upload-review-document now extracts text at upload time.
+    // If extracted_text is already populated, skip re-extraction.
+    // Otherwise fall back to downloading and extracting here.
 
-    await updateReviewDoc(supabase, reviewDocId, { status: "extracting", error: null });
+    let extractedText: string | null = doc.extracted_text ?? null;
 
-    // ── 5. Download PDF from Storage ─────────────────────────────────────
+    if (extractedText && extractedText.trim().length > 0) {
+      // Text already available from upload — skip extraction
+      console.log(`[run-reviewer] Using pre-extracted text (${extractedText.length} chars)`);
+    } else {
+      // Fallback: extract from storage (legacy docs or empty extraction)
+      await updateReviewDoc(supabase, reviewDocId, { status: "extracting", error: null });
 
-    const { data: fileData, error: dlErr } = await supabase.storage
-      .from(doc.storage_bucket)
-      .download(doc.storage_object_key);
+      const { data: fileData, error: dlErr } = await supabase.storage
+        .from(doc.storage_bucket)
+        .download(doc.storage_object_key);
 
-    if (dlErr || !fileData) {
-      throw new Error(`Storage download failed: ${dlErr?.message ?? "empty response"}`);
-    }
+      if (dlErr || !fileData) {
+        throw new Error(`Storage download failed: ${dlErr?.message ?? "empty response"}`);
+      }
 
-    const fileBytes = new Uint8Array(await fileData.arrayBuffer());
+      const fileBytes = new Uint8Array(await fileData.arrayBuffer());
 
-    if (fileBytes.length === 0) throw new Error("Downloaded file is empty");
-    if (fileBytes.length > MAX_PDF_BYTES) {
-      throw new Error(`File too large (${fileBytes.length} bytes, max ${MAX_PDF_BYTES})`);
-    }
+      if (fileBytes.length === 0) throw new Error("Downloaded file is empty");
+      if (fileBytes.length > MAX_PDF_BYTES) {
+        throw new Error(`File too large (${fileBytes.length} bytes, max ${MAX_PDF_BYTES})`);
+      }
 
-    // ── 6. Extract text ──────────────────────────────────────────────────
+      const extraction = await extractReviewDocumentText(fileBytes, doc.mime_type);
 
-    const extraction = await extractReviewDocumentText(fileBytes, doc.mime_type);
+      await updateReviewDoc(supabase, reviewDocId, {
+        status: "extracted",
+        extracted_text: extraction.text || null,
+        extraction_metadata: extraction.metadata,
+      });
 
-    // Persist extraction results
-    await updateReviewDoc(supabase, reviewDocId, {
-      status: "extracted",
-      extracted_text: extraction.text || null,
-      extraction_metadata: extraction.metadata,
-    });
+      extractedText = extraction.text;
 
-    if (!extraction.text || extraction.text.trim().length === 0) {
-      throw new Error(
-        "No text could be extracted from the PDF. The document may be image-only or encrypted. " +
-        "A full PDF parser or OCR service is required."
-      );
+      if (!extractedText || extractedText.trim().length === 0) {
+        throw new Error(
+          "No text could be extracted from the PDF. The document may be image-only or encrypted. " +
+          "A full PDF parser or OCR service is required."
+        );
+      }
     }
 
     // ── 7. Status → reviewing ────────────────────────────────────────────
@@ -390,9 +399,9 @@ serve(async (req) => {
 
     // ── 8. Call OpenAI ───────────────────────────────────────────────────
 
-    const textForReview = extraction.text.length > MAX_EXTRACTED_CHARS
-      ? extraction.text.slice(0, MAX_EXTRACTED_CHARS)
-      : extraction.text;
+    const textForReview = extractedText!.length > MAX_EXTRACTED_CHARS
+      ? extractedText!.slice(0, MAX_EXTRACTED_CHARS)
+      : extractedText!;
 
     const llmResponse = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
