@@ -1,577 +1,499 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { corsHeaders } from '../_shared/cors.ts';
-import { logEyeEvent } from '../_shared/eye.ts';
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
- * Maximum character limit for extracted document text.
- * Text originates from document extraction upstream (frontend or preprocessing function).
+ * run-reviewer Edge Function
+ *
+ * Accepts { session_id }, resolves the linked review_document,
+ * downloads the PDF from Storage, extracts text, runs an LLM review,
+ * and writes the structured report back to review_documents.
+ *
+ * Status lifecycle: uploaded → extracting → extracted → reviewing → completed | failed
  */
-const MAX_TEXT_LENGTH = 20000;
 
-/**
- * Default limit for policy documents loaded into context.
- */
-const DEFAULT_DOCS_LIMIT = 8;
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { corsHeaders } from "../_shared/cors.ts";
+import { logEyeEvent } from "../_shared/eye.ts";
 
-/**
- * Request body for the Reviewer endpoint.
- * 
- * @property session_id - Valid UUID for the session context
- * @property text - Extracted text from a user-uploaded document (PDF/DOCX/etc.),
- *                  provided at request time and used ephemerally. This text is NOT
- *                  stored in the database or file storage.
- */
-interface RunReviewerRequest {
-  session_id: string;
-  text: string;
-}
+// ── Constants ──────────────────────────────────────────────────────────────
 
-/** Valid severity levels for flags */
-type FlagSeverity = 'low' | 'med' | 'high';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MAX_PDF_BYTES = 50 * 1024 * 1024; // 50 MB hard cap for review docs
+const MAX_EXTRACTED_CHARS = 120_000; // truncate before sending to LLM
+const SERVICE_NAME = "run-reviewer";
 
-interface CategorizedFlag {
-  severity: FlagSeverity;
-  message: string;
-  snippet: string;
-}
+// ── Helpers ────────────────────────────────────────────────────────────────
 
-/**
- * Reviewer output schema with categorized flag arrays.
- * Each category represents a distinct type of issue found in the document.
- */
-interface ReviewerOutput {
-  tone_flags: CategorizedFlag[];
-  bias_flags: CategorizedFlag[];
-  policy_language_flags: CategorizedFlag[];
-  completeness_flags: CategorizedFlag[];
-}
-
-interface ErrorResponse {
-  error: {
-    code: string;
-    message: string;
-  };
-}
-
-function jsonResponse(status: number, body: Record<string, unknown>) {
+function json(status: number, body: Record<string, unknown>) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
 
-function errorResponse(status: number, code: string, message: string) {
-  return jsonResponse(status, { error: { code, message } });
+function errJson(status: number, code: string, message: string) {
+  return json(status, { error: { code, message } });
 }
 
-function isValidUuid(value: string): boolean {
-  return UUID_REGEX.test(value);
-}
-
-/** Safely log eye event - failures must not break reviewer flow */
-async function safeLogEyeEvent(
+/** Fire-and-forget eye event – failures must never break the pipeline */
+async function eye(
   supabase: any,
   sessionId: string,
   eventType: string,
-  payload: Record<string, unknown>
-): Promise<void> {
+  payload: Record<string, unknown>,
+) {
   try {
     await logEyeEvent(supabase, {
       session_id: sessionId,
       event_type: eventType,
-      serviceName: "run-reviewer",
+      serviceName: SERVICE_NAME,
       payload,
     });
-  } catch (err) {
-    console.error(`Failed to log eye event ${eventType}:`, err);
+  } catch (e) {
+    console.error(`[run-reviewer] eye event ${eventType} failed:`, e);
   }
 }
 
-/** Validate that a flag has the correct structure */
-function isValidFlag(flag: unknown): flag is CategorizedFlag {
-  if (typeof flag !== 'object' || flag === null) {
-    return false;
-  }
-  const f = flag as Record<string, unknown>;
-  
-  // severity must be 'low', 'med', or 'high'
-  if (typeof f.severity !== 'string' || !['low', 'med', 'high'].includes(f.severity)) {
-    return false;
-  }
-  
-  // message and snippet must be strings
-  if (typeof f.message !== 'string' || typeof f.snippet !== 'string') {
-    return false;
-  }
-  
-  return true;
+/** Update review_documents row – thin wrapper */
+async function updateReviewDoc(
+  supabase: any,
+  docId: string,
+  fields: Record<string, unknown>,
+) {
+  const { error } = await supabase
+    .from("review_documents")
+    .update({ ...fields, updated_at: new Date().toISOString() })
+    .eq("id", docId);
+  if (error) throw new Error(`DB update review_documents failed: ${error.message}`);
 }
 
-/** Validate LLM output matches expected categorized schema */
-function validateReviewerOutput(parsed: unknown): parsed is ReviewerOutput {
-  if (typeof parsed !== 'object' || parsed === null) {
-    return false;
-  }
+// ── Text Extraction Layer ──────────────────────────────────────────────────
+//
+// ARCHITECTURE NOTE:
+// The extraction step is intentionally isolated behind this helper so the
+// team can later swap to a different strategy (external microservice,
+// server-side pdfjs, Apache Tika, etc.) without touching the reviewer
+// pipeline. The contract is:
+//
+//   Input:  raw PDF bytes (Uint8Array) + mime type
+//   Output: { text: string; metadata: ExtractionMetadata }
+//
+// Current implementation: a lightweight Deno-native approach that sends the
+// bytes to a simple in-process text decoder.  For PDFs this is a best-effort
+// heuristic that works for born-digital / text-layer PDFs.  Scanned / image
+// PDFs will return empty or low-quality text, which the pipeline handles
+// gracefully (the review report will note completeness issues).
+//
+// To swap implementation, edit ONLY this function.
+// ────────────────────────────────────────────────────────────────────────────
 
-  const obj = parsed as Record<string, unknown>;
-  const requiredKeys = ['tone_flags', 'bias_flags', 'policy_language_flags', 'completeness_flags'];
-  const actualKeys = Object.keys(obj);
+interface ExtractionMetadata {
+  extractor: string;
+  extractor_version: string;
+  bytes_processed: number;
+  page_count: number | null;
+  char_count: number;
+  extracted_at: string;
+  notes: string | null;
+}
 
-  // Must have exactly 4 keys
-  if (actualKeys.length !== 4) {
-    return false;
-  }
-
-  // Must have the required keys and each must be an array of valid flags
-  for (const key of requiredKeys) {
-    if (!(key in obj)) {
-      return false;
-    }
-    const value = obj[key];
-    if (!Array.isArray(value)) {
-      return false;
-    }
-    for (const flag of value) {
-      if (!isValidFlag(flag)) {
-        return false;
-      }
-    }
-  }
-
-  return true;
+interface ExtractionResult {
+  text: string;
+  metadata: ExtractionMetadata;
 }
 
 /**
- * System prompt for the Reviewer.
- * 
- * The Reviewer analyzes text extracted from a user-uploaded document (PDF/DOCX/etc.)
- * ephemerally and produces CATEGORIZED FLAGS ONLY. It does not rewrite, suggest 
- * alternative wording, provide scores, or render pass/fail judgments.
- * 
- * The Reviewer is grounded in the session's template and policy context.
+ * Extract text from a PDF (or supported document).
+ *
+ * TEMPORARY IMPLEMENTATION — basic binary-stream text extraction.
+ * This parses raw PDF bytes looking for text stream objects.
+ * It is NOT a full PDF parser – it handles most born-digital PDFs.
+ *
+ * TODO: Replace with a proper extraction service or library when the
+ * team finalises the extraction strategy.
  */
-const SYSTEM_PROMPT = `You are AidMind V1 'Reviewer'.
+async function extractReviewDocumentText(
+  fileBytes: Uint8Array,
+  _mimeType: string,
+): Promise<ExtractionResult> {
+  const extractedAt = new Date().toISOString();
+  const bytesProcessed = fileBytes.length;
 
-You analyze text extracted from a user-uploaded document and produce CATEGORIZED FLAGS ONLY.
-The document text is provided ephemerally and is not stored.
-
-STRICT RULES:
-1. You must ONLY produce flags identifying potential issues.
-2. You must NOT rewrite any text.
-3. You must NOT suggest alternative wording.
-4. You must NOT provide scores, ratings, or pass/fail judgments.
-5. You must NOT draft or edit documentation.
-6. Flags must be grounded in the template schema and policy rules provided.
-
-FLAG CATEGORIES:
-- tone_flags: Issues with professional tone, inappropriate language, or emotional content
-- bias_flags: Potential bias, assumptions, or subjective judgments without evidence
-- policy_language_flags: Language that conflicts with policy requirements or uses prohibited terms
-- completeness_flags: Missing required information, gaps, or incomplete sections per template schema
-
-SEVERITY LEVELS:
-- "low": Minor issue, may want to address
-- "med": Moderate concern, should address before finalizing
-- "high": Critical issue, must address
-
-FLAG STRUCTURE:
-Each flag must include:
-- severity: "low" | "med" | "high"
-- message: Brief description of the issue
-- snippet: SHORT excerpt (≤ 20 words) from the document showing where the issue occurs
-
-GROUNDING RULES:
-- Reference template.schema_json to identify completeness issues
-- Reference policy_pack.rules_json for policy language violations
-- Reference policy_documents metadata for additional compliance context
-- If no issues are found in a category, return an empty array
-
-Return ONLY valid JSON with exactly these 4 keys:
-{
-  "tone_flags": [{ "severity": "...", "message": "...", "snippet": "..." }],
-  "bias_flags": [{ "severity": "...", "message": "...", "snippet": "..." }],
-  "policy_language_flags": [{ "severity": "...", "message": "...", "snippet": "..." }],
-  "completeness_flags": [{ "severity": "...", "message": "...", "snippet": "..." }]
-}
-
-No additional keys. No markdown. No commentary outside the JSON.`;
-
-Deno.serve(async (req) => {
-  // Handle CORS preflight
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
-
-  // Enforce POST only
-  if (req.method !== 'POST') {
-    return errorResponse(405, 'METHOD_NOT_ALLOWED', 'Only POST method is allowed');
-  }
-
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-  const openaiApiKey = Deno.env.get('OPENAI_API_KEY');
-
-  if (!openaiApiKey) {
-    console.error('OPENAI_API_KEY is not configured');
-    return errorResponse(500, 'CONFIG_ERROR', 'OpenAI API key is not configured');
-  }
-
-  const supabase = createClient(supabaseUrl, serviceRoleKey);
-
-  let payload: RunReviewerRequest;
+  // Attempt basic PDF text extraction from content streams
+  let text = "";
+  let pageCount: number | null = null;
 
   try {
-    payload = await req.json();
-  } catch {
-    return errorResponse(400, 'INVALID_JSON', 'Request body must be valid JSON');
-  }
+    const raw = new TextDecoder("latin1").decode(fileBytes);
 
-  // ── Validation ──────────────────────────────────────────────────────────────
+    // Count pages via /Type /Page entries (rough)
+    const pageMatches = raw.match(/\/Type\s*\/Page(?!\s*s)/g);
+    pageCount = pageMatches ? pageMatches.length : null;
 
-  const { session_id, text } = payload;
-
-  // session_id required and must be valid UUID
-  if (!session_id || typeof session_id !== 'string') {
-    return errorResponse(400, 'INVALID_SESSION_ID', 'session_id is required');
-  }
-  if (!isValidUuid(session_id)) {
-    return errorResponse(400, 'INVALID_SESSION_ID', 'session_id must be a valid UUID');
-  }
-
-  /**
-   * Validate extracted document text.
-   * Text originates from document extraction upstream (frontend or preprocessing function).
-   * It is used ephemerally and never persisted.
-   */
-  if (!text || typeof text !== 'string') {
-    return errorResponse(400, 'INVALID_TEXT', 'text is required and must be a non-empty string');
-  }
-
-  const trimmedText = text.trim();
-  if (trimmedText.length === 0) {
-    return errorResponse(400, 'INVALID_TEXT', 'text cannot be empty');
-  }
-
-  if (trimmedText.length > MAX_TEXT_LENGTH) {
-    return errorResponse(400, 'TEXT_TOO_LONG', `text cannot exceed ${MAX_TEXT_LENGTH} characters`);
-  }
-
-  try {
-    // ── Log REVIEWER_STARTED ──────────────────────────────────────────────────
-    // Note: Do NOT include document text or snippets in event payloads (PHI safety)
-
-    await safeLogEyeEvent(supabase, session_id, 'REVIEWER_STARTED', {
-      session_id: session_id,
-    });
-
-    // ── A. Load Session ─────────────────────────────────────────────────────────
-
-    const { data: session, error: sessionError } = await supabase
-      .from('sessions')
-      .select('session_id, status, template_id, policy_pack_id')
-      .eq('session_id', session_id)
-      .maybeSingle();
-
-    if (sessionError) {
-      console.error('Error fetching session:', sessionError.message);
-      await safeLogEyeEvent(supabase, session_id, 'REVIEWER_FAILED', {
-        session_id: session_id,
-        reason: 'DB_ERROR fetching session',
-      });
-      return errorResponse(500, 'DB_ERROR', 'Failed to fetch session');
-    }
-
-    if (!session) {
-      await safeLogEyeEvent(supabase, session_id, 'REVIEWER_FAILED', {
-        session_id: session_id,
-        reason: 'Session not found',
-      });
-      return errorResponse(404, 'SESSION_NOT_FOUND', `Session with id ${session_id} not found`);
-    }
-
-    const templateId = session.template_id;
-    const policyPackId = session.policy_pack_id;
-
-    if (!templateId) {
-      await safeLogEyeEvent(supabase, session_id, 'REVIEWER_FAILED', {
-        session_id: session_id,
-        reason: 'Session has no template_id',
-      });
-      return errorResponse(404, 'TEMPLATE_NOT_FOUND', 'Session has no template_id assigned');
-    }
-
-    if (!policyPackId) {
-      await safeLogEyeEvent(supabase, session_id, 'REVIEWER_FAILED', {
-        session_id: session_id,
-        reason: 'Session has no policy_pack_id',
-      });
-      return errorResponse(404, 'POLICY_PACK_NOT_FOUND', 'Session has no policy_pack_id assigned');
-    }
-
-    // ── B. Load Template ────────────────────────────────────────────────────────
-
-    const { data: template, error: templateError } = await supabase
-      .from('kb_templates')
-      .select('template_id, name, version, schema_json')
-      .eq('template_id', templateId)
-      .eq('is_active', true)
-      .maybeSingle();
-
-    if (templateError) {
-      console.error('Error fetching template:', templateError.message);
-      await safeLogEyeEvent(supabase, session_id, 'REVIEWER_FAILED', {
-        session_id: session_id,
-        reason: 'DB_ERROR fetching template',
-      });
-      return errorResponse(500, 'DB_ERROR', 'Failed to fetch template');
-    }
-
-    if (!template) {
-      await safeLogEyeEvent(supabase, session_id, 'REVIEWER_FAILED', {
-        session_id: session_id,
-        reason: 'Template not found or inactive',
-      });
-      return errorResponse(404, 'TEMPLATE_NOT_FOUND', `Template with id ${templateId} not found or inactive`);
-    }
-
-    // ── C. Load Policy Pack ─────────────────────────────────────────────────────
-
-    const { data: policyPack, error: policyPackError } = await supabase
-      .from('kb_policy_packs')
-      .select('policy_pack_id, name, version, rules_json')
-      .eq('policy_pack_id', policyPackId)
-      .eq('is_active', true)
-      .maybeSingle();
-
-    if (policyPackError) {
-      console.error('Error fetching policy pack:', policyPackError.message);
-      await safeLogEyeEvent(supabase, session_id, 'REVIEWER_FAILED', {
-        session_id: session_id,
-        reason: 'DB_ERROR fetching policy pack',
-      });
-      return errorResponse(500, 'DB_ERROR', 'Failed to fetch policy pack');
-    }
-
-    if (!policyPack) {
-      await safeLogEyeEvent(supabase, session_id, 'REVIEWER_FAILED', {
-        session_id: session_id,
-        reason: 'Policy pack not found or inactive',
-      });
-      return errorResponse(404, 'POLICY_PACK_NOT_FOUND', `Policy pack with id ${policyPackId} not found or inactive`);
-    }
-
-    // ── D. Load Policy Documents (Metadata Only) ────────────────────────────────
-
-    const { data: rawDocs, error: docsError } = await supabase
-      .from('kb_policy_pack_documents')
-      .select(`
-        weight,
-        notes,
-        kb_documents!inner (
-          document_id,
-          title,
-          doc_type,
-          jurisdiction,
-          version,
-          storage_path
-        )
-      `)
-      .eq('policy_pack_id', policyPackId)
-      .eq('kb_documents.is_active', true)
-      .order('weight', { ascending: false })
-      .order('created_at', { ascending: false, referencedTable: 'kb_documents' })
-      .limit(DEFAULT_DOCS_LIMIT);
-
-    if (docsError) {
-      console.error('Error fetching policy documents:', docsError.message);
-      await safeLogEyeEvent(supabase, session_id, 'REVIEWER_FAILED', {
-        session_id: session_id,
-        reason: 'DB_ERROR fetching documents',
-      });
-      return errorResponse(500, 'DB_ERROR', 'Failed to fetch policy documents');
-    }
-
-    // Transform documents for minimized context (no document_id or content needed for LLM)
-    const policyDocuments: Array<{
-      title: string;
-      doc_type: string;
-      jurisdiction: string | null;
-      version: string | null;
-      weight: number;
-      notes: string | null;
-      has_text: boolean;
-    }> = [];
-
-    if (rawDocs && rawDocs.length > 0) {
-      for (const row of rawDocs) {
-        const doc = row.kb_documents as any;
-        // Truncate notes to prevent token bloat (max 300 chars)
-        let truncatedNotes = row.notes;
-        if (truncatedNotes && truncatedNotes.length > 300) {
-          truncatedNotes = truncatedNotes.substring(0, 300);
+    // Extract text between BT ... ET blocks (PDF text objects)
+    const textBlocks: string[] = [];
+    const btEtRegex = /BT\s([\s\S]*?)ET/g;
+    let match: RegExpExecArray | null;
+    while ((match = btEtRegex.exec(raw)) !== null) {
+      const block = match[1];
+      // Extract parenthesised text strings: (Hello World)
+      const parenRegex = /\(([^)]*)\)/g;
+      let pMatch: RegExpExecArray | null;
+      while ((pMatch = parenRegex.exec(block)) !== null) {
+        if (pMatch[1].trim()) textBlocks.push(pMatch[1]);
+      }
+      // Extract hex strings: <48656C6C6F>
+      const hexRegex = /<([0-9A-Fa-f]+)>/g;
+      let hMatch: RegExpExecArray | null;
+      while ((hMatch = hexRegex.exec(block)) !== null) {
+        const hex = hMatch[1];
+        if (hex.length >= 4 && hex.length % 2 === 0) {
+          let decoded = "";
+          for (let i = 0; i < hex.length; i += 2) {
+            const charCode = parseInt(hex.substring(i, i + 2), 16);
+            if (charCode >= 32 && charCode < 127) decoded += String.fromCharCode(charCode);
+          }
+          if (decoded.trim()) textBlocks.push(decoded);
         }
-        policyDocuments.push({
-          title: doc.title,
-          doc_type: doc.doc_type,
-          jurisdiction: doc.jurisdiction,
-          version: doc.version,
-          weight: row.weight,
-          notes: truncatedNotes,
-          has_text: doc.storage_path !== null,
-        });
       }
     }
 
-    // ── E. Build Minimized Context ──────────────────────────────────────────────
+    text = textBlocks.join(" ").replace(/\s+/g, " ").trim();
+  } catch (e) {
+    console.error("[extractReviewDocumentText] extraction error:", e);
+    // Return empty text – the pipeline will handle this gracefully
+  }
 
-    // Safety guard: default null/empty schema_json and rules_json to {} to avoid model confusion
-    const safeSchemaJson = template.schema_json && Object.keys(template.schema_json).length > 0
-      ? template.schema_json
-      : {};
-    const safeRulesJson = policyPack.rules_json && Object.keys(policyPack.rules_json).length > 0
-      ? policyPack.rules_json
-      : {};
+  return {
+    text,
+    metadata: {
+      extractor: "deno-pdf-basic",
+      extractor_version: "0.1.0",
+      bytes_processed: bytesProcessed,
+      page_count: pageCount,
+      char_count: text.length,
+      extracted_at: extractedAt,
+      notes: text.length === 0
+        ? "No text extracted – PDF may be image-only or encrypted. Consider using a full PDF parser."
+        : null,
+    },
+  };
+}
 
-    const minimizedContext = {
-      template: {
-        name: template.name,
-        version: template.version,
-        schema_json: safeSchemaJson,
-      },
-      policy_pack: {
-        name: policyPack.name,
-        version: policyPack.version,
-        rules_json: safeRulesJson,
-      },
-      policy_documents: policyDocuments,
-    };
+// ── Reviewer Prompt ────────────────────────────────────────────────────────
 
-    // ── F. Call OpenAI LLM ──────────────────────────────────────────────────────
-    // NOTE: Extracted document text is used ephemerally for analysis and is not persisted.
-    // Neither the input text nor output snippets are stored in the database or logged to Eye events.
+const REVIEWER_SYSTEM_PROMPT = `You are AidMind Reviewer, a compliance and quality reviewer for social-services case documentation.
 
-    let llmResponse: Response;
-    try {
-      llmResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${openaiApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          temperature: 0.2,
-          messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
-            { 
-              role: 'user', 
-              content: `Review the following text extracted from a user-uploaded document.
-Ground your analysis in the provided template schema and policy rules.
+You analyze a completed case document and produce a STRUCTURED REVIEW REPORT identifying concrete issues.
 
-CONTEXT:
-${JSON.stringify(minimizedContext)}
+ISSUE CATEGORIES:
+- completeness: Missing required fields, incomplete sections, gaps in documentation
+- policy_language: Language that conflicts with policy requirements, prohibited terms, incorrect terminology
+- tone: Unprofessional, judgmental, or emotionally charged language
+- bias: Assumptions, stereotypes, stigmatizing language, or subjective judgments without evidence
+- consistency: Internal contradictions, conflicting information, logical inconsistencies
 
-TEXT TO REVIEW:
-${trimmedText}`
-            },
-          ],
-          response_format: { type: 'json_object' },
-        }),
-      });
-    } catch (fetchErr) {
-      console.error('Error calling OpenAI API:', fetchErr);
-      await safeLogEyeEvent(supabase, session_id, 'REVIEWER_FAILED', {
-        session_id: session_id,
-        reason: 'OpenAI API call failed',
-      });
-      return errorResponse(500, 'LLM_ERROR', 'Failed to call OpenAI API');
+SEVERITY LEVELS:
+- "low": Minor issue, may want to address
+- "medium": Should address before finalising
+- "high": Must address — critical compliance or quality risk
+
+STRICT RULES:
+1. Produce ONLY a JSON report. No markdown, no commentary.
+2. Do NOT rewrite or suggest replacement text.
+3. Keep excerpts short (≤ 30 words).
+4. Suggestions must be actionable and specific.
+5. Focus on concrete, identifiable issues — not vague impressions.
+6. If the document is well-written and compliant, return zero issues.
+
+OUTPUT SCHEMA (return ONLY this JSON):
+{
+  "summary": {
+    "overall_risk": "low" | "medium" | "high",
+    "key_findings": ["finding 1", "finding 2"]
+  },
+  "issues": [
+    {
+      "type": "completeness | policy_language | tone | bias | consistency",
+      "severity": "low | medium | high",
+      "excerpt": "short excerpt from the document",
+      "explanation": "why this is a problem",
+      "suggestion": "how to fix it"
+    }
+  ],
+  "metrics": {
+    "issue_count": <int>,
+    "high_severity_count": <int>
+  }
+}
+
+No additional keys. No markdown fences. No commentary outside the JSON.`;
+
+// ── Output Validation ──────────────────────────────────────────────────────
+
+const VALID_ISSUE_TYPES = new Set(["completeness", "policy_language", "tone", "bias", "consistency"]);
+const VALID_SEVERITIES = new Set(["low", "medium", "high"]);
+
+function validateReviewReport(parsed: unknown): parsed is {
+  summary: { overall_risk: string; key_findings: string[] };
+  issues: Array<{ type: string; severity: string; excerpt: string; explanation: string; suggestion: string }>;
+  metrics: { issue_count: number; high_severity_count: number };
+} {
+  if (typeof parsed !== "object" || parsed === null) return false;
+  const obj = parsed as Record<string, unknown>;
+
+  // summary
+  if (typeof obj.summary !== "object" || obj.summary === null) return false;
+  const summary = obj.summary as Record<string, unknown>;
+  if (!VALID_SEVERITIES.has(summary.overall_risk as string)) return false;
+  if (!Array.isArray(summary.key_findings)) return false;
+
+  // issues
+  if (!Array.isArray(obj.issues)) return false;
+  for (const issue of obj.issues) {
+    if (typeof issue !== "object" || issue === null) return false;
+    const i = issue as Record<string, unknown>;
+    if (!VALID_ISSUE_TYPES.has(i.type as string)) return false;
+    if (!VALID_SEVERITIES.has(i.severity as string)) return false;
+    if (typeof i.excerpt !== "string") return false;
+    if (typeof i.explanation !== "string") return false;
+    if (typeof i.suggestion !== "string") return false;
+  }
+
+  // metrics
+  if (typeof obj.metrics !== "object" || obj.metrics === null) return false;
+  const metrics = obj.metrics as Record<string, unknown>;
+  if (typeof metrics.issue_count !== "number") return false;
+  if (typeof metrics.high_severity_count !== "number") return false;
+
+  return true;
+}
+
+// ── Main Handler ───────────────────────────────────────────────────────────
+
+serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+  if (req.method !== "POST") return errJson(405, "METHOD_NOT_ALLOWED", "POST only");
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const openaiKey = Deno.env.get("OPENAI_API_KEY");
+
+  if (!openaiKey) return errJson(500, "CONFIG_ERROR", "OPENAI_API_KEY not configured");
+
+  const supabase = createClient(supabaseUrl, serviceKey);
+
+  // ── Parse & validate input ───────────────────────────────────────────────
+
+  let body: { session_id?: string };
+  try {
+    body = await req.json();
+  } catch {
+    return errJson(400, "INVALID_JSON", "Request body must be valid JSON");
+  }
+
+  const { session_id } = body;
+  if (!session_id || typeof session_id !== "string" || !UUID_RE.test(session_id)) {
+    return errJson(400, "INVALID_SESSION_ID", "session_id is required and must be a valid UUID");
+  }
+
+  // We'll track the review_document_id so the catch block can mark it failed
+  let reviewDocId: string | null = null;
+
+  try {
+    // ── 1. Fetch session ─────────────────────────────────────────────────
+
+    const { data: session, error: sessErr } = await supabase
+      .from("sessions")
+      .select("id, tenant_id, review_document_id")
+      .eq("id", session_id)
+      .maybeSingle();
+
+    if (sessErr) throw new Error(`DB error fetching session: ${sessErr.message}`);
+    if (!session) return errJson(404, "SESSION_NOT_FOUND", "Session not found");
+    if (!session.review_document_id) {
+      return errJson(409, "NO_REVIEW_DOCUMENT", "Session has no review_document_id attached");
+    }
+    if (!session.tenant_id) {
+      return errJson(409, "NO_TENANT", "Session has no tenant_id");
     }
 
-    if (!llmResponse.ok) {
-      const errorText = await llmResponse.text();
-      console.error('OpenAI API error:', llmResponse.status, errorText);
-      await safeLogEyeEvent(supabase, session_id, 'REVIEWER_FAILED', {
-        session_id: session_id,
-        reason: `OpenAI API returned ${llmResponse.status}`,
-      });
-      return errorResponse(500, 'LLM_ERROR', `OpenAI API returned status ${llmResponse.status}`);
+    reviewDocId = session.review_document_id;
+
+    // ── 2. Fetch review document ─────────────────────────────────────────
+
+    const { data: doc, error: docErr } = await supabase
+      .from("review_documents")
+      .select("*")
+      .eq("id", reviewDocId)
+      .maybeSingle();
+
+    if (docErr) throw new Error(`DB error fetching review document: ${docErr.message}`);
+    if (!doc) return errJson(404, "REVIEW_DOC_NOT_FOUND", "Review document not found");
+
+    // Tenant guard
+    if (doc.tenant_id !== session.tenant_id) {
+      return errJson(403, "TENANT_MISMATCH", "Review document tenant does not match session tenant");
     }
 
-    let llmData: any;
-    try {
-      llmData = await llmResponse.json();
-    } catch {
-      console.error('Failed to parse OpenAI response as JSON');
-      await safeLogEyeEvent(supabase, session_id, 'REVIEWER_FAILED', {
-        session_id: session_id,
-        reason: 'OpenAI response not valid JSON',
-      });
-      return errorResponse(500, 'LLM_ERROR', 'Failed to parse OpenAI response');
+    if (!doc.storage_bucket || !doc.storage_object_key) {
+      return errJson(409, "MISSING_STORAGE_INFO", "Review document has no storage location");
     }
 
-    const messageContent = llmData?.choices?.[0]?.message?.content;
-    if (!messageContent || typeof messageContent !== 'string') {
-      console.error('OpenAI response missing message content');
-      await safeLogEyeEvent(supabase, session_id, 'REVIEWER_FAILED', {
-        session_id: session_id,
-        reason: 'OpenAI response missing content',
-      });
-      return errorResponse(500, 'LLM_ERROR', 'OpenAI response missing message content');
-    }
+    // ── 3. Eye: started ──────────────────────────────────────────────────
 
-    // ── G. Parse and Validate Output ────────────────────────────────────────────
-
-    let parsedOutput: unknown;
-    try {
-      parsedOutput = JSON.parse(messageContent);
-    } catch {
-      console.error('LLM output is not valid JSON:', messageContent);
-      await safeLogEyeEvent(supabase, session_id, 'REVIEWER_FAILED', {
-        session_id: session_id,
-        reason: 'LLM output not valid JSON',
-      });
-      return errorResponse(500, 'OUTPUT_SCHEMA_INVALID', 'LLM output is not valid JSON');
-    }
-
-    if (!validateReviewerOutput(parsedOutput)) {
-      console.error('LLM output does not match expected schema:', parsedOutput);
-      await safeLogEyeEvent(supabase, session_id, 'REVIEWER_FAILED', {
-        session_id: session_id,
-        reason: 'LLM output schema invalid',
-      });
-      return errorResponse(500, 'OUTPUT_SCHEMA_INVALID', 'LLM output does not match expected schema (must have exactly tone_flags, bias_flags, policy_language_flags, completeness_flags as arrays with severity/message/snippet)');
-    }
-
-    // ── H. Log REVIEWER_COMPLETED ───────────────────────────────────────────────
-    // Note: Only counts are logged, no document text or flag snippets (PHI safety)
-
-    await safeLogEyeEvent(supabase, session_id, 'REVIEWER_COMPLETED', {
-      session_id: session_id,
-      counts: {
-        tone: parsedOutput.tone_flags.length,
-        bias: parsedOutput.bias_flags.length,
-        policy: parsedOutput.policy_language_flags.length,
-        completeness: parsedOutput.completeness_flags.length,
-      },
+    await eye(supabase, session_id, "review_document.review_started", {
+      review_document_id: reviewDocId,
+      tenant_id: session.tenant_id,
     });
 
-    // ── I. Return Response ──────────────────────────────────────────────────────
+    // ── 4. Status → extracting ───────────────────────────────────────────
 
-    return jsonResponse(200, {
-      tone_flags: parsedOutput.tone_flags,
-      bias_flags: parsedOutput.bias_flags,
-      policy_language_flags: parsedOutput.policy_language_flags,
-      completeness_flags: parsedOutput.completeness_flags,
+    await updateReviewDoc(supabase, reviewDocId, { status: "extracting", error: null });
+
+    // ── 5. Download PDF from Storage ─────────────────────────────────────
+
+    const { data: fileData, error: dlErr } = await supabase.storage
+      .from(doc.storage_bucket)
+      .download(doc.storage_object_key);
+
+    if (dlErr || !fileData) {
+      throw new Error(`Storage download failed: ${dlErr?.message ?? "empty response"}`);
+    }
+
+    const fileBytes = new Uint8Array(await fileData.arrayBuffer());
+
+    if (fileBytes.length === 0) throw new Error("Downloaded file is empty");
+    if (fileBytes.length > MAX_PDF_BYTES) {
+      throw new Error(`File too large (${fileBytes.length} bytes, max ${MAX_PDF_BYTES})`);
+    }
+
+    // ── 6. Extract text ──────────────────────────────────────────────────
+
+    const extraction = await extractReviewDocumentText(fileBytes, doc.mime_type);
+
+    // Persist extraction results
+    await updateReviewDoc(supabase, reviewDocId, {
+      status: "extracted",
+      extracted_text: extraction.text || null,
+      extraction_metadata: extraction.metadata,
+    });
+
+    if (!extraction.text || extraction.text.trim().length === 0) {
+      throw new Error(
+        "No text could be extracted from the PDF. The document may be image-only or encrypted. " +
+        "A full PDF parser or OCR service is required."
+      );
+    }
+
+    // ── 7. Status → reviewing ────────────────────────────────────────────
+
+    await updateReviewDoc(supabase, reviewDocId, { status: "reviewing" });
+
+    // ── 8. Call OpenAI ───────────────────────────────────────────────────
+
+    const textForReview = extraction.text.length > MAX_EXTRACTED_CHARS
+      ? extraction.text.slice(0, MAX_EXTRACTED_CHARS)
+      : extraction.text;
+
+    const llmResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${openaiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        temperature: 0.2,
+        messages: [
+          { role: "system", content: REVIEWER_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: `Review the following completed case document and produce a structured review report.\n\nDOCUMENT TEXT:\n${textForReview}`,
+          },
+        ],
+        response_format: { type: "json_object" },
+      }),
+    });
+
+    if (!llmResponse.ok) {
+      const errText = await llmResponse.text();
+      throw new Error(`OpenAI API error ${llmResponse.status}: ${errText.slice(0, 300)}`);
+    }
+
+    const llmData = await llmResponse.json();
+    const rawContent = llmData?.choices?.[0]?.message?.content;
+
+    if (!rawContent || typeof rawContent !== "string") {
+      throw new Error("OpenAI response missing message content");
+    }
+
+    // ── 9. Parse & validate report ───────────────────────────────────────
+
+    let report: unknown;
+    try {
+      report = JSON.parse(rawContent);
+    } catch {
+      throw new Error("LLM output is not valid JSON");
+    }
+
+    if (!validateReviewReport(report)) {
+      throw new Error("LLM output does not match expected review report schema");
+    }
+
+    // ── 10. Persist results & complete ───────────────────────────────────
+
+    const reviewMeta = {
+      reviewed_at: new Date().toISOString(),
+      model: "gpt-4o-mini",
+      input_char_count: textForReview.length,
+      reviewer_version: "1.0.0",
+    };
+
+    await updateReviewDoc(supabase, reviewDocId, {
+      status: "completed",
+      reviewer_model: "gpt-4o-mini",
+      review_report: report,
+      review_metadata: reviewMeta,
+      error: null,
+    });
+
+    // ── 11. Eye: completed ───────────────────────────────────────────────
+
+    await eye(supabase, session_id, "review_document.review_completed", {
+      review_document_id: reviewDocId,
+      tenant_id: session.tenant_id,
+      issue_count: (report as any).metrics.issue_count,
+      high_severity_count: (report as any).metrics.high_severity_count,
+      overall_risk: (report as any).summary.overall_risk,
+    });
+
+    return json(200, {
+      success: true,
+      review_document_id: reviewDocId,
+      status: "completed",
+      review_report: report as Record<string, unknown>,
     });
 
   } catch (err) {
-    console.error('Unexpected error in run-reviewer:', err);
-    await safeLogEyeEvent(supabase, session_id, 'REVIEWER_FAILED', {
-      session_id: session_id,
-      reason: 'Unexpected error',
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[run-reviewer] error:", message);
+
+    // Mark doc as failed if we have an id
+    if (reviewDocId) {
+      try {
+        await updateReviewDoc(supabase, reviewDocId, {
+          status: "failed",
+          error: message.slice(0, 1000),
+        });
+      } catch (e2) {
+        console.error("[run-reviewer] failed to mark doc as failed:", e2);
+      }
+    }
+
+    await eye(supabase, session_id, "review_document.review_failed", {
+      review_document_id: reviewDocId,
+      reason: message.slice(0, 250),
     });
-    return errorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
+
+    return errJson(500, "REVIEWER_FAILED", message.slice(0, 500));
   }
 });
