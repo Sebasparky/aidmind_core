@@ -1,31 +1,35 @@
 """
-kb-extractor-service — Flask supervisor that kicks the KB extractor worker
-and drains the queue until empty (or safety limits hit).
+kb-extractor-service — lightweight Flask trigger that kicks a Cloud Run Job
+to process the KB ingestion queue.
+
+Architecture:
+  Supabase Edge (kb-kick) → POST /run → this service → Cloud Run Jobs API → kb-extractor-job
 
 Endpoints:
-  POST /run       — Start drain loop (returns 202 immediately)
-  GET  /status    — Current drain state + last run info
+  POST /run       — Trigger Cloud Run Job execution (returns 202)
+  GET  /status    — Last trigger attempt info
   GET  /healthz/  — Health check (canonical, trailing slash)
   GET  /          — Service info + registered endpoints
   GET  /_routes   — Debug: full Flask route map
 
 Env vars:
   KICK_SECRET             — shared secret for X-AIDMIND-KICK-SECRET header auth
-  DRAIN_MAX_LOOPS         — max worker invocations per drain (default 20)
-  DRAIN_MAX_SECONDS       — wall-clock cap per drain (default 840 = 14 min)
-  DRAIN_SLEEP_MS          — pause between loops in ms (default 250)
-  DRAIN_EMPTY_STREAK      — stop after N consecutive empty runs (default 2)
+  GCP_PROJECT             — Google Cloud project ID
+  RUN_REGION              — Cloud Run region (default us-central1)
+  RUN_JOB_NAME            — Cloud Run Job name (default kb-extractor-job)
+  RUN_API_BASE            — Run API base URL (default https://run.googleapis.com)
+  RUN_API_AUDIENCE        — Audience for metadata token (default https://run.googleapis.com/)
+  RUN_REQUEST_TIMEOUT_SECS — Timeout for Run API call (default 10)
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import subprocess
 import sys
-import threading
 import time
 
+import requests as http_requests
 from flask import Flask, request, jsonify
 
 # ---------------------------------------------------------------------------
@@ -33,14 +37,14 @@ from flask import Flask, request, jsonify
 # ---------------------------------------------------------------------------
 
 KICK_SECRET = os.environ.get("KICK_SECRET", "")
-DRAIN_MAX_LOOPS = int(os.environ.get("DRAIN_MAX_LOOPS", "20"))
-DRAIN_MAX_SECONDS = int(os.environ.get("DRAIN_MAX_SECONDS", "840"))
-DRAIN_SLEEP_MS = int(os.environ.get("DRAIN_SLEEP_MS", "250"))
-DRAIN_EMPTY_STREAK = int(os.environ.get("DRAIN_EMPTY_STREAK", "2"))
+KICK_HEADER_NAME = os.environ.get("KICK_HEADER_NAME", "X-AIDMIND-KICK-SECRET")
 
-WORKER_SCRIPT = os.environ.get(
-    "WORKER_SCRIPT", "/app/workers/kb_extractor/main.py"
-)
+GCP_PROJECT = os.environ.get("GCP_PROJECT", "")
+RUN_REGION = os.environ.get("RUN_REGION", "us-central1")
+RUN_JOB_NAME = os.environ.get("RUN_JOB_NAME", "kb-extractor-job")
+RUN_API_BASE = os.environ.get("RUN_API_BASE", "https://run.googleapis.com")
+RUN_API_AUDIENCE = os.environ.get("RUN_API_AUDIENCE", "https://run.googleapis.com/")
+RUN_REQUEST_TIMEOUT_SECS = int(os.environ.get("RUN_REQUEST_TIMEOUT_SECS", "10"))
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -54,12 +58,10 @@ logging.basicConfig(
 log = logging.getLogger("kb_extractor_service")
 
 # ---------------------------------------------------------------------------
-# Shared state (process-level, guarded by _lock)
+# State — last trigger attempt (no concurrency guard needed now)
 # ---------------------------------------------------------------------------
 
-_lock = threading.Lock()
-_running = False
-_last: dict = {}
+_last_trigger: dict = {}
 
 app = Flask(__name__)
 
@@ -72,112 +74,78 @@ def _check_auth() -> str | None:
     """Return an error message if auth fails, else None."""
     if not KICK_SECRET:
         return "KICK_SECRET not configured on server"
-    header = request.headers.get("X-AIDMIND-KICK-SECRET", "")
+    header = request.headers.get(KICK_HEADER_NAME, "")
     if header != KICK_SECRET:
-        return "Invalid or missing X-AIDMIND-KICK-SECRET"
+        return f"Invalid or missing {KICK_HEADER_NAME}"
     return None
 
 
 # ---------------------------------------------------------------------------
-# Drain loop (runs in background thread)
+# Cloud Run Job helpers
 # ---------------------------------------------------------------------------
 
-def _drain_loop() -> None:
-    global _running, _last
+def _fetch_metadata_token(audience: str) -> str:
+    """Fetch an identity token from the GCE metadata server."""
+    url = (
+        "http://metadata.google.internal/computeMetadata/v1/"
+        "instance/service-accounts/default/identity"
+    )
+    resp = http_requests.get(
+        url,
+        params={"audience": audience, "format": "full"},
+        headers={"Metadata-Flavor": "Google"},
+        timeout=5,
+    )
+    resp.raise_for_status()
+    return resp.text.strip()
 
-    start_wall = time.monotonic()
-    loops = 0
-    empty_streak = 0
 
-    log.info(
-        "Drain loop started: max_loops=%d max_seconds=%d empty_streak_limit=%d",
-        DRAIN_MAX_LOOPS, DRAIN_MAX_SECONDS, DRAIN_EMPTY_STREAK,
+def _run_cloud_run_job() -> dict:
+    """Trigger a Cloud Run Job execution. Returns dict with result info."""
+    if not GCP_PROJECT:
+        return {"ok": False, "error": "GCP_PROJECT env var not set"}
+
+    job_url = (
+        f"{RUN_API_BASE}/v2/projects/{GCP_PROJECT}"
+        f"/locations/{RUN_REGION}/jobs/{RUN_JOB_NAME}:run"
     )
 
     try:
-        while loops < DRAIN_MAX_LOOPS:
-            elapsed = time.monotonic() - start_wall
-            if elapsed >= DRAIN_MAX_SECONDS:
-                log.info("Drain loop hit wall-clock cap (%.1fs)", elapsed)
-                break
-
-            loops += 1
-            log.info("Drain iteration %d / %d (%.1fs elapsed)", loops, DRAIN_MAX_LOOPS, elapsed)
-
-            try:
-                proc = subprocess.run(
-                    ["python", WORKER_SCRIPT],
-                    capture_output=True,
-                    text=True,
-                    timeout=DRAIN_MAX_SECONDS - elapsed + 10,  # generous per-run timeout
-                )
-                exit_code = proc.returncode
-                stdout_tail = (proc.stdout or "")[-2000:]
-                stderr_tail = (proc.stderr or "")[-2000:]
-            except subprocess.TimeoutExpired:
-                log.warning("Worker subprocess timed out on iteration %d", loops)
-                exit_code = -1
-                stdout_tail = ""
-                stderr_tail = "subprocess.TimeoutExpired"
-            except Exception as exc:
-                log.exception("Failed to run worker subprocess: %s", exc)
-                exit_code = -1
-                stdout_tail = ""
-                stderr_tail = str(exc)
-
-            # Detect empty queue signal
-            no_jobs = "NO_JOBS_AVAILABLE=true" in stdout_tail
-            if no_jobs:
-                empty_streak += 1
-                log.info("Worker reported no jobs (streak=%d/%d)", empty_streak, DRAIN_EMPTY_STREAK)
-            else:
-                empty_streak = 0
-
-            # Update shared state
-            with _lock:
-                _last = {
-                    "loops_completed": loops,
-                    "elapsed_seconds": round(time.monotonic() - start_wall, 1),
-                    "last_exit_code": exit_code,
-                    "last_stdout_tail": stdout_tail[-500:],
-                    "last_stderr_tail": stderr_tail[-500:],
-                    "empty_streak": empty_streak,
-                    "stopped_reason": None,
-                }
-
-            if empty_streak >= DRAIN_EMPTY_STREAK:
-                log.info("Drain loop stopping: empty streak reached (%d)", empty_streak)
-                break
-
-            if exit_code != 0:
-                log.warning("Worker exited with code %d on iteration %d", exit_code, loops)
-                # Continue trying — transient errors shouldn't stop the drain
-
-            # Small sleep between loops
-            time.sleep(DRAIN_SLEEP_MS / 1000.0)
-
+        token = _fetch_metadata_token(RUN_API_AUDIENCE)
     except Exception as exc:
-        log.exception("Drain loop crashed: %s", exc)
-    finally:
-        elapsed_final = round(time.monotonic() - start_wall, 1)
-        reason = "completed"
-        if loops >= DRAIN_MAX_LOOPS:
-            reason = "max_loops"
-        elif elapsed_final >= DRAIN_MAX_SECONDS:
-            reason = "max_seconds"
-        elif empty_streak >= DRAIN_EMPTY_STREAK:
-            reason = "queue_empty"
+        log.error("Failed to fetch metadata token: %s", exc)
+        return {"ok": False, "error": "metadata_token_failed", "details": str(exc)}
 
-        with _lock:
-            _last["stopped_reason"] = reason
-            _last["elapsed_seconds"] = elapsed_final
-            _last["loops_completed"] = loops
-            _running = False
-
-        log.info(
-            "Drain loop finished: loops=%d elapsed=%.1fs reason=%s",
-            loops, elapsed_final, reason,
+    try:
+        resp = http_requests.post(
+            job_url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json={},
+            timeout=RUN_REQUEST_TIMEOUT_SECS,
         )
+    except Exception as exc:
+        log.error("Cloud Run Jobs API call failed: %s", exc)
+        return {"ok": False, "error": "api_call_failed", "details": str(exc)}
+
+    if resp.status_code < 200 or resp.status_code >= 300:
+        body = resp.text[:2000]
+        log.error(
+            "Cloud Run Jobs API returned %d: %s", resp.status_code, body
+        )
+        return {
+            "ok": False,
+            "error": "api_non_2xx",
+            "status_code": resp.status_code,
+            "details": body,
+        }
+
+    data = resp.json()
+    execution_name = data.get("metadata", {}).get("name", data.get("name", "unknown"))
+    log.info("Cloud Run Job triggered: execution=%s", execution_name)
+    return {"ok": True, "execution": execution_name}
 
 
 # ---------------------------------------------------------------------------
@@ -211,32 +179,44 @@ def routes():
 
 @app.route("/status", methods=["GET"])
 def status():
-    with _lock:
-        return jsonify({
-            "running": _running,
-            "status": "running" if _running else "idle",
-            "last": dict(_last),
-        }), 200
+    return jsonify({
+        "running": False,
+        "status": "idle",
+        "last_trigger": dict(_last_trigger),
+    }), 200
 
 
 @app.route("/run", methods=["POST"])
 def run():
-    global _running
+    global _last_trigger
 
     auth_err = _check_auth()
     if auth_err:
         return jsonify({"ok": False, "error": auth_err}), 401
 
-    with _lock:
-        if _running:
-            return jsonify({"ok": False, "error": "already_running"}), 409
-        _running = True
+    result = _run_cloud_run_job()
 
-    # Start drain in background thread
-    t = threading.Thread(target=_drain_loop, daemon=True)
-    t.start()
+    _last_trigger = {
+        "ts": time.time(),
+        "execution": result.get("execution"),
+        "error": result.get("error"),
+        "details": result.get("details"),
+    }
 
-    return jsonify({"ok": True, "status": "draining"}), 202
+    if result["ok"]:
+        return jsonify({
+            "ok": True,
+            "status": "job_triggered",
+            "execution": result["execution"],
+        }), 202
+    else:
+        return jsonify({
+            "ok": False,
+            "error": "job_trigger_failed",
+            "details": {
+                k: v for k, v in result.items() if k != "ok"
+            },
+        }), 502
 
 
 # ---------------------------------------------------------------------------
