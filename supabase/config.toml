@@ -23,3 +23,9 @@ verify_jwt = false
 
 [functions.generate-guidance-phase1]
 verify_jwt = false
+
+[functions.run-reviewer]
+verify_jwt = false
+
+[functions.upload-review-document]
+verify_jwt = false
