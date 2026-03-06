@@ -130,8 +130,9 @@ def download_pdf(file_path: str) -> bytes:
 def extract_text(pdf_bytes: bytes, job_id: int) -> dict:
     """Extract native text from a PDF using PyMuPDF.
 
-    Returns a dict with keys: text, page_count, char_count,
-    non_empty_pages, text_quality_score, native_pages, status, error.
+    Returns a dict with keys: text, page_count, original_page_count,
+    hit_max_pages, hit_timeout, char_count, non_empty_pages,
+    text_quality_score, native_pages, status, error.
     """
     start_time = time.monotonic()
 
@@ -139,7 +140,10 @@ def extract_text(pdf_bytes: bytes, job_id: int) -> dict:
     if byte_len > MAX_PDF_BYTES:
         return {
             "text": "",
+            "original_page_count": 0,
             "page_count": 0,
+            "hit_max_pages": False,
+            "hit_timeout": False,
             "char_count": 0,
             "non_empty_pages": 0,
             "text_quality_score": 0.0,
@@ -153,7 +157,10 @@ def extract_text(pdf_bytes: bytes, job_id: int) -> dict:
     except Exception as exc:
         return {
             "text": "",
+            "original_page_count": 0,
             "page_count": 0,
+            "hit_max_pages": False,
+            "hit_timeout": False,
             "char_count": 0,
             "non_empty_pages": 0,
             "text_quality_score": 0.0,
@@ -162,41 +169,20 @@ def extract_text(pdf_bytes: bytes, job_id: int) -> dict:
             "error": f"Failed to open PDF: {exc}",
         }
 
-    page_count = len(doc)
-    if page_count > MAX_PAGES:
-        doc.close()
-        return {
-            "text": "",
-            "page_count": page_count,
-            "char_count": 0,
-            "non_empty_pages": 0,
-            "text_quality_score": 0.0,
-            "native_pages": 0,
-            "status": "needs_review",
-            "error": f"Too many pages: {page_count} (max {MAX_PAGES})",
-        }
+    original_page_count = len(doc)
+    hit_max_pages = original_page_count > MAX_PAGES
+    pages_to_process = min(original_page_count, MAX_PAGES)
 
     parts: list[str] = []
     non_empty_pages = 0
     native_pages = 0
+    hit_timeout = False
 
-    for i in range(page_count):
+    for i in range(pages_to_process):
         elapsed = time.monotonic() - start_time
         if elapsed > MAX_SECONDS_PER_DOC:
-            doc.close()
-            char_count = sum(len(p) for p in parts)
-            return {
-                "text": "\n\n".join(parts),
-                "page_count": page_count,
-                "char_count": char_count,
-                "non_empty_pages": non_empty_pages,
-                "text_quality_score": (
-                    non_empty_pages / page_count if page_count else 0.0
-                ),
-                "native_pages": native_pages,
-                "status": "needs_review",
-                "error": f"Timeout after {int(elapsed)}s at page {i}/{page_count}",
-            }
+            hit_timeout = True
+            break
 
         try:
             page_text = doc[i].get_text("text")
@@ -212,26 +198,49 @@ def extract_text(pdf_bytes: bytes, job_id: int) -> dict:
 
     doc.close()
 
+    page_count = len(parts)  # pages actually processed
     full_text = "\n\n".join(parts)
     char_count = len(full_text)
     quality = non_empty_pages / page_count if page_count else 0.0
 
-    if page_count == 0 or char_count == 0:
-        status = "needs_review"
+    # --- Determine status and error ---
+    errors: list[str] = []
+
+    if hit_timeout:
+        errors.append(
+            f"Hit MAX_SECONDS_PER_DOC cap ({MAX_SECONDS_PER_DOC}s). "
+            f"Extracted {page_count}/{original_page_count} pages."
+        )
+
+    if hit_max_pages:
+        errors.append(
+            f"Hit MAX_PAGES cap ({MAX_PAGES}). "
+            f"Extracted first {page_count} of {original_page_count} pages."
+        )
+
+    needs_review = False
+    if hit_max_pages or hit_timeout:
+        needs_review = True
+    elif page_count == 0 or char_count == 0:
+        needs_review = True
     elif quality < TEXT_QUALITY_THRESHOLD:
-        status = "needs_review"
-    else:
-        status = "ready"
+        needs_review = True
+
+    status = "needs_review" if needs_review else "ready"
+    error = " ".join(errors) if errors else None
 
     return {
         "text": full_text,
+        "original_page_count": original_page_count,
         "page_count": page_count,
+        "hit_max_pages": hit_max_pages,
+        "hit_timeout": hit_timeout,
         "char_count": char_count,
         "non_empty_pages": non_empty_pages,
         "text_quality_score": round(quality, 4),
         "native_pages": native_pages,
         "status": status,
-        "error": None,
+        "error": error,
     }
 
 
