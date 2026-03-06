@@ -304,12 +304,16 @@ def process_job(job: dict) -> None:
     result = extract_text(pdf_bytes, job_id)
 
     log.info(
-        "job=%s pages=%d chars=%d non_empty=%d quality=%.2f status=%s",
+        "job=%s original_pages=%d processed_pages=%d chars=%d non_empty=%d "
+        "quality=%.2f hit_max_pages=%s hit_timeout=%s status=%s",
         job_id,
+        result["original_page_count"],
         result["page_count"],
         result["char_count"],
         result["non_empty_pages"],
         result["text_quality_score"],
+        result["hit_max_pages"],
+        result["hit_timeout"],
         result["status"],
     )
 
@@ -320,7 +324,10 @@ def process_job(job: dict) -> None:
         "job_id": job_id,
         "started_at": extracting_meta["ingestion"].get("started_at"),
         "finished_at": finished_at,
+        "original_page_count": result["original_page_count"],
         "page_count": result["page_count"],
+        "hit_max_pages": result["hit_max_pages"],
+        "hit_timeout": result["hit_timeout"],
         "char_count": result["char_count"],
         "non_empty_pages": result["non_empty_pages"],
         "text_quality_score": result["text_quality_score"],
