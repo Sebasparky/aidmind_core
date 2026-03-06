@@ -1,0 +1,7 @@
+# Service deps
+flask>=3.0,<4.0
+gunicorn>=22.0,<23.0
+
+# Worker deps (same process image)
+supabase>=2.0,<3.0
+PyMuPDF>=1.24,<2.0
