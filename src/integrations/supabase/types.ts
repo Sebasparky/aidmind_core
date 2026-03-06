@@ -269,14 +269,18 @@ export type Database = {
         Row: {
           attempts: number
           created_at: string
+          dedupe_key: string | null
+          end_page: number | null
           error: string | null
           finished_at: string | null
           id: number
+          job_type: string
           kb_document_id: string
           locked_at: string | null
           locked_by: string | null
           max_attempts: number
           priority: number
+          start_page: number
           started_at: string | null
           status: string
           tenant_id: string
@@ -285,14 +289,18 @@ export type Database = {
         Insert: {
           attempts?: number
           created_at?: string
+          dedupe_key?: string | null
+          end_page?: number | null
           error?: string | null
           finished_at?: string | null
           id?: number
+          job_type?: string
           kb_document_id: string
           locked_at?: string | null
           locked_by?: string | null
           max_attempts?: number
           priority?: number
+          start_page?: number
           started_at?: string | null
           status?: string
           tenant_id: string
@@ -301,14 +309,18 @@ export type Database = {
         Update: {
           attempts?: number
           created_at?: string
+          dedupe_key?: string | null
+          end_page?: number | null
           error?: string | null
           finished_at?: string | null
           id?: number
+          job_type?: string
           kb_document_id?: string
           locked_at?: string | null
           locked_by?: string | null
           max_attempts?: number
           priority?: number
+          start_page?: number
           started_at?: string | null
           status?: string
           tenant_id?: string
