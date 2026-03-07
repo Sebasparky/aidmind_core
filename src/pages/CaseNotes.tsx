@@ -375,7 +375,7 @@ export default function CaseNotes() {
       await supabase
         .from("sessions")
         .update({
-          metadata: mergedMeta as Record<string, unknown>,
+          metadata: mergedMeta as unknown as import("@/integrations/supabase/types").Json,
           updated_at: new Date().toISOString(),
         })
         .eq("session_id", sessionId);
