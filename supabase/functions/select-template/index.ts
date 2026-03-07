@@ -125,6 +125,7 @@ Deno.serve(async (req) => {
       if (uploadErr) throw new Error(`Failed to upload template: ${uploadErr.message}`);
 
       // Create kb_templates record
+      const hasContent = !!templateContent && templateContent.length >= 10;
       const { data: newTemplate, error: insertErr } = await supabase
         .from("kb_templates")
         .insert({
@@ -133,13 +134,18 @@ Deno.serve(async (req) => {
           version: "1.0",
           storage_path: storagePath,
           created_by: session.user_id,
-          content: "", // Content will be extracted later by a separate pipeline
+          content: templateContent ?? "",
           content_type: "pdf",
-          extraction_status: "pending",
+          extraction_status: hasContent ? "ready" : "pending",
           is_active: true,
-          metadata: { source: "upload", original_filename: uploadFile.name },
+          metadata: {
+            source: "upload",
+            original_filename: uploadFile.name,
+            content_char_count: templateContent?.length ?? 0,
+            extraction_method: hasContent ? "client_pdfjs" : "none",
+          },
         })
-        .select("id, name, version")
+        .select("id, name, version, extraction_status")
         .single();
 
       if (insertErr) throw new Error(`Failed to create template record: ${insertErr.message}`);
