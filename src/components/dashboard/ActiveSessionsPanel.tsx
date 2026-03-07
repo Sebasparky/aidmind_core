@@ -411,12 +411,6 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         onSessionCreated={handleRefresh}
       />
 
-      {/* Case Notes Drawer */}
-      <CaseNotesDrawer
-        open={!!caseNotesSession}
-        onOpenChange={(open) => !open && setCaseNotesSession(null)}
-        session={caseNotesSession}
-      />
     </div>
   );
 }
