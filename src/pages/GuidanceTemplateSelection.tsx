@@ -266,12 +266,11 @@ export default function GuidanceTemplateSelection() {
           throw new Error(result.error || `Upload failed (${response.status})`);
         }
 
-        // Check if extraction succeeded
-        if (result.template?.extraction_status === "pending") {
-          toast.warning("Template uploaded but text extraction failed. The template may not be usable for guidance generation.");
-        } else {
-          toast.success("Template uploaded and ready for guidance generation.");
+        if (result.template?.extraction_status !== "ready") {
+          throw new Error("Template was uploaded but extraction failed. Please try a different file.");
         }
+
+        toast.success("Template uploaded and ready for guidance generation.");
 
         navigate(`/guidance/${sessionId}`, {
           state: {
@@ -328,8 +327,12 @@ export default function GuidanceTemplateSelection() {
   };
 
   // Determine if the confirm button should be disabled
-  const isConfirmDisabled = !selectedTemplate || isUploading ||
-    (selectedTemplate.source === "upload" && extracting);
+  // For uploads: block unless extraction succeeded with meaningful text
+  const uploadExtractionValid = selectedTemplate?.source === "upload"
+    ? !extracting && !extractionError && !!fullText && fullText.trim().length >= 10
+    : true;
+
+  const isConfirmDisabled = !selectedTemplate || isUploading || !uploadExtractionValid;
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -538,7 +541,17 @@ export default function GuidanceTemplateSelection() {
                         <Alert variant="destructive" className="py-2">
                           <AlertCircle className="h-3.5 w-3.5" />
                           <AlertDescription className="text-xs">
-                            {extractionError} The template can still be uploaded but may not work for guidance generation.
+                            {extractionError} Upload is blocked — text extraction is required for guidance generation. Try a different PDF.
+                          </AlertDescription>
+                        </Alert>
+                      )}
+
+                      {/* Warn if extracted text is too short */}
+                      {!extracting && !extractionError && fullText !== null && fullText.trim().length < 10 && (
+                        <Alert variant="destructive" className="py-2">
+                          <AlertCircle className="h-3.5 w-3.5" />
+                          <AlertDescription className="text-xs">
+                            Extracted text is too short to be usable. This PDF may be image-only or empty. Try a different file.
                           </AlertDescription>
                         </Alert>
                       )}
