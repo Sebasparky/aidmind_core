@@ -32,3 +32,6 @@ verify_jwt = false
 
 [functions.kb-kick]
 verify_jwt = false
+
+[functions.upload-interview-notes-text]
+verify_jwt = false
