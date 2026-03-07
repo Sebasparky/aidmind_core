@@ -6,7 +6,6 @@ import {
   FileText,
   Check,
   X,
-  ChevronDown,
   Loader2,
   AlertCircle,
   Eye,
@@ -25,34 +24,9 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
-
-// ── Mock data ────────────────────────────────────────────────
-const MOCK_TEMPLATES = [
-  {
-    id: "tpl-001",
-    name: "Child Welfare Assessment – Initial Intake",
-    lastUsed: "2026-02-28",
-    jurisdiction: "State of Illinois",
-  },
-  {
-    id: "tpl-002",
-    name: "Housing Assistance Application – HUD Section 8",
-    lastUsed: "2026-02-15",
-    jurisdiction: "Federal",
-  },
-  {
-    id: "tpl-003",
-    name: "Mental Health Screening – Adult Services",
-    lastUsed: "2026-01-22",
-    jurisdiction: "Cook County",
-  },
-  {
-    id: "tpl-004",
-    name: "SNAP Benefits Recertification Form",
-    lastUsed: "2026-03-01",
-    jurisdiction: "State of Illinois",
-  },
-];
+import { usePdfTextExtractor } from "@/hooks/usePdfTextExtractor";
+import { useTenant } from "@/hooks/useTenant";
+import { toast } from "sonner";
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
 
@@ -63,18 +37,34 @@ interface SelectedTemplate {
   file?: File;
   objectUrl?: string;
   jurisdiction?: string;
+  extraction_status?: string;
+}
+
+interface DbTemplate {
+  id: string;
+  name: string;
+  version: string;
+  extraction_status: string;
+  created_at: string;
 }
 
 export default function GuidanceTemplateSelection() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
+  const { tenant } = useTenant();
 
   const [selectedTemplate, setSelectedTemplate] = useState<SelectedTemplate | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [scopeLabel, setScopeLabel] = useState<string | null>(null);
+  const [dbTemplates, setDbTemplates] = useState<DbTemplate[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // PDF text extraction
+  const { fullText, extracting, error: extractionError, extractText, clearText } = usePdfTextExtractor();
 
   // Fetch session scope for display
   useEffect(() => {
@@ -95,6 +85,35 @@ export default function GuidanceTemplateSelection() {
       });
   }, [sessionId]);
 
+  // Fetch real templates from database
+  useEffect(() => {
+    if (!tenant?.tenantId) {
+      setLoadingTemplates(false);
+      return;
+    }
+
+    const fetchTemplates = async () => {
+      setLoadingTemplates(true);
+      const { data, error } = await supabase
+        .from("kb_templates")
+        .select("id, name, version, extraction_status, created_at")
+        .eq("tenant_id", tenant.tenantId)
+        .eq("is_active", true)
+        .eq("extraction_status", "ready")
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+      if (error) {
+        console.error("[GuidanceTemplateSelection] Failed to fetch templates:", error);
+      } else {
+        setDbTemplates((data as DbTemplate[]) ?? []);
+      }
+      setLoadingTemplates(false);
+    };
+
+    fetchTemplates();
+  }, [tenant?.tenantId]);
+
   // Cleanup objectURL on unmount
   useEffect(() => {
     return () => {
@@ -107,6 +126,7 @@ export default function GuidanceTemplateSelection() {
   // ── File handling ──────────────────────────────────────────
   const validateAndSetFile = useCallback((file: File) => {
     setFileError(null);
+    setUploadError(null);
 
     if (file.type !== "application/pdf") {
       setFileError("Please upload a PDF file.");
@@ -130,12 +150,15 @@ export default function GuidanceTemplateSelection() {
       file,
       objectUrl,
     });
-  }, [selectedTemplate?.objectUrl]);
+
+    // Start client-side text extraction immediately
+    clearText();
+    extractText(file);
+  }, [selectedTemplate?.objectUrl, extractText, clearText]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) validateAndSetFile(file);
-    // Reset so same file can be re-selected
     e.target.value = "";
   };
 
@@ -154,50 +177,146 @@ export default function GuidanceTemplateSelection() {
   const handleDragLeave = () => setIsDragging(false);
 
   const handleExistingSelect = (templateId: string) => {
-    const tpl = MOCK_TEMPLATES.find((t) => t.id === templateId);
+    const tpl = dbTemplates.find((t) => t.id === templateId);
     if (!tpl) return;
 
-    // Clear previous upload URL
     if (selectedTemplate?.objectUrl) {
       URL.revokeObjectURL(selectedTemplate.objectUrl);
     }
 
+    clearText();
     setSelectedTemplate({
       id: tpl.id,
       name: tpl.name,
       source: "existing",
-      jurisdiction: tpl.jurisdiction,
+      extraction_status: tpl.extraction_status,
     });
     setFileError(null);
+    setUploadError(null);
   };
 
   const handleRemove = () => {
     if (selectedTemplate?.objectUrl) {
       URL.revokeObjectURL(selectedTemplate.objectUrl);
     }
+    clearText();
     setSelectedTemplate(null);
     setFileError(null);
+    setUploadError(null);
   };
 
   const handleReplace = () => {
     fileInputRef.current?.click();
   };
 
-  // ── Upload Template (mock) ─────────────────────────────────
+  // ── Real upload handler ─────────────────────────────────
   const handleUploadTemplate = async () => {
-    if (!selectedTemplate) return;
+    if (!selectedTemplate || !sessionId) return;
     setIsUploading(true);
-    // Mock: simulate 800ms
-    await new Promise((r) => setTimeout(r, 800));
-    setIsUploading(false);
-    // Navigate to guidance page with template info
-    navigate(`/guidance/${sessionId}`, {
-      state: {
-        templateId: selectedTemplate.id,
-        templateName: selectedTemplate.name,
-        templateSource: selectedTemplate.source,
-      },
-    });
+    setUploadError(null);
+
+    try {
+      // Resolve session UUID from session_id text
+      const { data: sessionRow, error: sessionErr } = await supabase
+        .from("sessions")
+        .select("id")
+        .eq("session_id", sessionId)
+        .maybeSingle();
+
+      if (sessionErr || !sessionRow) {
+        throw new Error("Could not resolve session. Please try again.");
+      }
+
+      const sessionUuid = sessionRow.id;
+
+      if (selectedTemplate.source === "upload" && selectedTemplate.file) {
+        // Upload path: send file + extracted text to select-template
+        const formData = new FormData();
+        formData.append("session_id", sessionUuid);
+        formData.append("template_upload", selectedTemplate.file);
+        formData.append("template_name", selectedTemplate.name);
+
+        // Include extracted text if available
+        if (fullText && fullText.trim().length > 0) {
+          formData.append("template_content", fullText);
+        }
+
+        const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;
+        const { data: authData } = await supabase.auth.getSession();
+        const accessToken = authData?.session?.access_token;
+
+        if (!accessToken) {
+          throw new Error("You must be logged in to upload templates.");
+        }
+
+        const response = await fetch(
+          `https://${projectId}.supabase.co/functions/v1/select-template`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+            body: formData,
+          }
+        );
+
+        const result = await response.json();
+
+        if (!response.ok || !result.success) {
+          throw new Error(result.error || `Upload failed (${response.status})`);
+        }
+
+        // Check if extraction succeeded
+        if (result.template?.extraction_status === "pending") {
+          toast.warning("Template uploaded but text extraction failed. The template may not be usable for guidance generation.");
+        } else {
+          toast.success("Template uploaded and ready for guidance generation.");
+        }
+
+        navigate(`/guidance/${sessionId}`, {
+          state: {
+            templateId: result.template_id,
+            templateName: result.template?.name,
+            templateSource: "upload",
+          },
+        });
+      } else if (selectedTemplate.source === "existing") {
+        // Existing template path: JSON call
+        const { data: authData } = await supabase.auth.getSession();
+        const accessToken = authData?.session?.access_token;
+
+        if (!accessToken) {
+          throw new Error("You must be logged in to select templates.");
+        }
+
+        const { data, error } = await supabase.functions.invoke("select-template", {
+          body: {
+            session_id: sessionUuid,
+            template_id: selectedTemplate.id,
+          },
+        });
+
+        if (error) throw new Error(error.message || "Failed to select template");
+        if (!data?.success) throw new Error(data?.error || "Failed to select template");
+
+        toast.success("Template selected.");
+
+        navigate(`/guidance/${sessionId}`, {
+          state: {
+            templateId: data.template_id,
+            templateName: selectedTemplate.name,
+            templateSource: "existing",
+          },
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "An unexpected error occurred.";
+      console.error("[GuidanceTemplateSelection] Upload error:", err);
+      setUploadError(message);
+      toast.error(message);
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   const handleCancel = () => navigate("/dashboard");
@@ -207,6 +326,10 @@ export default function GuidanceTemplateSelection() {
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
+
+  // Determine if the confirm button should be disabled
+  const isConfirmDisabled = !selectedTemplate || isUploading ||
+    (selectedTemplate.source === "upload" && extracting);
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -255,38 +378,57 @@ export default function GuidanceTemplateSelection() {
             </AlertDescription>
           </Alert>
 
+          {/* Upload error banner */}
+          {uploadError && (
+            <Alert variant="destructive" className="mb-6">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{uploadError}</AlertDescription>
+            </Alert>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
             {/* ── Left: Template Selection ── */}
             <div className="lg:col-span-2 space-y-5">
-              {/* Option 1: Recent templates */}
+              {/* Option 1: Recent templates from DB */}
               <Card>
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-base">Use a recent template</CardTitle>
+                  <CardTitle className="text-base">Use an existing template</CardTitle>
                   <CardDescription>
-                    Select a previously used template from your organization.
+                    Select a previously uploaded template from your organization.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <Select
-                    value={selectedTemplate?.source === "existing" ? selectedTemplate.id : ""}
-                    onValueChange={handleExistingSelect}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Choose a template…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {MOCK_TEMPLATES.map((tpl) => (
-                        <SelectItem key={tpl.id} value={tpl.id}>
-                          <div className="flex flex-col items-start">
-                            <span className="text-sm">{tpl.name}</span>
-                            <span className="text-xs text-muted-foreground">
-                              {tpl.jurisdiction} · Last used {tpl.lastUsed}
-                            </span>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  {loadingTemplates ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading templates…
+                    </div>
+                  ) : dbTemplates.length === 0 ? (
+                    <p className="text-sm text-muted-foreground py-2">
+                      No templates available yet. Upload one below.
+                    </p>
+                  ) : (
+                    <Select
+                      value={selectedTemplate?.source === "existing" ? selectedTemplate.id : ""}
+                      onValueChange={handleExistingSelect}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Choose a template…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {dbTemplates.map((tpl) => (
+                          <SelectItem key={tpl.id} value={tpl.id}>
+                            <div className="flex flex-col items-start">
+                              <span className="text-sm">{tpl.name}</span>
+                              <span className="text-xs text-muted-foreground">
+                                v{tpl.version} · {new Date(tpl.created_at).toLocaleDateString()}
+                              </span>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 </CardContent>
               </Card>
 
@@ -370,10 +512,44 @@ export default function GuidanceTemplateSelection() {
                             </p>
                           </div>
                         </div>
-                        <Badge variant="secondary" className="text-xs shrink-0">
-                          Ready
-                        </Badge>
+                        {extracting ? (
+                          <Badge variant="secondary" className="text-xs shrink-0">
+                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                            Extracting text…
+                          </Badge>
+                        ) : extractionError ? (
+                          <Badge variant="destructive" className="text-xs shrink-0">
+                            Extraction failed
+                          </Badge>
+                        ) : fullText ? (
+                          <Badge variant="secondary" className="text-xs shrink-0 bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-200">
+                            <Check className="h-3 w-3 mr-1" />
+                            Text extracted
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary" className="text-xs shrink-0">
+                            Ready
+                          </Badge>
+                        )}
                       </div>
+
+                      {/* Extraction error warning */}
+                      {extractionError && (
+                        <Alert variant="destructive" className="py-2">
+                          <AlertCircle className="h-3.5 w-3.5" />
+                          <AlertDescription className="text-xs">
+                            {extractionError} The template can still be uploaded but may not work for guidance generation.
+                          </AlertDescription>
+                        </Alert>
+                      )}
+
+                      {/* Extraction stats */}
+                      {fullText && (
+                        <p className="text-xs text-muted-foreground">
+                          {fullText.length.toLocaleString()} characters extracted
+                        </p>
+                      )}
+
                       <div className="flex gap-2">
                         <Button variant="outline" size="sm" onClick={handleReplace} className="text-xs">
                           Replace
@@ -436,11 +612,11 @@ export default function GuidanceTemplateSelection() {
                     <div className="text-center space-y-4 max-w-sm">
                       <FileText className="h-12 w-12 mx-auto text-muted-foreground/20" />
                       <div>
-                        <p className="text-sm text-muted-foreground">
-                          Preview unavailable in mock mode
+                        <p className="text-sm font-medium text-foreground">
+                          {selectedTemplate.name}
                         </p>
                         <p className="text-xs text-muted-foreground mt-1">
-                          Preview will be available when connected to the backend.
+                          This template is ready for guidance generation.
                         </p>
                       </div>
 
@@ -451,12 +627,6 @@ export default function GuidanceTemplateSelection() {
                           <p className="text-xs text-muted-foreground uppercase tracking-wider">Template</p>
                           <p className="text-sm font-medium text-foreground">{selectedTemplate.name}</p>
                         </div>
-                        {selectedTemplate.jurisdiction && (
-                          <div>
-                            <p className="text-xs text-muted-foreground uppercase tracking-wider">Jurisdiction</p>
-                            <p className="text-sm font-medium text-foreground">{selectedTemplate.jurisdiction}</p>
-                          </div>
-                        )}
                       </div>
 
                       {/* Readiness checklist */}
@@ -488,17 +658,27 @@ export default function GuidanceTemplateSelection() {
           </Button>
           <Button
             onClick={handleUploadTemplate}
-            disabled={!selectedTemplate || isUploading}
+            disabled={isConfirmDisabled}
           >
             {isUploading ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Uploading…
+                {selectedTemplate?.source === "upload" ? "Uploading…" : "Selecting…"}
               </>
-            ) : (
+            ) : extracting ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Extracting text…
+              </>
+            ) : selectedTemplate?.source === "upload" ? (
               <>
                 <Upload className="h-4 w-4 mr-2" />
                 Upload Template
+              </>
+            ) : (
+              <>
+                <Check className="h-4 w-4 mr-2" />
+                Select Template
               </>
             )}
           </Button>

@@ -27,6 +27,7 @@ Deno.serve(async (req) => {
   let templateVersion: string | undefined;
   let templateName: string | undefined;
   let uploadFile: File | null = null;
+  let templateContent: string | null = null;
 
   const contentType = req.headers.get("content-type") ?? "";
 
@@ -40,6 +41,11 @@ Deno.serve(async (req) => {
     const fileField = form.get("template_upload");
     if (fileField instanceof File && fileField.size > 0) {
       uploadFile = fileField;
+    }
+    // Accept pre-extracted text from client-side PDF parsing
+    const contentField = form.get("template_content")?.toString();
+    if (contentField && contentField.trim().length > 0) {
+      templateContent = contentField.trim();
     }
   } else {
     // JSON path: existing template selection
@@ -119,6 +125,7 @@ Deno.serve(async (req) => {
       if (uploadErr) throw new Error(`Failed to upload template: ${uploadErr.message}`);
 
       // Create kb_templates record
+      const hasContent = !!templateContent && templateContent.length >= 10;
       const { data: newTemplate, error: insertErr } = await supabase
         .from("kb_templates")
         .insert({
@@ -127,13 +134,18 @@ Deno.serve(async (req) => {
           version: "1.0",
           storage_path: storagePath,
           created_by: session.user_id,
-          content: "", // Content will be extracted later by a separate pipeline
+          content: templateContent ?? "",
           content_type: "pdf",
-          extraction_status: "pending",
+          extraction_status: hasContent ? "ready" : "pending",
           is_active: true,
-          metadata: { source: "upload", original_filename: uploadFile.name },
+          metadata: {
+            source: "upload",
+            original_filename: uploadFile.name,
+            content_char_count: templateContent?.length ?? 0,
+            extraction_method: hasContent ? "client_pdfjs" : "none",
+          },
         })
-        .select("id, name, version")
+        .select("id, name, version, extraction_status")
         .single();
 
       if (insertErr) throw new Error(`Failed to create template record: ${insertErr.message}`);
@@ -226,6 +238,7 @@ Deno.serve(async (req) => {
         template_version: resolvedTemplateVersion,
         result: "success",
         source: uploadFile ? "upload" : "existing",
+        extraction_status: uploadFile ? (templateContent ? "ready" : "pending") : "ready",
       },
     });
 
@@ -239,6 +252,7 @@ Deno.serve(async (req) => {
         id: resolvedTemplateId,
         name: resolvedTemplateName,
         version: resolvedTemplateVersion,
+        extraction_status: uploadFile ? (templateContent ? "ready" : "pending") : "ready",
       },
     });
   } catch (e) {
