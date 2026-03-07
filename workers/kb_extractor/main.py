@@ -5,6 +5,9 @@ Runs as a Google Cloud Run Job. Processes queued rows in kb_ingestion_jobs,
 downloads PDFs from Supabase Storage, extracts native text in page-range chunks,
 updates kb_documents.content and metadata.ingestion, and marks jobs succeeded/failed.
 
+After full extraction completes, triggers the ingest-kb-text edge function to
+chunk, embed, and index the document into document_chunks for vector retrieval.
+
 For documents exceeding MAX_PAGES, the worker automatically enqueues continuation
 jobs to process the next page range until all pages are extracted.
 
