@@ -196,27 +196,6 @@ export default function KbBulkUploadPage() {
                   Cancel
                 </Button>
               )}
-              {IS_DEV && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleKick}
-                  disabled={kicking}
-                  className="gap-1.5"
-                >
-                  {kicking ? (
-                    <>
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      Running…
-                    </>
-                  ) : (
-                    <>
-                      <Cog className="h-3.5 w-3.5" />
-                      Run extractor
-                    </>
-                  )}
-                </Button>
-              )}
             </div>
             {hasFiles && (
               <div className="flex items-center gap-3 text-xs text-muted-foreground">
