@@ -768,7 +768,7 @@ export default function CaseNotes() {
               <Button
                 size="sm"
                 className="gap-1.5"
-                disabled={!canGenerate && form.permissionConfirmed}
+                disabled={!canGenerate}
                 onClick={handleGenerate}
               >
                 {status === "generating" ? (
