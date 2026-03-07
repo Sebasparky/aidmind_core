@@ -542,7 +542,17 @@ export default function GuidanceTemplateSelection() {
                         <Alert variant="destructive" className="py-2">
                           <AlertCircle className="h-3.5 w-3.5" />
                           <AlertDescription className="text-xs">
-                            {extractionError} The template can still be uploaded but may not work for guidance generation.
+                            {extractionError} Upload is blocked — text extraction is required for guidance generation. Try a different PDF.
+                          </AlertDescription>
+                        </Alert>
+                      )}
+
+                      {/* Warn if extracted text is too short */}
+                      {!extracting && !extractionError && fullText !== null && fullText.trim().length < 10 && (
+                        <Alert variant="destructive" className="py-2">
+                          <AlertCircle className="h-3.5 w-3.5" />
+                          <AlertDescription className="text-xs">
+                            Extracted text is too short to be usable. This PDF may be image-only or empty. Try a different file.
                           </AlertDescription>
                         </Alert>
                       )}
