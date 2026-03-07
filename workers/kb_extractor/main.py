@@ -5,6 +5,9 @@ Runs as a Google Cloud Run Job. Processes queued rows in kb_ingestion_jobs,
 downloads PDFs from Supabase Storage, extracts native text in page-range chunks,
 updates kb_documents.content and metadata.ingestion, and marks jobs succeeded/failed.
 
+After full extraction completes, triggers the ingest-kb-text edge function to
+chunk, embed, and index the document into document_chunks for vector retrieval.
+
 For documents exceeding MAX_PAGES, the worker automatically enqueues continuation
 jobs to process the next page range until all pages are extracted.
 
@@ -20,14 +23,17 @@ Environment variables:
 
 from __future__ import annotations
 
+import json as json_module
 import logging
 import os
 import socket
 import sys
 import time
 from datetime import datetime, timezone
+from urllib.parse import urljoin
 
 import fitz  # PyMuPDF
+import requests
 from supabase import create_client, Client
 
 # ---------------------------------------------------------------------------
@@ -150,6 +156,89 @@ def enqueue_continuation(
 def download_pdf(file_path: str) -> bytes:
     """Download a file from Supabase Storage and return raw bytes."""
     return sb.storage.from_(STORAGE_BUCKET).download(file_path)
+
+
+# ---------------------------------------------------------------------------
+# Indexing — call ingest-kb-text edge function
+# ---------------------------------------------------------------------------
+
+INGEST_MAX_RETRIES = 2
+INGEST_TIMEOUT_SECONDS = 300  # 5 minutes — large docs may need time for embeddings
+
+
+def trigger_ingest_kb_text(doc_id: str, extracted_text: str) -> dict:
+    """Call the ingest-kb-text edge function to chunk, embed, and index.
+
+    Uses service-role key for auth. Retries on transient failures.
+    Returns the parsed JSON response body on success.
+    Raises RuntimeError on permanent failure.
+    """
+    url = urljoin(SUPABASE_URL + "/", "functions/v1/ingest-kb-text")
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+    }
+
+    body = json_module.dumps({
+        "document_id": doc_id,
+        "extracted_text": extracted_text,
+        "overwrite": True,  # safe re-index: deletes old chunks first
+    })
+
+    last_error: str | None = None
+    for attempt in range(1, INGEST_MAX_RETRIES + 1):
+        try:
+            log.info(
+                "ingest-kb-text attempt=%d/%d doc=%s chars=%d",
+                attempt, INGEST_MAX_RETRIES, doc_id, len(extracted_text),
+            )
+            resp = requests.post(
+                url,
+                data=body,
+                headers=headers,
+                timeout=INGEST_TIMEOUT_SECONDS,
+            )
+
+            try:
+                resp_body = resp.json()
+            except Exception:
+                resp_body = {"raw": resp.text[:500]}
+
+            if resp.status_code == 200 and resp_body.get("success"):
+                log.info(
+                    "ingest-kb-text succeeded doc=%s chunks=%s",
+                    doc_id, resp_body.get("chunk_count"),
+                )
+                return resp_body
+
+            # Non-retryable client errors
+            if 400 <= resp.status_code < 500 and resp.status_code != 429:
+                raise RuntimeError(
+                    f"ingest-kb-text returned {resp.status_code}: "
+                    f"{resp_body.get('error', resp.text[:300])}"
+                )
+
+            last_error = (
+                f"ingest-kb-text HTTP {resp.status_code}: "
+                f"{resp_body.get('error', resp.text[:300])}"
+            )
+            log.warning("ingest-kb-text attempt %d failed: %s", attempt, last_error)
+
+        except requests.exceptions.Timeout:
+            last_error = f"ingest-kb-text timeout after {INGEST_TIMEOUT_SECONDS}s"
+            log.warning("ingest-kb-text attempt %d: %s", attempt, last_error)
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            last_error = f"ingest-kb-text request error: {exc}"
+            log.warning("ingest-kb-text attempt %d: %s", attempt, last_error)
+
+        if attempt < INGEST_MAX_RETRIES:
+            time.sleep(2 * attempt)  # simple backoff
+
+    raise RuntimeError(last_error or "ingest-kb-text failed after retries")
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +493,7 @@ def process_job(job: dict) -> None:
     chunk_needs_review = result["status"] == "needs_review"
     too_many_chunks = chunks_completed >= MAX_TOTAL_CHUNKS_PER_DOC and more_pages
 
+    # Extraction-level status (before indexing)
     if chunk_needs_review:
         doc_status = "needs_review"
     elif too_many_chunks:
@@ -411,7 +501,7 @@ def process_job(job: dict) -> None:
     elif more_pages:
         doc_status = "extracting"
     else:
-        doc_status = "ready"
+        doc_status = "extracted"  # fully extracted, pending indexing
 
     finished_at = _now_iso()
     ingestion_update: dict = {
@@ -465,7 +555,42 @@ def process_job(job: dict) -> None:
         )
         enqueue_continuation(doc_id, tenant_id, next_start, next_end, job_priority)
 
-    # 9. Complete job
+    # 9. Trigger indexing if extraction is fully complete
+    if doc_status == "extracted" and not DRY_RUN:
+        log.info("job=%s extraction complete, triggering indexing for doc=%s", job_id, doc_id)
+
+        # Re-fetch the final full document content
+        final_doc = fetch_document(doc_id)
+        final_text = (final_doc.get("content") or "").strip()
+
+        if not final_text:
+            indexing_error = "Extraction produced empty content, skipping indexing"
+            log.warning("job=%s %s", job_id, indexing_error)
+            _update_ingestion_status(doc_id, "indexing_failed", indexing_error)
+        else:
+            _update_ingestion_status(doc_id, "indexing")
+            try:
+                ingest_result = trigger_ingest_kb_text(doc_id, final_text)
+                log.info(
+                    "job=%s indexing complete doc=%s chunk_count=%s",
+                    job_id, doc_id, ingest_result.get("chunk_count"),
+                )
+                # Update to final ready status with indexing metadata
+                _update_ingestion_fields(doc_id, {
+                    "status": "ready",
+                    "indexing_completed_at": _now_iso(),
+                    "indexed_chunk_count": ingest_result.get("chunk_count"),
+                })
+            except RuntimeError as exc:
+                indexing_error = str(exc)
+                log.error("job=%s indexing failed doc=%s: %s", job_id, doc_id, indexing_error)
+                _update_ingestion_fields(doc_id, {
+                    "status": "indexing_failed",
+                    "indexing_error": indexing_error,
+                    "indexing_failed_at": _now_iso(),
+                })
+
+    # 10. Complete job
     complete_job(job_id, "succeeded", result.get("error"))
     log.info("job=%s completed status=succeeded doc_status=%s", job_id, doc_status)
 
@@ -480,6 +605,23 @@ def _fail_document(doc_id: str, doc_row: dict, job_id: int, error: str) -> None:
         "error": error,
     })
     update_document(doc_id, {"metadata": failed_meta})
+
+
+def _update_ingestion_status(doc_id: str, status: str, error: str | None = None) -> None:
+    """Quick helper to update only ingestion.status (and optionally error)."""
+    doc_row = fetch_document(doc_id)
+    fields: dict = {"status": status}
+    if error:
+        fields["indexing_error"] = error
+    meta = _merge_ingestion_metadata(doc_row.get("metadata") or {}, fields)
+    update_document(doc_id, {"metadata": meta})
+
+
+def _update_ingestion_fields(doc_id: str, fields: dict) -> None:
+    """Merge arbitrary fields into metadata.ingestion."""
+    doc_row = fetch_document(doc_id)
+    meta = _merge_ingestion_metadata(doc_row.get("metadata") or {}, fields)
+    update_document(doc_id, {"metadata": meta})
 
 
 # ---------------------------------------------------------------------------
