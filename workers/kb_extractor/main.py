@@ -180,6 +180,7 @@ def trigger_ingest_kb_text(doc_id: str, extracted_text: str) -> dict:
         "Content-Type": "application/json",
         "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
         "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "X-AIDMIND-INGEST-SECRET": KB_INGEST_SECRET,
     }
 
     body = json_module.dumps({
