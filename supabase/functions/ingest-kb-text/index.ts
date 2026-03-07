@@ -98,6 +98,15 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (req.method !== "POST") return json(405, { success: false, error: "Method not allowed" });
 
+  // ── Auth: require shared secret header ──
+  const expectedSecret = Deno.env.get("KB_INGEST_SECRET");
+  if (!expectedSecret) return json(500, { success: false, error: "KB_INGEST_SECRET not configured" });
+
+  const providedSecret = req.headers.get("X-AIDMIND-INGEST-SECRET");
+  if (!providedSecret || providedSecret !== expectedSecret) {
+    return json(401, { success: false, error: "Unauthorized" });
+  }
+
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
