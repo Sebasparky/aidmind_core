@@ -266,12 +266,11 @@ export default function GuidanceTemplateSelection() {
           throw new Error(result.error || `Upload failed (${response.status})`);
         }
 
-        // Check if extraction succeeded
-        if (result.template?.extraction_status === "pending") {
-          toast.warning("Template uploaded but text extraction failed. The template may not be usable for guidance generation.");
-        } else {
-          toast.success("Template uploaded and ready for guidance generation.");
+        if (result.template?.extraction_status !== "ready") {
+          throw new Error("Template was uploaded but extraction failed. Please try a different file.");
         }
+
+        toast.success("Template uploaded and ready for guidance generation.");
 
         navigate(`/guidance/${sessionId}`, {
           state: {
