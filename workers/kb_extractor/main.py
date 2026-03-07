@@ -493,6 +493,7 @@ def process_job(job: dict) -> None:
     chunk_needs_review = result["status"] == "needs_review"
     too_many_chunks = chunks_completed >= MAX_TOTAL_CHUNKS_PER_DOC and more_pages
 
+    # Extraction-level status (before indexing)
     if chunk_needs_review:
         doc_status = "needs_review"
     elif too_many_chunks:
@@ -500,7 +501,7 @@ def process_job(job: dict) -> None:
     elif more_pages:
         doc_status = "extracting"
     else:
-        doc_status = "ready"
+        doc_status = "extracted"  # fully extracted, pending indexing
 
     finished_at = _now_iso()
     ingestion_update: dict = {
@@ -554,7 +555,42 @@ def process_job(job: dict) -> None:
         )
         enqueue_continuation(doc_id, tenant_id, next_start, next_end, job_priority)
 
-    # 9. Complete job
+    # 9. Trigger indexing if extraction is fully complete
+    if doc_status == "extracted" and not DRY_RUN:
+        log.info("job=%s extraction complete, triggering indexing for doc=%s", job_id, doc_id)
+
+        # Re-fetch the final full document content
+        final_doc = fetch_document(doc_id)
+        final_text = (final_doc.get("content") or "").strip()
+
+        if not final_text:
+            indexing_error = "Extraction produced empty content, skipping indexing"
+            log.warning("job=%s %s", job_id, indexing_error)
+            _update_ingestion_status(doc_id, "indexing_failed", indexing_error)
+        else:
+            _update_ingestion_status(doc_id, "indexing")
+            try:
+                ingest_result = trigger_ingest_kb_text(doc_id, final_text)
+                log.info(
+                    "job=%s indexing complete doc=%s chunk_count=%s",
+                    job_id, doc_id, ingest_result.get("chunk_count"),
+                )
+                # Update to final ready status with indexing metadata
+                _update_ingestion_fields(doc_id, {
+                    "status": "ready",
+                    "indexing_completed_at": _now_iso(),
+                    "indexed_chunk_count": ingest_result.get("chunk_count"),
+                })
+            except RuntimeError as exc:
+                indexing_error = str(exc)
+                log.error("job=%s indexing failed doc=%s: %s", job_id, doc_id, indexing_error)
+                _update_ingestion_fields(doc_id, {
+                    "status": "indexing_failed",
+                    "indexing_error": indexing_error,
+                    "indexing_failed_at": _now_iso(),
+                })
+
+    # 10. Complete job
     complete_job(job_id, "succeeded", result.get("error"))
     log.info("job=%s completed status=succeeded doc_status=%s", job_id, doc_status)
 
