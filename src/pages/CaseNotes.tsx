@@ -352,7 +352,7 @@ export default function CaseNotes() {
       if (form.contactType) caseContext.contact_type = form.contactType;
       if (form.programDomain) caseContext.program_domain = form.programDomain;
 
-      const sourceInfo: Record<string, unknown> = { mode: inputMode };
+      const sourceInfo: { mode: string; file?: { name: string; size: number; mime: string; path: string | null } } = { mode: inputMode };
       if (inputMode === "upload" && uploadedFile) {
         sourceInfo.file = {
           name: uploadedFile.name,
@@ -362,18 +362,20 @@ export default function CaseNotes() {
         };
       }
 
+      const mergedMeta = {
+        ...existingMeta,
+        ...(Object.keys(caseContext).length > 0 ? { case_context: caseContext } : {}),
+        case_notes_permission: {
+          confirmed: true,
+          confirmed_at: new Date().toISOString(),
+        },
+        case_notes_source: sourceInfo,
+      };
+
       await supabase
         .from("sessions")
         .update({
-          metadata: {
-            ...existingMeta,
-            ...(Object.keys(caseContext).length > 0 ? { case_context: caseContext } : {}),
-            case_notes_permission: {
-              confirmed: true,
-              confirmed_at: new Date().toISOString(),
-            },
-            case_notes_source: sourceInfo,
-          },
+          metadata: mergedMeta as Record<string, unknown>,
           updated_at: new Date().toISOString(),
         })
         .eq("session_id", sessionId);
