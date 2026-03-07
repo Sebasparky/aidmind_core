@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Sparkles, Shield, Clock, RefreshCw, Check, X, CheckCircle2 } from "lucide-react";
+import { Plus, Sparkles, Shield, Clock, RefreshCw, Check, X, CheckCircle2, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { useDashboard } from "@/contexts/DashboardContext";
+import { CaseNotesDrawer } from "./CaseNotesDrawer";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -69,6 +70,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
   const [sessionToClose, setSessionToClose] = useState<ActiveSession | null>(null);
   const [closeAction, setCloseAction] = useState<"close_early" | "done">("close_early");
   const [highlightedSessionId, setHighlightedSessionId] = useState<string | null>(null);
+  const [caseNotesSession, setCaseNotesSession] = useState<ActiveSession | null>(null);
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // Build session list from real DB data only
@@ -349,6 +351,15 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                       Reviewer
                       {usage.reviewerUsed && <Check className="h-3 w-3 ml-0.5" />}
                     </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 text-xs"
+                      onClick={() => setCaseNotesSession(session)}
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      Case Notes
+                    </Button>
                     
                     <div className="ml-auto">
                       <TooltipProvider>
@@ -398,6 +409,13 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         open={startSessionOpen} 
         onOpenChange={setStartSessionOpen}
         onSessionCreated={handleRefresh}
+      />
+
+      {/* Case Notes Drawer */}
+      <CaseNotesDrawer
+        open={!!caseNotesSession}
+        onOpenChange={(open) => !open && setCaseNotesSession(null)}
+        session={caseNotesSession}
       />
     </div>
   );
