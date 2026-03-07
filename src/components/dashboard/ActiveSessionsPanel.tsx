@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { useDashboard } from "@/contexts/DashboardContext";
-import { CaseNotesDrawer } from "./CaseNotesDrawer";
+
 import {
   AlertDialog,
   AlertDialogAction,
@@ -70,7 +70,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
   const [sessionToClose, setSessionToClose] = useState<ActiveSession | null>(null);
   const [closeAction, setCloseAction] = useState<"close_early" | "done">("close_early");
   const [highlightedSessionId, setHighlightedSessionId] = useState<string | null>(null);
-  const [caseNotesSession, setCaseNotesSession] = useState<ActiveSession | null>(null);
+  
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // Build session list from real DB data only
@@ -341,6 +341,15 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                       {usage.guidanceUsed && <Check className="h-3 w-3 ml-0.5" />}
                     </Button>
                     <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 text-xs"
+                      onClick={() => navigate(`/sessions/${session.sessionId}/case-notes`)}
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      Case Notes
+                    </Button>
+                    <Button
                       variant={usage.reviewerUsed ? "secondary" : "outline"}
                       size="sm"
                       className="gap-1.5 text-xs"
@@ -350,15 +359,6 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                       <Shield className="h-3.5 w-3.5" />
                       Reviewer
                       {usage.reviewerUsed && <Check className="h-3 w-3 ml-0.5" />}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 text-xs"
-                      onClick={() => setCaseNotesSession(session)}
-                    >
-                      <FileText className="h-3.5 w-3.5" />
-                      Case Notes
                     </Button>
                     
                     <div className="ml-auto">
@@ -411,12 +411,6 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         onSessionCreated={handleRefresh}
       />
 
-      {/* Case Notes Drawer */}
-      <CaseNotesDrawer
-        open={!!caseNotesSession}
-        onOpenChange={(open) => !open && setCaseNotesSession(null)}
-        session={caseNotesSession}
-      />
     </div>
   );
 }
