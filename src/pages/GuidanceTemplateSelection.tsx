@@ -328,8 +328,12 @@ export default function GuidanceTemplateSelection() {
   };
 
   // Determine if the confirm button should be disabled
-  const isConfirmDisabled = !selectedTemplate || isUploading ||
-    (selectedTemplate.source === "upload" && extracting);
+  // For uploads: block unless extraction succeeded with meaningful text
+  const uploadExtractionValid = selectedTemplate?.source === "upload"
+    ? !extracting && !extractionError && !!fullText && fullText.trim().length >= 10
+    : true;
+
+  const isConfirmDisabled = !selectedTemplate || isUploading || !uploadExtractionValid;
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
