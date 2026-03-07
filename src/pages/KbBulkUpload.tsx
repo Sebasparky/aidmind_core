@@ -242,7 +242,7 @@ export default function KbBulkUploadPage() {
               <div className="flex items-center gap-3 text-xs text-muted-foreground">
                 <span>{stats.total} file{stats.total !== 1 ? "s" : ""}</span>
                 {stats.uploaded > 0 && (
-                  <span className="text-emerald-600">
+                  <span className="text-[hsl(var(--status-success))]">
                     {stats.uploaded} done
                   </span>
                 )}
