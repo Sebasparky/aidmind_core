@@ -786,6 +786,17 @@ export default function CaseNotes() {
                 )}
               </Button>
             </div>
+            {!canGenerate && status !== "generating" && (
+              <p className="text-xs text-muted-foreground mt-1.5">
+                {!notesReady
+                  ? "Enter at least 20 characters of source notes."
+                  : !form.permissionConfirmed
+                  ? "Confirm permission above."
+                  : hasTemplate === false
+                  ? "Assign a template to this session first."
+                  : null}
+              </p>
+            )}
           </div>
 
           {/* ─── Right: Results ─── */}
