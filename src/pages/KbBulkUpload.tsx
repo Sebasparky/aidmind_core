@@ -6,12 +6,11 @@
 import { useRef, useState, useCallback } from "react";
 import { useKbBulkUploader } from "@/hooks/useKbBulkUploader";
 import { useTenant } from "@/hooks/useTenant";
-import { kickExtractor } from "@/lib/kb/kbUploadService";
+
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { toast } from "sonner";
 import {
   Upload,
   FileText,
@@ -23,7 +22,6 @@ import {
   XCircle,
   Info,
   Building2,
-  Cog,
 } from "lucide-react";
 
 const STATUS_CONFIG: Record<string, { label: string; icon: React.ReactNode; className: string }> = {
@@ -49,7 +47,7 @@ const STATUS_CONFIG: Record<string, { label: string; icon: React.ReactNode; clas
   },
 };
 
-const IS_DEV = import.meta.env.DEV;
+
 
 export default function KbBulkUploadPage() {
   const { tenant, loading: tenantLoading } = useTenant();
@@ -57,7 +55,6 @@ export default function KbBulkUploadPage() {
     tenant?.tenantId ?? null
   );
   const inputRef = useRef<HTMLInputElement>(null);
-  const [kicking, setKicking] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
 
   const handleFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -65,18 +62,6 @@ export default function KbBulkUploadPage() {
     if (files.length === 0) return;
     enqueueFiles(files);
     if (inputRef.current) inputRef.current.value = "";
-  };
-
-  const handleKick = async () => {
-    setKicking(true);
-    try {
-      const result = await kickExtractor();
-      toast(result.ok ? "Extractor kicked ✓" : `Kick failed: ${result.detail}`);
-    } catch {
-      toast.error("Kick failed unexpectedly");
-    } finally {
-      setKicking(false);
-    }
   };
 
   const handleDrop = useCallback(
@@ -214,27 +199,6 @@ export default function KbBulkUploadPage() {
               {isRunning && (
                 <Button variant="destructive" size="sm" onClick={cancel}>
                   Cancel
-                </Button>
-              )}
-              {IS_DEV && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleKick}
-                  disabled={kicking}
-                  className="gap-1.5"
-                >
-                  {kicking ? (
-                    <>
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      Running…
-                    </>
-                  ) : (
-                    <>
-                      <Cog className="h-3.5 w-3.5" />
-                      Run extractor
-                    </>
-                  )}
                 </Button>
               )}
             </div>
