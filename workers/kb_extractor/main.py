@@ -568,7 +568,14 @@ def process_job(job: dict) -> None:
         if not final_text:
             indexing_error = "Extraction produced empty content, skipping indexing"
             log.warning("job=%s %s", job_id, indexing_error)
-            _update_ingestion_status(doc_id, "indexing_failed", indexing_error)
+            _update_ingestion_fields(doc_id, {
+                "status": "indexing_failed",
+                "indexing_error": indexing_error,
+                "indexing_failed_at": _now_iso(),
+            })
+            complete_job(job_id, "failed", f"Indexing skipped: {indexing_error}")
+            log.info("job=%s completed status=failed (empty content) doc_status=indexing_failed", job_id)
+            return
         else:
             _update_ingestion_status(doc_id, "indexing")
             try:
@@ -577,11 +584,13 @@ def process_job(job: dict) -> None:
                     "job=%s indexing complete doc=%s chunk_count=%s",
                     job_id, doc_id, ingest_result.get("chunk_count"),
                 )
-                # Update to final ready status with indexing metadata
+                # Update to final ready status — clear any stale failure fields
                 _update_ingestion_fields(doc_id, {
                     "status": "ready",
                     "indexing_completed_at": _now_iso(),
                     "indexed_chunk_count": ingest_result.get("chunk_count"),
+                    "indexing_error": None,
+                    "indexing_failed_at": None,
                 })
             except RuntimeError as exc:
                 indexing_error = str(exc)
@@ -590,7 +599,12 @@ def process_job(job: dict) -> None:
                     "status": "indexing_failed",
                     "indexing_error": indexing_error,
                     "indexing_failed_at": _now_iso(),
+                    "indexing_completed_at": None,
+                    "indexed_chunk_count": None,
                 })
+                complete_job(job_id, "failed", f"Indexing failed: {indexing_error}")
+                log.info("job=%s completed status=failed (indexing) doc_status=indexing_failed", job_id)
+                return
 
     # 10. Complete job
     complete_job(job_id, "succeeded", result.get("error"))
