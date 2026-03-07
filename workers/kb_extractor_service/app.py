@@ -7,10 +7,12 @@ Architecture:
 
 Endpoints:
   POST /run       — Trigger Cloud Run Job execution (returns 202)
-  GET  /status    — Last trigger attempt info
   GET  /healthz/  — Health check (canonical, trailing slash)
   GET  /          — Service info + registered endpoints
-  GET  /_routes   — Debug: full Flask route map
+
+Debug endpoints (disabled by default in production):
+  GET  /status    — Last trigger attempt info (requires DEBUG_ROUTES=true or KICK_SECRET header)
+  GET  /_routes   — Full Flask route map (requires DEBUG_ROUTES=true or KICK_SECRET header)
 
 Env vars:
   KICK_SECRET             — shared secret for X-AIDMIND-KICK-SECRET header auth
@@ -19,6 +21,7 @@ Env vars:
   RUN_JOB_NAME            — Cloud Run Job name (default kb-extractor-job)
   RUN_API_BASE            — Run API base URL (default https://run.googleapis.com)
   RUN_REQUEST_TIMEOUT_SECS — Timeout for Run API call (default 5)
+  DEBUG_ROUTES            — Set to "true" to expose /status and /_routes without secret (default false)
 """
 
 from __future__ import annotations
@@ -43,6 +46,7 @@ RUN_REGION = os.environ.get("RUN_REGION", "us-central1")
 RUN_JOB_NAME = os.environ.get("RUN_JOB_NAME", "kb-extractor-job")
 RUN_API_BASE = os.environ.get("RUN_API_BASE", "https://run.googleapis.com")
 RUN_REQUEST_TIMEOUT_SECS = int(os.environ.get("RUN_REQUEST_TIMEOUT_SECS", "5"))
+DEBUG_ROUTES = os.environ.get("DEBUG_ROUTES", "false").lower() == "true"
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -65,7 +69,7 @@ app = Flask(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Auth helper
+# Auth helpers
 # ---------------------------------------------------------------------------
 
 def _check_auth() -> str | None:
@@ -76,6 +80,14 @@ def _check_auth() -> str | None:
     if header != KICK_SECRET:
         return f"Invalid or missing {KICK_HEADER_NAME}"
     return None
+
+
+def _check_debug_auth() -> str | None:
+    """Return error if debug endpoints are not accessible. None = allowed."""
+    if DEBUG_ROUTES:
+        return None
+    # Fall back to kick secret header
+    return _check_auth()
 
 
 # ---------------------------------------------------------------------------
@@ -163,12 +175,15 @@ def healthz():
 def index():
     return jsonify({
         "service": "kb-extractor-service",
-        "endpoints": sorted([str(r) for r in app.url_map.iter_rules()]),
+        "endpoints": ["/healthz/", "POST /run"],
     })
 
 
 @app.get("/_routes")
 def routes():
+    auth_err = _check_debug_auth()
+    if auth_err:
+        return jsonify({"ok": False, "error": auth_err}), 401
     return jsonify({
         "rules": sorted([{
             "rule": r.rule,
@@ -180,6 +195,9 @@ def routes():
 
 @app.route("/status", methods=["GET"])
 def status():
+    auth_err = _check_debug_auth()
+    if auth_err:
+        return jsonify({"ok": False, "error": auth_err}), 401
     return jsonify({
         "running": False,
         "status": "idle",
