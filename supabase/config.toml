@@ -38,3 +38,9 @@ verify_jwt = false
 
 [functions.generate-guidance-phase2]
 verify_jwt = false
+
+[functions.ingest-kb-text]
+verify_jwt = false
+
+[functions.compile-policy-pack]
+verify_jwt = false

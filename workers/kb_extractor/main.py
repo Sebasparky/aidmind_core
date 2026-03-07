@@ -607,6 +607,23 @@ def _fail_document(doc_id: str, doc_row: dict, job_id: int, error: str) -> None:
     update_document(doc_id, {"metadata": failed_meta})
 
 
+def _update_ingestion_status(doc_id: str, status: str, error: str | None = None) -> None:
+    """Quick helper to update only ingestion.status (and optionally error)."""
+    doc_row = fetch_document(doc_id)
+    fields: dict = {"status": status}
+    if error:
+        fields["indexing_error"] = error
+    meta = _merge_ingestion_metadata(doc_row.get("metadata") or {}, fields)
+    update_document(doc_id, {"metadata": meta})
+
+
+def _update_ingestion_fields(doc_id: str, fields: dict) -> None:
+    """Merge arbitrary fields into metadata.ingestion."""
+    doc_row = fetch_document(doc_id)
+    meta = _merge_ingestion_metadata(doc_row.get("metadata") or {}, fields)
+    update_document(doc_id, {"metadata": meta})
+
+
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
