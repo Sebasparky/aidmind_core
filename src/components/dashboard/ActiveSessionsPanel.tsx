@@ -70,6 +70,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
   const [sessionToClose, setSessionToClose] = useState<ActiveSession | null>(null);
   const [closeAction, setCloseAction] = useState<"close_early" | "done">("close_early");
   const [highlightedSessionId, setHighlightedSessionId] = useState<string | null>(null);
+  const [caseNotesSession, setCaseNotesSession] = useState<ActiveSession | null>(null);
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // Build session list from real DB data only
