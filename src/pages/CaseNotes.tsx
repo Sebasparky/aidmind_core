@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from "react-router-dom";
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   ArrowLeft,
   FileText,
@@ -13,6 +13,8 @@ import {
   Search,
   ChevronDown,
   ChevronRight,
+  Upload,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -47,6 +49,7 @@ import { supabase } from "@/integrations/supabase/client";
 
 // ─── Types ───────────────────────────────────────────────
 type GenerationStatus = "idle" | "generating" | "success" | "error";
+type InputMode = "paste" | "upload";
 
 interface FieldAnswer {
   field_key: string;
@@ -63,14 +66,21 @@ interface Phase2Result {
   answers: FieldAnswer[];
 }
 
+interface UploadedFile {
+  name: string;
+  size: number;
+  mime: string;
+  extractedText: string | null;
+  storagePath: string | null;
+  status: "reading" | "ready" | "uploaded" | "error";
+}
+
 interface CaseNotesFormState {
   rawNotes: string;
   clientIdentifier: string;
   meetingDate: string;
   contactType: string;
   programDomain: string;
-  containsIdentifiers: boolean;
-  keepQuotes: boolean;
   permissionConfirmed: boolean;
 }
 
@@ -80,19 +90,30 @@ const INITIAL_FORM: CaseNotesFormState = {
   meetingDate: "",
   contactType: "",
   programDomain: "",
-  containsIdentifiers: false,
-  keepQuotes: false,
   permissionConfirmed: false,
 };
 
 const MIN_NOTES_LENGTH = 20;
+const ACCEPTED_EXTENSIONS = ".txt,.md,.pdf,.docx";
+const ACCEPTED_MIMES = [
+  "text/plain",
+  "text/markdown",
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+];
 
-// ─── Confidence badge helper ─────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function ConfidenceBadge({ level }: { level: string }) {
   const styles: Record<string, string> = {
-    high: "bg-[hsl(var(--status-success-muted))] text-[hsl(var(--status-success-muted-foreground))]",
-    medium: "bg-[hsl(var(--status-warning-muted))] text-[hsl(var(--status-warning-muted-foreground))]",
-    low: "bg-[hsl(var(--status-danger-muted))] text-[hsl(var(--status-danger-muted-foreground))]",
+    high: "bg-primary/10 text-primary",
+    medium: "bg-muted text-muted-foreground",
+    low: "bg-destructive/10 text-destructive",
   };
   return (
     <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", styles[level] || styles.low)}>
@@ -101,7 +122,6 @@ function ConfidenceBadge({ level }: { level: string }) {
   );
 }
 
-// ─── Answer row component ────────────────────────────────
 function AnswerRow({ answer }: { answer: FieldAnswer }) {
   const [open, setOpen] = useState(false);
   const hasExcerpt = !!answer.supporting_excerpt;
@@ -148,11 +168,15 @@ export default function CaseNotes() {
   const navigate = useNavigate();
 
   const [form, setForm] = useState<CaseNotesFormState>(INITIAL_FORM);
+  const [inputMode, setInputMode] = useState<InputMode>("paste");
+  const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null);
   const [status, setStatus] = useState<GenerationStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [result, setResult] = useState<Phase2Result | null>(null);
   const [sessionLabel, setSessionLabel] = useState<string>("");
   const [hasTemplate, setHasTemplate] = useState<boolean | null>(null);
+  const [permissionError, setPermissionError] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Filters
   const [searchFilter, setSearchFilter] = useState("");
@@ -161,6 +185,7 @@ export default function CaseNotes() {
   const updateField = useCallback(
     <K extends keyof CaseNotesFormState>(key: K, value: CaseNotesFormState[K]) => {
       setForm((prev) => ({ ...prev, [key]: value }));
+      if (key === "permissionConfirmed" && value) setPermissionError(false);
     },
     []
   );
@@ -180,66 +205,180 @@ export default function CaseNotes() {
       setSessionLabel(data.case_label || sessionId);
       setHasTemplate(!!data.template_id);
 
-      // Pre-fill notes if already uploaded
       if (data.interview_notes) {
         setForm((prev) => ({ ...prev, rawNotes: data.interview_notes! }));
       }
 
-      // Load existing Phase 2 results
       const meta = data.metadata as Record<string, unknown> | null;
       if (meta?.guidance_phase2) {
         setResult(meta.guidance_phase2 as Phase2Result);
         setStatus("success");
       }
+      // Restore case context
+      if (meta?.case_context) {
+        const cc = meta.case_context as Record<string, string>;
+        setForm((prev) => ({
+          ...prev,
+          clientIdentifier: cc.client_identifier || "",
+          meetingDate: cc.meeting_date || "",
+          contactType: cc.contact_type || "",
+          programDomain: cc.program_domain || "",
+        }));
+      }
     })();
   }, [sessionId]);
 
-  const canGenerate =
-    form.rawNotes.trim().length >= MIN_NOTES_LENGTH &&
-    form.permissionConfirmed &&
-    status !== "generating";
+  // The effective notes text (from paste or uploaded file)
+  const effectiveNotes = useMemo(() => {
+    if (inputMode === "upload" && uploadedFile?.extractedText) {
+      return uploadedFile.extractedText;
+    }
+    return form.rawNotes;
+  }, [inputMode, uploadedFile, form.rawNotes]);
 
-  const notesTooShort = form.rawNotes.length > 0 && form.rawNotes.trim().length < MIN_NOTES_LENGTH;
+  const notesReady = effectiveNotes.trim().length >= MIN_NOTES_LENGTH;
+  const notesTooShort = effectiveNotes.length > 0 && !notesReady;
+
+  const canGenerate =
+    notesReady &&
+    form.permissionConfirmed &&
+    status !== "generating" &&
+    hasTemplate !== false;
+
+  // ─── File handling ─────────────────────────────────────
+  const handleFileSelect = useCallback(
+    async (file: File) => {
+      if (!ACCEPTED_MIMES.includes(file.type) && !file.name.endsWith(".md")) {
+        toast({ title: "Unsupported file type", variant: "destructive" });
+        return;
+      }
+
+      const isText = file.type === "text/plain" || file.name.endsWith(".md") || file.type === "text/markdown";
+
+      if (isText) {
+        setUploadedFile({
+          name: file.name,
+          size: file.size,
+          mime: file.type || "text/plain",
+          extractedText: null,
+          storagePath: null,
+          status: "reading",
+        });
+        const text = await file.text();
+        setUploadedFile((prev) =>
+          prev ? { ...prev, extractedText: text, status: "ready" } : null
+        );
+      } else {
+        // PDF / DOCX — upload to storage
+        setUploadedFile({
+          name: file.name,
+          size: file.size,
+          mime: file.type,
+          extractedText: null,
+          storagePath: null,
+          status: "reading",
+        });
+
+        try {
+          const path = `case-notes/${sessionId}/${Date.now()}-${file.name}`;
+          const { error: uploadErr } = await supabase.storage
+            .from("review-documents")
+            .upload(path, file, { upsert: true });
+
+          if (uploadErr) throw uploadErr;
+
+          setUploadedFile((prev) =>
+            prev
+              ? { ...prev, storagePath: path, status: "uploaded" }
+              : null
+          );
+        } catch {
+          setUploadedFile((prev) =>
+            prev ? { ...prev, status: "error" } : null
+          );
+          toast({ title: "File upload failed", variant: "destructive" });
+        }
+      }
+    },
+    [sessionId]
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (file) handleFileSelect(file);
+    },
+    [handleFileSelect]
+  );
+
+  const removeFile = useCallback(() => {
+    setUploadedFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }, []);
 
   // ─── Generate handler ──────────────────────────────────
   const handleGenerate = useCallback(async () => {
+    if (!form.permissionConfirmed) {
+      setPermissionError(true);
+      return;
+    }
     if (!canGenerate || !sessionId) return;
 
     setStatus("generating");
     setErrorMessage(null);
 
     try {
-      // Step 1: Save notes to session via upload-interview-notes-text
+      // Step 1: Save notes
+      const notesText = effectiveNotes.trim();
       const { error: uploadError } = await supabase.functions.invoke(
         "upload-interview-notes-text",
-        { body: { session_id: sessionId, notes_text: form.rawNotes.trim() } }
+        { body: { session_id: sessionId, notes_text: notesText } }
       );
       if (uploadError) throw new Error(uploadError.message || "Failed to save notes");
 
-      // Step 1b: Save case context to session metadata (optional)
+      // Step 1b: Merge metadata (case_context + permission + source info)
+      const { data: current } = await supabase
+        .from("sessions")
+        .select("metadata")
+        .eq("session_id", sessionId)
+        .maybeSingle();
+
+      const existingMeta = (current?.metadata as Record<string, unknown>) || {};
+
       const caseContext: Record<string, string> = {};
       if (form.clientIdentifier) caseContext.client_identifier = form.clientIdentifier;
       if (form.meetingDate) caseContext.meeting_date = form.meetingDate;
       if (form.contactType) caseContext.contact_type = form.contactType;
       if (form.programDomain) caseContext.program_domain = form.programDomain;
 
-      if (Object.keys(caseContext).length > 0) {
-        // Fetch current metadata to merge
-        const { data: current } = await supabase
-          .from("sessions")
-          .select("metadata")
-          .eq("session_id", sessionId)
-          .maybeSingle();
-
-        const existingMeta = (current?.metadata as Record<string, unknown>) || {};
-        await supabase
-          .from("sessions")
-          .update({
-            metadata: { ...existingMeta, case_context: caseContext },
-            updated_at: new Date().toISOString(),
-          })
-          .eq("session_id", sessionId);
+      const sourceInfo: { mode: string; file?: { name: string; size: number; mime: string; path: string | null } } = { mode: inputMode };
+      if (inputMode === "upload" && uploadedFile) {
+        sourceInfo.file = {
+          name: uploadedFile.name,
+          size: uploadedFile.size,
+          mime: uploadedFile.mime,
+          path: uploadedFile.storagePath,
+        };
       }
+
+      const mergedMeta = {
+        ...existingMeta,
+        ...(Object.keys(caseContext).length > 0 ? { case_context: caseContext } : {}),
+        case_notes_permission: {
+          confirmed: true,
+          confirmed_at: new Date().toISOString(),
+        },
+        case_notes_source: sourceInfo,
+      };
+
+      await supabase
+        .from("sessions")
+        .update({
+          metadata: mergedMeta as unknown as import("@/integrations/supabase/types").Json,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("session_id", sessionId);
 
       // Step 2: Call generate-guidance-phase2
       const { error: genError } = await supabase.functions.invoke(
@@ -251,11 +390,10 @@ export default function CaseNotes() {
       // Step 3: Poll for results
       let attempts = 0;
       const maxAttempts = 8;
-      const pollInterval = 800;
       let phase2Data: Phase2Result | null = null;
 
       while (attempts < maxAttempts) {
-        await new Promise((r) => setTimeout(r, pollInterval));
+        await new Promise((r) => setTimeout(r, 800));
         const { data: refreshed } = await supabase
           .from("sessions")
           .select("metadata")
@@ -283,23 +421,24 @@ export default function CaseNotes() {
       setStatus("error");
       toast({ title: "Generation failed", description: msg, variant: "destructive" });
     }
-  }, [canGenerate, sessionId, form]);
+  }, [canGenerate, sessionId, form, effectiveNotes, inputMode, uploadedFile]);
 
   const handleClear = useCallback(() => {
     setForm(INITIAL_FORM);
+    setUploadedFile(null);
     setResult(null);
     setStatus("idle");
     setErrorMessage(null);
+    setPermissionError(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
 
   // ─── Filtered answers ──────────────────────────────────
   const filteredAnswers = useMemo(() => {
     if (!result?.answers) return [];
     let items = result.answers;
-
     if (showFilter === "answered") items = items.filter((a) => a.answer !== null);
     if (showFilter === "missing") items = items.filter((a) => a.answer === null);
-
     const q = searchFilter.trim().toLowerCase();
     if (q) {
       items = items.filter(
@@ -309,7 +448,6 @@ export default function CaseNotes() {
           (a.answer && a.answer.toLowerCase().includes(q))
       );
     }
-
     return items;
   }, [result, searchFilter, showFilter]);
 
@@ -368,9 +506,9 @@ export default function CaseNotes() {
 
         {/* No template warning */}
         {hasTemplate === false && (
-          <div className="flex items-start gap-2 p-3 rounded-lg bg-[hsl(var(--status-warning-muted))] border border-[hsl(var(--status-warning)/0.3)]">
-            <AlertCircle className="h-4 w-4 text-[hsl(var(--status-warning))] mt-0.5 shrink-0" />
-            <p className="text-sm text-[hsl(var(--status-warning-muted-foreground))]">
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/5 border border-destructive/20">
+            <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+            <p className="text-sm text-destructive/90">
               This session has no template assigned. Choose a template before generating case notes.
             </p>
           </div>
@@ -383,47 +521,147 @@ export default function CaseNotes() {
             {/* Source Notes */}
             <Card className="border border-border shadow-none">
               <CardHeader className="pb-2 pt-4 px-4">
-                <CardTitle className="text-sm font-medium text-foreground">Source Notes</CardTitle>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm font-medium text-foreground">Source Notes</CardTitle>
+                  {/* Segmented toggle */}
+                  <div className="flex items-center rounded-md border border-border overflow-hidden">
+                    <button
+                      className={cn(
+                        "px-3 py-1 text-xs font-medium transition-colors",
+                        inputMode === "paste"
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-background text-muted-foreground hover:text-foreground"
+                      )}
+                      onClick={() => setInputMode("paste")}
+                    >
+                      Paste notes
+                    </button>
+                    <button
+                      className={cn(
+                        "px-3 py-1 text-xs font-medium transition-colors border-l border-border",
+                        inputMode === "upload"
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-background text-muted-foreground hover:text-foreground"
+                      )}
+                      onClick={() => setInputMode("upload")}
+                    >
+                      Upload file
+                    </button>
+                  </div>
+                </div>
               </CardHeader>
               <CardContent className="px-4 pb-4 space-y-3">
-                <div>
-                  <Textarea
-                    placeholder="Bullets, rough notes, transcripts, or observations…"
-                    className="min-h-[160px] text-sm resize-y"
-                    value={form.rawNotes}
-                    onChange={(e) => updateField("rawNotes", e.target.value)}
-                  />
-                  <div className="flex items-center justify-between mt-1.5">
-                    <p className="text-xs text-muted-foreground">
-                      Paste unstructured notes. We'll extract factual answers for the template.
-                    </p>
-                    <span className={cn("text-xs tabular-nums", notesTooShort ? "text-destructive" : "text-muted-foreground")}>
-                      {form.rawNotes.trim().length}
-                    </span>
+                {inputMode === "paste" ? (
+                  <div>
+                    <Textarea
+                      placeholder="Paste raw notes, bullets, or transcript excerpts…"
+                      className="min-h-[160px] text-sm resize-y"
+                      value={form.rawNotes}
+                      onChange={(e) => updateField("rawNotes", e.target.value)}
+                    />
+                    <div className="flex items-center justify-between mt-1.5">
+                      <p className="text-xs text-muted-foreground">
+                        Paste unstructured notes. We'll extract factual answers for the template.
+                      </p>
+                      <span
+                        className={cn(
+                          "text-xs tabular-nums",
+                          notesTooShort ? "text-destructive" : "text-muted-foreground"
+                        )}
+                      >
+                        {form.rawNotes.trim().length}
+                      </span>
+                    </div>
+                    {notesTooShort && inputMode === "paste" && (
+                      <p className="text-xs text-destructive mt-1">
+                        Minimum {MIN_NOTES_LENGTH} characters required
+                      </p>
+                    )}
                   </div>
-                  {notesTooShort && (
-                    <p className="text-xs text-destructive mt-1">
-                      Minimum {MIN_NOTES_LENGTH} characters required
-                    </p>
-                  )}
-                </div>
+                ) : (
+                  /* Upload mode */
+                  <div>
+                    {!uploadedFile ? (
+                      <div
+                        className="border-2 border-dashed border-border rounded-lg p-8 text-center hover:border-primary/40 transition-colors cursor-pointer"
+                        onClick={() => fileInputRef.current?.click()}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={handleDrop}
+                      >
+                        <Upload className="h-6 w-6 mx-auto text-muted-foreground/60 mb-2" />
+                        <p className="text-sm text-muted-foreground">
+                          Drag & drop or choose a file
+                        </p>
+                        <p className="text-xs text-muted-foreground/70 mt-1">
+                          .txt, .md, .pdf, .docx
+                        </p>
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept={ACCEPTED_EXTENSIONS}
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) handleFileSelect(f);
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <div className="border border-border rounded-lg p-4 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-foreground truncate">
+                                {uploadedFile.name}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {formatFileSize(uploadedFile.size)}
+                              </p>
+                            </div>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 shrink-0"
+                            onClick={removeFile}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
 
-                <div className="space-y-2">
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                    <Checkbox
-                      checked={form.containsIdentifiers}
-                      onCheckedChange={(v) => updateField("containsIdentifiers", !!v)}
-                    />
-                    Notes include sensitive identifiers (names/addresses)
-                  </label>
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                    <Checkbox
-                      checked={form.keepQuotes}
-                      onCheckedChange={(v) => updateField("keepQuotes", !!v)}
-                    />
-                    Keep quotes verbatim where possible
-                  </label>
-                </div>
+                        {uploadedFile.status === "reading" && (
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            {uploadedFile.mime === "text/plain" || uploadedFile.name.endsWith(".md")
+                              ? "Reading file…"
+                              : "Uploading…"}
+                          </div>
+                        )}
+                        {uploadedFile.status === "ready" && (
+                          <p className="text-xs text-primary">
+                            <CheckCircle2 className="h-3 w-3 inline mr-1" />
+                            Text extracted — ready to generate
+                          </p>
+                        )}
+                        {uploadedFile.status === "uploaded" && (
+                          <p className="text-xs text-muted-foreground">
+                            <CheckCircle2 className="h-3 w-3 inline mr-1 text-primary" />
+                            Uploaded — text extraction will run server-side
+                          </p>
+                        )}
+                        {uploadedFile.status === "error" && (
+                          <p className="text-xs text-destructive">
+                            Upload failed. Please try again.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    <p className="text-xs text-muted-foreground mt-2">
+                      We'll extract text and use it as your source notes.
+                    </p>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -487,15 +725,13 @@ export default function CaseNotes() {
               </CardContent>
             </Card>
 
-            {/* Compliance */}
+            {/* Permission & Compliance */}
             <Card className="border border-border shadow-none bg-muted/30">
               <CardContent className="px-4 py-3">
                 <div className="flex items-start gap-2.5">
                   <ShieldCheck className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-                  <div className="space-y-2">
-                    <p className="text-xs text-muted-foreground">
-                      Generated notes will be saved to this session.
-                    </p>
+                  <div className="space-y-2 flex-1">
+                    <p className="text-xs font-medium text-foreground">Permission & Compliance</p>
                     <label className="flex items-center gap-2 text-xs text-foreground cursor-pointer">
                       <Checkbox
                         checked={form.permissionConfirmed}
@@ -503,6 +739,14 @@ export default function CaseNotes() {
                       />
                       I confirm I have permission to process these notes.
                     </label>
+                    <p className="text-xs text-muted-foreground">
+                      Required to generate notes. Logged for audit.
+                    </p>
+                    {permissionError && !form.permissionConfirmed && (
+                      <p className="text-xs text-destructive">
+                        Confirmation required.
+                      </p>
+                    )}
                   </div>
                 </div>
               </CardContent>
@@ -524,7 +768,7 @@ export default function CaseNotes() {
               <Button
                 size="sm"
                 className="gap-1.5"
-                disabled={!canGenerate || hasTemplate === false}
+                disabled={!canGenerate && form.permissionConfirmed}
                 onClick={handleGenerate}
               >
                 {status === "generating" ? (
