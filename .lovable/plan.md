@@ -1,26 +1,28 @@
 
 
-## Add Tour Steps for Tool Completion, Session History Statuses, and Search Bar
+## Problem
 
-### Changes
+The "Generate Case Notes" button is disabled because **no source notes are present** (the notes text is empty or under 20 characters). The permission checkbox is only one of several requirements. The button needs all of these to be true:
 
-**1. `src/components/tour/tour-steps.ts`** — Add/update 3 steps in `caseworkerTour`:
+1. Notes text >= 20 characters (`notesReady`)
+2. Permission checkbox checked (`permissionConfirmed`)
+3. Not currently generating
+4. Session has a template assigned
 
-- **Update "Close a session" step** (step index 3): Revise description to explain that once both tools (Guidance + Reviewer) are used, the session status changes to "Done" (shown as tool progress 2/2), and that closing gives two outcomes: "Completed" (both tools used) or "Closed early" (not all tools used).
+The real issue is **missing feedback** — there's no indication of what's still needed beyond the permission checkbox.
 
-- **Update "Session History" step** (step index 5): Revise description to mention that sessions appear here as either "Completed" or "Closed early" depending on tool usage at time of closing.
+## Plan
 
-- **Add new "Search" step**: Insert a step (after "Start a new session", as step index 1) anchored to a `dashboard-search` data-tour attribute. Title: "Search across dashboard". Description explains it filters all three columns in real-time by keyword.
+### 1. Add a disabled-reason hint below the Generate button
 
-**2. `src/components/layout/Header.tsx`** — Add `data-tour="dashboard-search"` to the search input container so the tour can anchor to it.
+When the button is disabled, show a small muted-text line explaining what's still needed:
+- "Enter at least 20 characters of source notes" (if `notesReady` is false)
+- "Confirm permission above" (if `permissionConfirmed` is false)
+- "Assign a template to this session first" (if `hasTemplate === false`)
 
-### Updated step order
+This keeps the UI calm but gives the user clear guidance on what to do next. Only show the first unmet condition.
 
-1. Start a new session (`create-session`)
-2. Search across dashboard (`dashboard-search`) — **NEW**
-3. Generate Guidance (`guidance-button`)
-4. Run Reviewer (`reviewer-button`)
-5. Close a session (`close-session`) — **UPDATED text**
-6. Derived Signals (`derived-signals`)
-7. Session History (`session-history`) — **UPDATED text**
+### 2. File change
+
+**`src/pages/CaseNotes.tsx`** — Add a small helper text block below the Generate button (around line 772) that conditionally renders a hint when `!canGenerate`.
 
