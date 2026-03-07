@@ -238,6 +238,7 @@ Deno.serve(async (req) => {
         template_version: resolvedTemplateVersion,
         result: "success",
         source: uploadFile ? "upload" : "existing",
+        extraction_status: uploadFile ? (templateContent ? "ready" : "pending") : "ready",
       },
     });
 
@@ -251,6 +252,7 @@ Deno.serve(async (req) => {
         id: resolvedTemplateId,
         name: resolvedTemplateName,
         version: resolvedTemplateVersion,
+        extraction_status: uploadFile ? (templateContent ? "ready" : "pending") : "ready",
       },
     });
   } catch (e) {
