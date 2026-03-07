@@ -57,27 +57,7 @@ export default function KbBulkUploadPage() {
     tenant?.tenantId ?? null
   );
   const inputRef = useRef<HTMLInputElement>(null);
-  const [kicking, setKicking] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
-
-  const handleFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
-    enqueueFiles(files);
-    if (inputRef.current) inputRef.current.value = "";
-  };
-
-  const handleKick = async () => {
-    setKicking(true);
-    try {
-      const result = await kickExtractor();
-      toast(result.ok ? "Extractor kicked ✓" : `Kick failed: ${result.detail}`);
-    } catch {
-      toast.error("Kick failed unexpectedly");
-    } finally {
-      setKicking(false);
-    }
-  };
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
