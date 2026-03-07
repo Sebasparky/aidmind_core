@@ -351,6 +351,15 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                       Reviewer
                       {usage.reviewerUsed && <Check className="h-3 w-3 ml-0.5" />}
                     </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 text-xs"
+                      onClick={() => setCaseNotesSession(session)}
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      Case Notes
+                    </Button>
                     
                     <div className="ml-auto">
                       <TooltipProvider>
