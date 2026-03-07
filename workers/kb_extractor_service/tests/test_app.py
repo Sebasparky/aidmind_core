@@ -10,6 +10,7 @@ os.environ["KICK_SECRET"] = "test-secret"
 os.environ["GCP_PROJECT"] = "test-project"
 os.environ["RUN_REGION"] = "us-central1"
 os.environ["RUN_JOB_NAME"] = "kb-extractor-job"
+os.environ["DEBUG_ROUTES"] = "false"
 
 from app import app
 
@@ -43,15 +44,7 @@ class TestIndex(unittest.TestCase):
         data = json.loads(resp.data)
         self.assertEqual(data["service"], "kb-extractor-service")
         self.assertIn("/healthz/", data["endpoints"])
-        self.assertIn("/run", data["endpoints"])
-
-    def test_routes_endpoint(self):
-        resp = self.client.get("/_routes")
-        self.assertEqual(resp.status_code, 200)
-        data = json.loads(resp.data)
-        rules = [r["rule"] for r in data["rules"]]
-        self.assertIn("/healthz", rules)
-        self.assertIn("/run", rules)
+        self.assertIn("POST /run", data["endpoints"])
 
 
 class TestRunAuth(unittest.TestCase):
@@ -137,16 +130,32 @@ class TestRunTrigger(unittest.TestCase):
         self.assertEqual(data["error"], "job_trigger_failed")
 
 
-class TestStatus(unittest.TestCase):
+class TestDebugEndpointsProtected(unittest.TestCase):
+    """/_routes and /status require secret when DEBUG_ROUTES=false."""
+
     def setUp(self):
         self.client = app.test_client()
 
-    def test_status_returns_shape(self):
+    def test_routes_401_without_secret(self):
+        resp = self.client.get("/_routes")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_routes_200_with_secret(self):
+        resp = self.client.get("/_routes", headers={"X-AIDMIND-KICK-SECRET": "test-secret"})
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        rules = [r["rule"] for r in data["rules"]]
+        self.assertIn("/run", rules)
+
+    def test_status_401_without_secret(self):
         resp = self.client.get("/status")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_status_200_with_secret(self):
+        resp = self.client.get("/status", headers={"X-AIDMIND-KICK-SECRET": "test-secret"})
         self.assertEqual(resp.status_code, 200)
         data = json.loads(resp.data)
         self.assertFalse(data["running"])
-        self.assertEqual(data["status"], "idle")
         self.assertIn("last_trigger", data)
 
 

@@ -27,19 +27,37 @@ Jobs API, and returns immediately.
 
 ## Endpoints
 
-| Method | Path        | Description                                |
-| ------ | ----------- | ------------------------------------------ |
-| POST   | `/run`      | Trigger Cloud Run Job (returns 202)        |
-| GET    | `/status`   | Last trigger attempt info                  |
-| GET    | `/healthz/` | Health check (canonical)                   |
-| GET    | `/`         | Service info + registered endpoints        |
-| GET    | `/_routes`  | Debug: full Flask route map                |
+| Method | Path        | Auth          | Description                         |
+| ------ | ----------- | ------------- | ----------------------------------- |
+| POST   | `/run`      | Kick secret   | Trigger Cloud Run Job (returns 202) |
+| GET    | `/healthz/` | None          | Health check (canonical)            |
+| GET    | `/`         | None          | Service info + endpoint list        |
+| GET    | `/status`   | Secret / debug| Last trigger attempt info           |
+| GET    | `/_routes`  | Secret / debug| Full Flask route map                |
 
-## Auth
+### Debug endpoint access
 
-`POST /run` requires header `X-AIDMIND-KICK-SECRET` matching the `KICK_SECRET`
-env var. The service itself can be publicly invocable (no IAM auth needed) since
-the kick secret protects the endpoint.
+`/status` and `/_routes` are **protected by default** in production. Access requires either:
+- The `X-AIDMIND-KICK-SECRET` header, **or**
+- Setting env var `DEBUG_ROUTES=true` (development only)
+
+## IAM: Public invocation with secret protection
+
+The Cloud Run service is deployed with `--allow-unauthenticated` so that
+Supabase Edge Functions and Cloud Scheduler can call it without Google IAM
+credentials. **The `/run` endpoint is protected by the `X-AIDMIND-KICK-SECRET`
+header**, not by IAM.
+
+```bash
+# Grant allUsers invoker (required for unauthenticated access)
+gcloud run services add-iam-policy-binding kb-extractor-service \
+  --member="allUsers" \
+  --role="roles/run.invoker" \
+  --region=us-central1
+```
+
+- **401 from the service** = kick secret mismatch
+- **403 from Google** = IAM policy missing (run the command above)
 
 ## Token type
 
@@ -50,9 +68,7 @@ Cloud Run Jobs API. It fetches the token from:
 http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token
 ```
 
-This returns a standard `access_token` that works with Google APIs. The previous
-identity token approach (`/identity?audience=...`) caused 401 UNAUTHENTICATED
-errors from the Jobs API.
+This returns a standard `access_token` that works with Google APIs.
 
 ## Environment Variables
 
@@ -65,12 +81,12 @@ errors from the Jobs API.
 | `RUN_JOB_NAME`             | `kb-extractor-job`               | Cloud Run Job name                     |
 | `RUN_API_BASE`             | `https://run.googleapis.com`     | Run API base URL                       |
 | `RUN_REQUEST_TIMEOUT_SECS` | `5`                              | Timeout for Jobs API call (seconds)    |
+| `DEBUG_ROUTES`             | `false`                          | Expose /status, /_routes without auth  |
 
-## IAM Permissions
+## IAM Permissions for Job Triggering
 
 The service account used by `kb-extractor-service` must have permission to
-run the Cloud Run Job. It needs an **OAuth2 access token** scope (default
-on Compute Engine / Cloud Run), plus the correct IAM role:
+run the Cloud Run Job:
 
 ```bash
 # Grant roles/run.developer (includes permission to run jobs)
@@ -83,6 +99,25 @@ gcloud iam service-accounts add-iam-policy-binding $JOB_SERVICE_ACCOUNT \
   --member="serviceAccount:$SERVICE_ACCOUNT" \
   --role="roles/iam.serviceAccountUser"
 ```
+
+## Cloud Scheduler Failsafe (every 10 minutes)
+
+To ensure the queue always drains even if Supabase Edge kick fails, set up a
+Cloud Scheduler job as a failsafe:
+
+```bash
+gcloud scheduler jobs create http kb-extractor-failsafe \
+  --location=us-central1 \
+  --schedule="*/10 * * * *" \
+  --uri="https://<SERVICE_URL>/run" \
+  --http-method=POST \
+  --headers="X-AIDMIND-KICK-SECRET=<KICK_SECRET>" \
+  --attempt-deadline=30s \
+  --description="Failsafe: kick kb-extractor-service every 10 minutes"
+```
+
+Replace `<SERVICE_URL>` and `<KICK_SECRET>` with actual values (do not commit
+secrets to source control).
 
 ## Build & Deploy
 
@@ -106,14 +141,18 @@ curl -X POST -H "X-AIDMIND-KICK-SECRET: $KICK_SECRET" https://$SERVICE_URL/run
 ```bash
 SERVICE_URL="$(gcloud run services describe kb-extractor-service --region us-central1 --format='value(status.url)')"
 
+# Health check (no auth needed)
 curl -i "$SERVICE_URL/healthz/"
-curl -sS "$SERVICE_URL/_routes"
+
+# Trigger job (requires secret)
 curl -X POST -H "X-AIDMIND-KICK-SECRET: $KICK_SECRET" "$SERVICE_URL/run"
-curl -sS "$SERVICE_URL/status"
+
+# Debug endpoints (require secret in production)
+curl -H "X-AIDMIND-KICK-SECRET: $KICK_SECRET" "$SERVICE_URL/status"
+curl -H "X-AIDMIND-KICK-SECRET: $KICK_SECRET" "$SERVICE_URL/_routes"
 ```
 
 Expected:
 - `/healthz/` returns HTTP 200 + JSON `{"ok": true}`
 - `/run` returns HTTP 202 + JSON with `execution` name
-- `/status` shows last trigger info
-- `/_routes` lists all registered routes
+- `/status` and `/_routes` return 401 without secret, 200 with secret
