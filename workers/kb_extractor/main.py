@@ -42,6 +42,7 @@ from supabase import create_client, Client
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+KB_INGEST_SECRET = os.environ.get("KB_INGEST_SECRET", "")
 STORAGE_BUCKET = os.environ.get("SUPABASE_STORAGE_BUCKET", "kb-documents")
 MAX_JOBS_PER_RUN = int(os.environ.get("MAX_JOBS_PER_RUN", "10"))
 SLEEP_NO_JOB_SECONDS = int(os.environ.get("SLEEP_NO_JOB_SECONDS", "0"))
