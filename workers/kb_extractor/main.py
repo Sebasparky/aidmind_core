@@ -23,14 +23,17 @@ Environment variables:
 
 from __future__ import annotations
 
+import json as json_module
 import logging
 import os
 import socket
 import sys
 import time
 from datetime import datetime, timezone
+from urllib.parse import urljoin
 
 import fitz  # PyMuPDF
+import requests
 from supabase import create_client, Client
 
 # ---------------------------------------------------------------------------
