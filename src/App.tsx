@@ -131,6 +131,11 @@ const App = () => (
                     <Guidance />
                   </RouteGuard>
                 } />
+                <Route path="/sessions/:sessionId/case-notes" element={
+                  <RouteGuard allowedRoles={["caseworker"]}>
+                    <CaseNotes />
+                  </RouteGuard>
+                } />
                 <Route path="/reviewer/:sessionId" element={
                   <RouteGuard allowedRoles={["caseworker"]}>
                     <Reviewer />
