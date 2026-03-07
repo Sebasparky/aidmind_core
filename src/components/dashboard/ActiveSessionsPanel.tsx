@@ -341,6 +341,15 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                       {usage.guidanceUsed && <Check className="h-3 w-3 ml-0.5" />}
                     </Button>
                     <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 text-xs"
+                      onClick={() => navigate(`/sessions/${session.sessionId}/case-notes`)}
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      Case Notes
+                    </Button>
+                    <Button
                       variant={usage.reviewerUsed ? "secondary" : "outline"}
                       size="sm"
                       className="gap-1.5 text-xs"
@@ -350,15 +359,6 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                       <Shield className="h-3.5 w-3.5" />
                       Reviewer
                       {usage.reviewerUsed && <Check className="h-3 w-3 ml-0.5" />}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 text-xs"
-                      onClick={() => setCaseNotesSession(session)}
-                    >
-                      <FileText className="h-3.5 w-3.5" />
-                      Case Notes
                     </Button>
                     
                     <div className="ml-auto">
