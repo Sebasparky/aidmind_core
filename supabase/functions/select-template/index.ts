@@ -27,6 +27,7 @@ Deno.serve(async (req) => {
   let templateVersion: string | undefined;
   let templateName: string | undefined;
   let uploadFile: File | null = null;
+  let templateContent: string | null = null;
 
   const contentType = req.headers.get("content-type") ?? "";
 
@@ -40,6 +41,11 @@ Deno.serve(async (req) => {
     const fileField = form.get("template_upload");
     if (fileField instanceof File && fileField.size > 0) {
       uploadFile = fileField;
+    }
+    // Accept pre-extracted text from client-side PDF parsing
+    const contentField = form.get("template_content")?.toString();
+    if (contentField && contentField.trim().length > 0) {
+      templateContent = contentField.trim();
     }
   } else {
     // JSON path: existing template selection
