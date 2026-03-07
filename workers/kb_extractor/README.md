@@ -141,7 +141,7 @@ gcloud run jobs create kb-extractor \
   --task-timeout 15m \
   --max-retries 0 \
   --set-env-vars "MAX_JOBS_PER_RUN=10,SUPABASE_STORAGE_BUCKET=kb-documents" \
-  --set-secrets "SUPABASE_URL=SUPABASE_URL:latest,SUPABASE_SERVICE_ROLE_KEY=SUPABASE_SERVICE_ROLE_KEY:latest"
+  --set-secrets "SUPABASE_URL=SUPABASE_URL:latest,SUPABASE_SERVICE_ROLE_KEY=SUPABASE_SERVICE_ROLE_KEY:latest,KB_INGEST_SECRET=KB_INGEST_SECRET:latest"
 ```
 
 ### 6. Run the job (drain backlog)
