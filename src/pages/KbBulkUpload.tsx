@@ -49,7 +49,7 @@ const STATUS_CONFIG: Record<string, { label: string; icon: React.ReactNode; clas
   },
 };
 
-const IS_DEV = import.meta.env.DEV;
+
 
 export default function KbBulkUploadPage() {
   const { tenant, loading: tenantLoading } = useTenant();
