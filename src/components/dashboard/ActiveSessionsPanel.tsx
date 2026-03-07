@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { useDashboard } from "@/contexts/DashboardContext";
+import { CaseNotesDrawer } from "./CaseNotesDrawer";
 import {
   AlertDialog,
   AlertDialogAction,
