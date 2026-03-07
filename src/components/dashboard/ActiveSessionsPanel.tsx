@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Sparkles, Shield, Clock, RefreshCw, Check, X, CheckCircle2 } from "lucide-react";
+import { Plus, Sparkles, Shield, Clock, RefreshCw, Check, X, CheckCircle2, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
