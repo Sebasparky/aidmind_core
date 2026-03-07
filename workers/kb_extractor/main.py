@@ -159,6 +159,89 @@ def download_pdf(file_path: str) -> bytes:
 
 
 # ---------------------------------------------------------------------------
+# Indexing — call ingest-kb-text edge function
+# ---------------------------------------------------------------------------
+
+INGEST_MAX_RETRIES = 2
+INGEST_TIMEOUT_SECONDS = 300  # 5 minutes — large docs may need time for embeddings
+
+
+def trigger_ingest_kb_text(doc_id: str, extracted_text: str) -> dict:
+    """Call the ingest-kb-text edge function to chunk, embed, and index.
+
+    Uses service-role key for auth. Retries on transient failures.
+    Returns the parsed JSON response body on success.
+    Raises RuntimeError on permanent failure.
+    """
+    url = urljoin(SUPABASE_URL + "/", "functions/v1/ingest-kb-text")
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+    }
+
+    body = json_module.dumps({
+        "document_id": doc_id,
+        "extracted_text": extracted_text,
+        "overwrite": True,  # safe re-index: deletes old chunks first
+    })
+
+    last_error: str | None = None
+    for attempt in range(1, INGEST_MAX_RETRIES + 1):
+        try:
+            log.info(
+                "ingest-kb-text attempt=%d/%d doc=%s chars=%d",
+                attempt, INGEST_MAX_RETRIES, doc_id, len(extracted_text),
+            )
+            resp = requests.post(
+                url,
+                data=body,
+                headers=headers,
+                timeout=INGEST_TIMEOUT_SECONDS,
+            )
+
+            try:
+                resp_body = resp.json()
+            except Exception:
+                resp_body = {"raw": resp.text[:500]}
+
+            if resp.status_code == 200 and resp_body.get("success"):
+                log.info(
+                    "ingest-kb-text succeeded doc=%s chunks=%s",
+                    doc_id, resp_body.get("chunk_count"),
+                )
+                return resp_body
+
+            # Non-retryable client errors
+            if 400 <= resp.status_code < 500 and resp.status_code != 429:
+                raise RuntimeError(
+                    f"ingest-kb-text returned {resp.status_code}: "
+                    f"{resp_body.get('error', resp.text[:300])}"
+                )
+
+            last_error = (
+                f"ingest-kb-text HTTP {resp.status_code}: "
+                f"{resp_body.get('error', resp.text[:300])}"
+            )
+            log.warning("ingest-kb-text attempt %d failed: %s", attempt, last_error)
+
+        except requests.exceptions.Timeout:
+            last_error = f"ingest-kb-text timeout after {INGEST_TIMEOUT_SECONDS}s"
+            log.warning("ingest-kb-text attempt %d: %s", attempt, last_error)
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            last_error = f"ingest-kb-text request error: {exc}"
+            log.warning("ingest-kb-text attempt %d: %s", attempt, last_error)
+
+        if attempt < INGEST_MAX_RETRIES:
+            time.sleep(2 * attempt)  # simple backoff
+
+    raise RuntimeError(last_error or "ingest-kb-text failed after retries")
+
+
+# ---------------------------------------------------------------------------
 # Extraction (page range)
 # ---------------------------------------------------------------------------
 
