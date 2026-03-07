@@ -40,7 +40,7 @@ const STATUS_CONFIG: Record<string, { label: string; icon: React.ReactNode; clas
   uploaded: {
     label: "Done",
     icon: <CheckCircle2 className="h-3.5 w-3.5" />,
-    className: "text-emerald-600",
+    className: "text-[hsl(var(--status-success))]",
   },
   failed: {
     label: "Failed",
