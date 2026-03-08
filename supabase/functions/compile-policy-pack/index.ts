@@ -236,6 +236,7 @@ interface SelectionState {
 interface SelectionDiagnostics {
   total_raw_matches: number;
   unique_after_id_dedupe: number;
+  filtered_low_info: number;
   final_selected: number;
   hard_skipped_jaccard: number;
   hard_skipped_containment: number;
