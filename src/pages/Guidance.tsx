@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import {
   ArrowLeft,
   Sparkles,
@@ -32,7 +32,12 @@ import { CitationsModal } from "@/components/session/CitationsModal";
 export default function Guidance() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const contentRef = useRef<HTMLDivElement>(null);
+  const actionPanelRef = useRef<HTMLDivElement>(null);
+
+  // Detect if we arrived from template selection/upload
+  const cameFromTemplate = !!(location.state as Record<string, unknown>)?.templateId;
 
   const {
     session,
@@ -46,18 +51,21 @@ export default function Guidance() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [citationsModal, setCitationsModal] = useState<{ citations: string[]; question: string } | null>(null);
 
-  // Scroll to top on initial mount only (fixes post-template-upload scroll issue)
+  // Context-aware scroll: anchor to action panel when arriving from template selection
   const hasScrolled = useRef(false);
   useEffect(() => {
-    if (!hasScrolled.current) {
-      hasScrolled.current = true;
-      // Use requestAnimationFrame to ensure DOM is painted before scrolling
-      requestAnimationFrame(() => {
+    if (hasScrolled.current || loading) return;
+    hasScrolled.current = true;
+
+    const delay = cameFromTemplate ? 400 : 0; // let toast clear first
+    setTimeout(() => {
+      if (cameFromTemplate && actionPanelRef.current) {
+        actionPanelRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+      } else {
         window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
-        contentRef.current?.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
-      });
-    }
-  }, []);
+      }
+    }, delay);
+  }, [loading, cameFromTemplate]);
 
   // ── Helpers ────────────────────────────────────────────────────
   const handleBack = () => navigate("/dashboard");
@@ -328,7 +336,7 @@ export default function Guidance() {
             </div>
 
             {/* ── Right: Output Panel ── */}
-            <div className="lg:col-span-3">
+            <div className="lg:col-span-3" ref={actionPanelRef}>
               {/* No template */}
               {!hasTemplate && runState !== "error" && (
                 <Card className="border-dashed">
