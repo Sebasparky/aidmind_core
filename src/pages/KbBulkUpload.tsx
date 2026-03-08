@@ -6,6 +6,7 @@
 import { useRef, useState, useCallback } from "react";
 import { useKbBulkUploader } from "@/hooks/useKbBulkUploader";
 import { useTenant } from "@/hooks/useTenant";
+import KbDocumentsList from "@/components/kb/KbDocumentsList";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
