@@ -154,6 +154,8 @@ export function useSessionMachine({
   caseLabel,
   clientLabel,
   interactionType,
+  tenantId,
+  userId,
   resumeBundle,
 }: UseSessionMachineProps) {
   const [state, setState] = useState<SessionState>("NEW");
