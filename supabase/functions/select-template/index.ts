@@ -258,6 +258,6 @@ Deno.serve(async (req) => {
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
     console.error("[select-template] error:", message);
-    return json(500, { success: false, error: message, code: "INTERNAL_ERROR" });
+    return json(req, 500, { success: false, error: message, code: "INTERNAL_ERROR" });
   }
 });
