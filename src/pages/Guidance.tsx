@@ -29,6 +29,14 @@ import {
 import { useGuidanceSession } from "@/hooks/useGuidanceSession";
 import { useEyeLogger } from "@/hooks/useEyeLogger";
 import { CitationsModal } from "@/components/session/CitationsModal";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { supabase } from "@/integrations/supabase/client";
 
 export default function Guidance() {
