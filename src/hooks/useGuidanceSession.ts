@@ -25,6 +25,7 @@ export interface GuidanceSessionData {
   guidanceScopeOther: string | null;
   hasPolicyPack: boolean;
   guidanceOutput: GuidanceOutput | null;
+  metadata: Record<string, unknown> | null;
 }
 
 export type GuidanceRunState = "idle" | "running" | "compiling" | "generating" | "success" | "error";
