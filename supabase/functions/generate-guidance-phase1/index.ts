@@ -486,7 +486,7 @@ No text outside JSON.
 
     // ── 7. Post-generation support-strength validation ─────────
     const validatedQuestions: typeof parsed.questions = [];
-    const droppedQuestions: { question: string; reason: string }[] = [];
+    const droppedQuestions: { question: string; reason: string; citationCount: number; details?: Record<string, unknown> }[] = [];
 
     for (const q of parsed.questions) {
       const citedTexts = q.citations
@@ -498,7 +498,12 @@ No text outside JSON.
       if (result.supported) {
         validatedQuestions.push(q);
       } else {
-        droppedQuestions.push({ question: q.question.slice(0, 80), reason: result.reason ?? "unknown" });
+        droppedQuestions.push({
+          question: q.question.slice(0, 100),
+          reason: result.reason ?? "unknown",
+          citationCount: q.citations.length,
+          ...(result.details ? { details: result.details } : {}),
+        });
       }
     }
 
@@ -506,7 +511,9 @@ No text outside JSON.
       `[generate-guidance-phase1] Validation: ${parsed.questions.length} generated → ${validatedQuestions.length} grounded, ${droppedQuestions.length} dropped`
     );
     if (droppedQuestions.length > 0) {
-      console.log("[generate-guidance-phase1] Dropped questions:", JSON.stringify(droppedQuestions));
+      for (const dq of droppedQuestions) {
+        console.log(`[generate-guidance-phase1] DROPPED: reason=${dq.reason} citations=${dq.citationCount} q="${dq.question}"${dq.details ? " details=" + JSON.stringify(dq.details) : ""}`);
+      }
     }
 
     // ── 8. Check if we have enough grounded questions ──────────
