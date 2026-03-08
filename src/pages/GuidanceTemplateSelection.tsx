@@ -221,7 +221,7 @@ export default function GuidanceTemplateSelection() {
 
   // ── Real upload handler ─────────────────────────────────
   const handleUploadClick = () => {
-    if (!selectedTemplate) return;
+    if (!selectedTemplate || isUploading) return;
     if (selectedTemplate.source === "upload") {
       // Show save modal for new uploads
       setShowSaveModal(true);

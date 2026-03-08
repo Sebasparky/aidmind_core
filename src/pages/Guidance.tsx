@@ -47,10 +47,17 @@ export default function Guidance() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [citationsModal, setCitationsModal] = useState<{ citations: string[]; question: string } | null>(null);
 
-  // Scroll to top on mount (fixes post-template-upload scroll issue)
+  // Scroll to top on initial mount only (fixes post-template-upload scroll issue)
+  const hasScrolled = useRef(false);
   useEffect(() => {
-    window.scrollTo(0, 0);
-    contentRef.current?.scrollTo(0, 0);
+    if (!hasScrolled.current) {
+      hasScrolled.current = true;
+      // Use requestAnimationFrame to ensure DOM is painted before scrolling
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+        contentRef.current?.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+      });
+    }
   }, []);
 
   // ── Helpers ────────────────────────────────────────────────────
