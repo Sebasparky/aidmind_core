@@ -177,8 +177,6 @@ export default function KbDocumentsList() {
             {documents.map((doc, i) => {
               const cfg = STATUS_MAP[doc.ingestionStatus] || STATUS_MAP.unknown;
               const canRetry = isRetryable(doc.ingestionStatus);
-              const tenantId = doc.metadata?.ingestion?.tenant_id ||
-                (doc.metadata as any)?.tenant_id;
 
               return (
                 <div
