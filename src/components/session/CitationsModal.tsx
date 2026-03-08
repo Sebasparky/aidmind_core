@@ -50,73 +50,19 @@ export function CitationsModal({ open, onOpenChange, citations, questionText, se
     setSnippets([]);
 
     try {
-      // Get chunk details from compiled_policy_pack_chunks joined with document_chunks and kb_documents
-      // Step 1: Get the policy_pack_id for this session
-      const { data: sessionData, error: sessionError } = await supabase
-        .from("sessions")
-        .select("policy_pack_id")
-        .eq("id", sessionDbId)
-        .maybeSingle();
+      const { data, error: fnError } = await supabase.functions.invoke(
+        "get-citation-details",
+        { body: { session_id: sessionDbId, citation_ids: citations } },
+      );
 
-      if (sessionError) throw sessionError;
-      if (!sessionData?.policy_pack_id) {
-        setError("No policy pack found for this session");
-        return;
-      }
+      if (fnError) throw fnError;
 
-      // Step 2: Get the compiled pack chunks that match our citation IDs
-      const { data: packChunks, error: packError } = await supabase
-        .from("compiled_policy_pack_chunks")
-        .select("chunk_id, chunk_index, document_id, similarity, rank")
-        .eq("compiled_policy_pack_id", sessionData.policy_pack_id)
-        .in("chunk_id", citations);
-
-      if (packError) throw packError;
-
-      if (!packChunks || packChunks.length === 0) {
+      if (!data || (!data.snippets?.length && !data.unresolved?.length)) {
         setError("Citation details could not be resolved");
         return;
       }
 
-      // Step 3: Fetch actual chunk text from document_chunks
-      const chunkIds = packChunks.map(c => c.chunk_id);
-      const { data: docChunks, error: chunkError } = await supabase
-        .from("document_chunks")
-        .select("id, content, document_id, chunk_index")
-        .in("id", chunkIds);
-
-      if (chunkError) throw chunkError;
-
-      // Step 4: Get document titles
-      const docIds = [...new Set(packChunks.map(c => c.document_id))];
-      const { data: docs, error: docError } = await supabase
-        .from("kb_documents")
-        .select("id, title")
-        .in("id", docIds);
-
-      if (docError) throw docError;
-
-      // Build lookup maps
-      const chunkMap = new Map(docChunks?.map(c => [c.id, c]) ?? []);
-      const docMap = new Map(docs?.map(d => [d.id, d.title]) ?? []);
-
-      // Assemble results, ordered by rank
-      const results: SnippetDetail[] = packChunks
-        .sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999))
-        .map(pc => {
-          const chunk = chunkMap.get(pc.chunk_id);
-          return {
-            snippetId: pc.chunk_id,
-            chunkText: chunk?.content ?? "",
-            chunkIndex: chunk?.chunk_index ?? pc.chunk_index,
-            documentId: pc.document_id,
-            documentTitle: docMap.get(pc.document_id) ?? "Unknown document",
-            similarity: pc.similarity,
-            rank: pc.rank,
-          };
-        });
-
-      setSnippets(results);
+      setSnippets(data.snippets ?? []);
     } catch (err) {
       console.error("[CitationsModal] fetch error:", err);
       setError("Failed to load citation details");

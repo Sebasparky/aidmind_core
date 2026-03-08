@@ -44,3 +44,6 @@ verify_jwt = false
 
 [functions.compile-policy-pack]
 verify_jwt = false
+
+[functions.get-citation-details]
+verify_jwt = false
