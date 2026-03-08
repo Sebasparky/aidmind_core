@@ -108,14 +108,11 @@ type ReviewFlag =
   | "partial_qualifier_loss"
   | "low_overlap_but_high_quality_source";
 
-/** Final outcome for each question (4-tier + rewrite variants) */
+/** Final outcome for each question (3-tier) */
 type QuestionOutcome =
   | "pass"
   | "warning"
-  | "rewritten_pass"
-  | "rewritten_warning"
-  | "dropped_hard"
-  | "dropped_after_rewrite_failed";
+  | "dropped_hard";
 
 /** Per-question diagnostic trace */
 interface QuestionTrace {
@@ -123,8 +120,6 @@ interface QuestionTrace {
   support_result: { supported: boolean; reason?: string; details?: Record<string, unknown> };
   style_result: { clientFacing: boolean; reason?: string; details?: Record<string, unknown> };
   specificity_result: { preserved: boolean; score: number; lost_qualifiers: string[] };
-  rewrite_attempted: boolean;
-  rewritten_question?: string;
   final_outcome: QuestionOutcome;
 }
 
