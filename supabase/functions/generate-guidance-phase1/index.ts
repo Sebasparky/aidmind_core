@@ -58,7 +58,11 @@ type DropReason =
   | "low_info_phrases"
   | "weak_structural_support"
   | "weak_topical_overlap"
-  | "unsupported_question_concepts";
+  | "unsupported_question_concepts"
+  | "internal_worker_prompt"
+  | "documentation_only_source"
+  | "policy_jargon_not_transformed"
+  | "classification_or_justification_prompt";
 
 /**
  * Compute structural quality of a snippet (aligned with compile-time computeInfoQuality).
