@@ -29,6 +29,7 @@ import {
 import { useGuidanceSession } from "@/hooks/useGuidanceSession";
 import { useEyeLogger } from "@/hooks/useEyeLogger";
 import { CitationsModal } from "@/components/session/CitationsModal";
+import { supabase } from "@/integrations/supabase/client";
 
 export default function Guidance() {
   const { sessionId } = useParams<{ sessionId: string }>();
