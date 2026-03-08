@@ -175,14 +175,125 @@ function truncateForEmbedding(text: string, maxChars = MAX_QUERY_CHARS): string 
   return text.length <= maxChars ? text : text.slice(0, maxChars);
 }
 
+/* ── Scope-aware retrieval ── */
+
+/**
+ * Domain-specific retrieval terms keyed by guidance_scope value.
+ * These augment retrieval queries so embedding search finds scope-relevant policy.
+ */
+const SCOPE_RETRIEVAL_TERMS: Record<string, string> = {
+  child_welfare:
+    "child welfare, child safety, family services, child protective services, CPS, caregiver assessment, maltreatment, foster care, kinship placement, parenting support, home environment safety, parent-child risk, permanency planning",
+  mental_health:
+    "mental health, behavioral health, psychiatric assessment, symptoms screening, risk assessment, safety planning, treatment history, medications, clinical assessment, crisis intervention, therapy, counseling referral",
+  substance_use:
+    "substance use, substance abuse screening, use patterns, treatment history, withdrawal, medication-assisted treatment, MAT, recovery supports, co-occurring disorders, behavioral health intake, relapse prevention, prior services",
+  social_welfare:
+    "social welfare, public assistance, benefits eligibility, case management, client needs assessment, social services, community resources, supportive services, service coordination",
+  housing_homelessness:
+    "housing, homelessness, housing instability, shelter, transitional housing, permanent supportive housing, eviction prevention, rapid re-housing, housing assessment, barriers to housing",
+  domestic_violence:
+    "domestic violence, intimate partner violence, safety planning, protective orders, survivor services, lethality assessment, power and control, trauma-informed care, shelter services, risk factors",
+  immigration_refugee:
+    "immigration, refugee, asylum, resettlement, cultural adjustment, legal status, language access, immigration services, refugee support, documentation, eligibility verification",
+  employment_income:
+    "employment, income support, job readiness, vocational services, workforce development, employment barriers, financial assistance, benefits, job training, career planning",
+  disability_services:
+    "disability, disability services, accessibility, accommodations, independent living, assistive technology, disability assessment, supported employment, personal care, functional limitations",
+  elder_services:
+    "elder services, aging, senior care, long-term care, caregiver support, elder abuse, geriatric assessment, home and community-based services, Medicare, Medicaid, activities of daily living",
+  reentry_justice:
+    "reentry, criminal justice, reintegration, parole, probation, community supervision, recidivism, transitional services, post-incarceration, justice-involved, barriers to reentry",
+};
+
+/**
+ * Detect whether a template section is broad/generic (low domain-specificity).
+ * Returns 0..1 where 0 = very generic, 1 = highly specific.
+ */
+function computeSectionSpecificity(section: string): number {
+  const lower = section.toLowerCase();
+  const lines = lower.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return 0;
+
+  // Generic field patterns common in broad intake templates
+  const genericPatterns = [
+    /\b(name|address|phone|email|date of birth|dob|ssn|social security)\b/,
+    /\b(contact\s+info|demographics|household|living situation)\b/,
+    /\b(additional\s+notes|comments|other\s+information|general\s+notes)\b/,
+    /\b(services\s+sought|referral\s+source|reason\s+for\s+referral)\b/,
+    /\b(prior\s+history|legal\s+status|current\s+concerns)\b/,
+    /\b(signature|date|form\s+number|page\s+\d)\b/,
+    /\b(emergency\s+contact|marital\s+status|gender|race|ethnicity)\b/,
+  ];
+
+  // Domain-specific patterns that indicate the section itself is already targeted
+  const specificPatterns = [
+    /\b(child\s+safety|maltreatment|foster|placement|CPS|protective\s+services)\b/i,
+    /\b(mental\s+health|psychiatric|behavioral\s+health|symptoms|diagnosis)\b/i,
+    /\b(substance\s+use|withdrawal|MAT|recovery|sobriety|relapse)\b/i,
+    /\b(housing\s+stability|homelessness|shelter|eviction)\b/i,
+    /\b(domestic\s+violence|intimate\s+partner|safety\s+plan|protective\s+order)\b/i,
+    /\b(treatment\s+plan|clinical\s+assessment|risk\s+assessment|safety\s+assessment)\b/i,
+    /\b(eligibility|benefits\s+determination|service\s+authorization)\b/i,
+  ];
+
+  let genericHits = 0;
+  let specificHits = 0;
+
+  for (const p of genericPatterns) {
+    if (p.test(lower)) genericHits++;
+  }
+  for (const p of specificPatterns) {
+    if (p.test(lower)) specificHits++;
+  }
+
+  // Short sections with few prose lines tend to be generic
+  const proseLines = lines.filter((l) => l.length > 50 && /[.,;:?!]/.test(l)).length;
+  const isShortAndStructural = lines.length > 0 && proseLines / lines.length < 0.2;
+
+  if (specificHits >= 2) return 1.0;
+  if (specificHits === 1 && genericHits <= 1) return 0.8;
+  if (genericHits >= 3 || (genericHits >= 2 && isShortAndStructural)) return 0.1;
+  if (genericHits >= 1) return 0.4;
+  if (isShortAndStructural && lines.length < 5) return 0.3;
+
+  return 0.6;
+}
+
 function buildRetrievalQuery(
   section: string,
   guardrails: { jurisdiction?: string; program?: string },
+  scope?: string | null,
 ): string {
   const parts: string[] = [];
   if (guardrails.jurisdiction) parts.push(`Jurisdiction: ${guardrails.jurisdiction}`);
   if (guardrails.program) parts.push(`Program: ${guardrails.program}`);
-  parts.push("Find policy text relevant to completing this section of the template.");
+
+  // Scope-aware query construction
+  const scopeTerms = scope ? SCOPE_RETRIEVAL_TERMS[scope] : null;
+  const specificity = computeSectionSpecificity(section);
+
+  if (scopeTerms) {
+    if (specificity <= 0.3) {
+      // Very broad/generic section → strong scope steering
+      parts.push(
+        `Find policy text relevant to the following intake/assessment section, specifically in the context of ${scopeTerms}.`,
+      );
+    } else if (specificity <= 0.6) {
+      // Moderately broad → moderate scope steering
+      parts.push(
+        `Find policy text relevant to this template section. Domain context: ${scopeTerms}.`,
+      );
+    } else {
+      // Already specific → light scope hint
+      parts.push(
+        `Find policy text relevant to this template section (domain: ${scope?.replace(/_/g, " ")}).`,
+      );
+    }
+  } else {
+    parts.push("Find policy text relevant to completing this section of the template.");
+  }
+
   parts.push(section);
   return truncateForEmbedding(parts.join("\n"));
 }
