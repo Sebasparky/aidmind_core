@@ -216,7 +216,7 @@ export default function KbDocumentsList() {
                       size="sm"
                       className="h-7 px-2 text-xs shrink-0"
                       disabled={retrying === doc.id}
-                      onClick={() => handleRetry(doc.id, tenantId)}
+                      onClick={() => handleRetry(doc.id)}
                     >
                       {retrying === doc.id ? (
                         <Loader2 className="h-3 w-3 animate-spin" />
