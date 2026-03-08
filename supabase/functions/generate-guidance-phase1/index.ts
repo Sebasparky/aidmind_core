@@ -1094,23 +1094,20 @@ No text outside JSON.
     }
 
     const strongCount = validatedQuestions.filter((q) => 
-      q.validation_status === "pass" || q.validation_status === "rewritten_pass"
+      q.validation_status === "pass"
     ).length;
     const warningCount = validatedQuestions.filter((q) => 
-      q.validation_status === "warning" || q.validation_status === "rewritten_warning"
+      q.validation_status === "warning"
     ).length;
 
     console.log(
-      `[generate-guidance-phase1] Validation: ${parsed.questions.length} generated → ${strongCount} strong, ${warningCount} warning, ${droppedQuestions.length} dropped`
-    );
-    console.log(
-      `[generate-guidance-phase1] Rewrite stats: attempts=${rewriteAttemptCount} success=${rewriteSuccessCount} drops=${rewriteDropCount}`
+      `[generate-guidance-phase1] Validation: ${parsed.questions.length} generated → ${strongCount} pass, ${warningCount} warning, ${droppedQuestions.length} dropped`
     );
     console.log(
       `[generate-guidance-phase1] Final status distribution: ${JSON.stringify(finalStatusDistribution)}`
     );
     if (Object.keys(dropReasonCounts).length > 0) {
-      console.log(`[generate-guidance-phase1] Hard/drop reason distribution: ${JSON.stringify(dropReasonCounts)}`);
+      console.log(`[generate-guidance-phase1] Drop reason distribution: ${JSON.stringify(dropReasonCounts)}`);
     }
     if (Object.keys(softFailCounts).length > 0) {
       console.log(`[generate-guidance-phase1] Soft fail distribution (kept): ${JSON.stringify(softFailCounts)}`);
@@ -1147,11 +1144,6 @@ No text outside JSON.
         total_dropped: droppedQuestions.length,
         hard_fail_distribution: dropReasonCounts,
         soft_fail_distribution: softFailCounts,
-        rewrite_stats: {
-          attempts: rewriteAttemptCount,
-          successes: rewriteSuccessCount,
-          drops: rewriteDropCount,
-        },
         final_status_distribution: finalStatusDistribution,
       };
 
@@ -1197,11 +1189,6 @@ No text outside JSON.
       total_dropped: droppedQuestions.length,
       hard_fail_distribution: dropReasonCounts,
       soft_fail_distribution: softFailCounts,
-      rewrite_stats: {
-        attempts: rewriteAttemptCount,
-        successes: rewriteSuccessCount,
-        drops: rewriteDropCount,
-      },
       final_status_distribution: finalStatusDistribution,
     };
 
