@@ -11,7 +11,6 @@ import {
   FileText,
   Pencil,
   ExternalLink,
-  ShieldCheck,
   ShieldAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
