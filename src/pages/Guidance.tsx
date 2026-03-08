@@ -336,7 +336,9 @@ export default function Guidance() {
                 <Card className="border-destructive/30">
                   <CardContent className="py-10 text-center">
                     <AlertTriangle className="h-10 w-10 mx-auto text-destructive/50 mb-4" />
-                    <p className="text-sm text-destructive font-medium mb-1">Generation failed</p>
+                    <p className="text-sm text-destructive font-medium mb-1">
+                      {runError?.step === "compile" ? "Policy pack compilation failed" : "Generation failed"}
+                    </p>
                     <p className="text-xs text-muted-foreground mb-1">{runError?.message}</p>
                     {runError?.code && (
                       <Badge variant="outline" className="text-[10px] font-mono mb-3">
