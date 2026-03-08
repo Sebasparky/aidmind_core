@@ -25,6 +25,11 @@ interface MergedChunk {
 
 const HARD_MAX_TOTAL_CHUNKS = 100;
 
+/* ── Diversity-aware selection constants ── */
+const NEARBY_CHUNK_WINDOW = 1;
+const JACCARD_DUPLICATE_THRESHOLD = 0.75;
+const CONTAINMENT_THRESHOLD = 0.80;
+const MAX_CHUNKS_PER_DOCUMENT = 4;
 /* ── Helpers ── */
 
 // Dynamic CORS headers — set per-request
@@ -92,8 +97,117 @@ function buildRetrievalQuery(
   return truncateForEmbedding(parts.join("\n"));
 }
 
+/* ── Diversity-aware selection helpers ── */
+
+function normalizeText(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function tokenize(text: string): Set<string> {
+  return new Set(normalizeText(text).split(" ").filter(Boolean));
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1;
+  let intersection = 0;
+  for (const t of a) {
+    if (b.has(t)) intersection++;
+  }
+  const union = a.size + b.size - intersection;
+  return union === 0 ? 1 : intersection / union;
+}
+
+function containmentRatio(candidate: Set<string>, existing: Set<string>): number {
+  if (candidate.size === 0) return 1;
+  let contained = 0;
+  for (const t of candidate) {
+    if (existing.has(t)) contained++;
+  }
+  return contained / candidate.size;
+}
+
+interface SelectionDiagnostics {
+  total_raw: number;
+  unique_before_filter: number;
+  final_selected: number;
+  skipped_adjacent: number;
+  skipped_near_duplicate: number;
+  skipped_containment: number;
+  skipped_doc_cap: number;
+}
+
+function selectDiverseChunks(
+  candidates: MergedChunk[],
+  maxTotal: number,
+): MergedChunk[] {
+  const sorted = [...candidates].sort((a, b) => b.similarity - a.similarity);
+
+  const selected: MergedChunk[] = [];
+  const selectedTokenSets: Set<string>[] = [];
+  const docSelectedIndices = new Map<string, number[]>();
+  const docCount = new Map<string, number>();
+
+  const diag: SelectionDiagnostics = {
+    total_raw: sorted.length,
+    unique_before_filter: sorted.length,
+    final_selected: 0,
+    skipped_adjacent: 0,
+    skipped_near_duplicate: 0,
+    skipped_containment: 0,
+    skipped_doc_cap: 0,
+  };
+
+  for (const chunk of sorted) {
+    if (selected.length >= maxTotal) break;
+
+    // Rule E: per-document cap
+    const currentDocCount = docCount.get(chunk.document_id) ?? 0;
+    if (currentDocCount >= MAX_CHUNKS_PER_DOCUMENT) {
+      diag.skipped_doc_cap++;
+      continue;
+    }
+
+    // Rule B: adjacent chunk suppression
+    const docIndices = docSelectedIndices.get(chunk.document_id) ?? [];
+    const isAdjacent = docIndices.some(
+      (idx) => Math.abs(idx - chunk.chunk_index) <= NEARBY_CHUNK_WINDOW,
+    );
+    if (isAdjacent) {
+      diag.skipped_adjacent++;
+      continue;
+    }
+
+    // Rule C & D: text-based dedup
+    const candidateTokens = tokenize(chunk.content);
+    let skipDueToText = false;
+
+    for (const existingTokens of selectedTokenSets) {
+      if (jaccardSimilarity(candidateTokens, existingTokens) >= JACCARD_DUPLICATE_THRESHOLD) {
+        diag.skipped_near_duplicate++;
+        skipDueToText = true;
+        break;
+      }
+      if (containmentRatio(candidateTokens, existingTokens) >= CONTAINMENT_THRESHOLD) {
+        diag.skipped_containment++;
+        skipDueToText = true;
+        break;
+      }
+    }
+    if (skipDueToText) continue;
+
+    selected.push(chunk);
+    selectedTokenSets.push(candidateTokens);
+    docSelectedIndices.set(chunk.document_id, [...docIndices, chunk.chunk_index]);
+    docCount.set(chunk.document_id, currentDocCount + 1);
+  }
+
+  diag.final_selected = selected.length;
+  console.log("[compile-policy-pack] Selection diagnostics:", JSON.stringify(diag));
+
+  return selected;
+}
+
 async function embed(
-  text: string,
   apiKey: string,
   model: string,
 ): Promise<number[]> {
@@ -292,10 +406,11 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Sort by similarity desc and cap
-    const merged = [...chunkMap.values()]
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, max_total_chunks);
+    // Smart diversity-aware chunk selection
+    const merged = selectDiverseChunks(
+      [...chunkMap.values()],
+      max_total_chunks,
+    );
 
     // 7. Update retrieval_runs with results
     const { error: runUpdateErr } = await supabase
