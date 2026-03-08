@@ -52,6 +52,34 @@ const GENERIC_WORDS = new Set([
   "involved", "during", "before", "after", "between", "through", "under",
 ]);
 
+/**
+ * Naive suffix-based stemming for better paraphrase matching.
+ * Strips common English suffixes so "homeless"/"homelessness",
+ * "injury"/"injured"/"injuries", "eviction"/"evicting" match.
+ */
+function naiveStem(word: string): string {
+  if (word.length <= 4) return word;
+  return word
+    .replace(/ness$/, "")
+    .replace(/ment$/, "")
+    .replace(/tion$/, "")
+    .replace(/sion$/, "")
+    .replace(/ies$/, "y")
+    .replace(/ive$/, "")
+    .replace(/ing$/, "")
+    .replace(/ous$/, "")
+    .replace(/ful$/, "")
+    .replace(/able$/, "")
+    .replace(/ible$/, "")
+    .replace(/ity$/, "")
+    .replace(/ally$/, "")
+    .replace(/ed$/, "")
+    .replace(/er$/, "")
+    .replace(/ly$/, "")
+    .replace(/es$/, "")
+    .replace(/s$/, "");
+}
+
 type DropReason =
   | "no_snippet_text"
   | "snippet_too_short"
@@ -80,14 +108,11 @@ type ReviewFlag =
   | "partial_qualifier_loss"
   | "low_overlap_but_high_quality_source";
 
-/** Final outcome for each question (4-tier + rewrite variants) */
+/** Final outcome for each question (3-tier) */
 type QuestionOutcome =
   | "pass"
   | "warning"
-  | "rewritten_pass"
-  | "rewritten_warning"
-  | "dropped_hard"
-  | "dropped_after_rewrite_failed";
+  | "dropped_hard";
 
 /** Per-question diagnostic trace */
 interface QuestionTrace {
@@ -95,8 +120,6 @@ interface QuestionTrace {
   support_result: { supported: boolean; reason?: string; details?: Record<string, unknown> };
   style_result: { clientFacing: boolean; reason?: string; details?: Record<string, unknown> };
   specificity_result: { preserved: boolean; score: number; lost_qualifiers: string[] };
-  rewrite_attempted: boolean;
-  rewritten_question?: string;
   final_outcome: QuestionOutcome;
 }
 
@@ -151,14 +174,29 @@ function computeSnippetSupportQuality(text: string): number {
 const SNIPPET_QUALITY_THRESHOLD = 0.3;
 
 /**
- * Extract meaningful (non-generic) terms from text.
+ * Extract meaningful (non-generic) terms from text, with naive stemming
+ * for better paraphrase recognition.
  */
 function extractMeaningfulTerms(text: string): string[] {
-  return text
+  const raw = text
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, "")
     .split(/\s+/)
     .filter((w) => w.length > 3 && !GENERIC_WORDS.has(w));
+  return raw.map(naiveStem);
+}
+
+/**
+ * Extract meaningful terms WITHOUT stemming (for checking exact qualifier presence).
+ */
+function extractRawTerms(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, "")
+      .split(/\s+/)
+      .filter((w) => w.length > 3 && !GENERIC_WORDS.has(w))
+  );
 }
 
 /**
@@ -548,122 +586,8 @@ function validateSpecificityPreservation(
   };
 }
 
-/* ── Rewrite-before-drop recovery ── */
+/* ── (Rewrite-before-drop layer removed — single-pass validation only) ── */
 
-/**
- * Determines if a question is a rewrite candidate vs unsalvageable.
- * 
- * UNSALVAGEABLE (hard block, never rewrite):
- *   - internal_worker_prompt
- *   - documentation_only_source
- *   - classification_or_justification_prompt
- *   - no_snippet_text, snippet_too_short (nothing to ground against)
- * 
- * REWRITE CANDIDATE:
- *   - specificity_lost (can restore qualifiers)
- *   - policy_jargon_not_transformed (can rephrase to natural language)
- *   - weak_topical_overlap / unsupported_question_concepts (only with high-quality snippet)
- *   - stacked soft fails with decent source quality
- */
-const UNSALVAGEABLE_REASONS: Set<DropReason | string> = new Set([
-  "internal_worker_prompt",
-  "documentation_only_source",
-  "classification_or_justification_prompt",
-  "no_snippet_text",
-  "snippet_too_short",
-  "weak_structural_support",
-]);
-
-function isRewriteCandidate(
-  signals: ValidationSignal[],
-  maxSnippetQuality: number,
-): boolean {
-  const hardFails = signals.filter(s => s.severity === "hard_fail");
-  
-  // If any hard fail is unsalvageable, no rewrite
-  for (const hf of hardFails) {
-    if (UNSALVAGEABLE_REASONS.has(hf.reason ?? "")) return false;
-  }
-  
-  // Remaining hard fails (specificity_lost, policy_jargon_not_transformed) are rewritable
-  // But only if snippet quality is decent
-  if (maxSnippetQuality < 0.4) return false;
-  
-  return true;
-}
-
-/**
- * Attempt a narrow, deterministic rewrite of a question.
- * 
- * This is NOT a free-form creative pass. It is a constrained rewrite that:
- * - Preserves the evidence-backed substance
- * - Restores lost qualifiers from the cited snippets
- * - Translates policy jargon into natural client-facing language
- * - Keeps the question grounded in the same citations
- */
-async function attemptQuestionRewrite(
-  question: string,
-  citedSnippetTexts: string[],
-  lostQualifiers: string[],
-  failReasons: string[],
-): Promise<string | null> {
-  const snippetContext = citedSnippetTexts.map((t, i) => `Snippet ${i + 1}: ${t.slice(0, 500)}`).join("\n\n");
-  
-  const instructions: string[] = [];
-  
-  if (lostQualifiers.length > 0) {
-    instructions.push(`Restore these important qualifiers from the source evidence: ${lostQualifiers.join(", ")}`);
-  }
-  if (failReasons.includes("policy_jargon_not_transformed")) {
-    instructions.push("Rephrase policy/legal jargon into plain, natural language a client would understand.");
-  }
-  if (failReasons.includes("unsupported_question_concepts") || failReasons.includes("weak_topical_overlap")) {
-    instructions.push("Tighten the question to focus specifically on what the cited evidence supports. Remove any concepts not grounded in the snippets.");
-  }
-  
-  if (instructions.length === 0) {
-    instructions.push("Improve the phrasing to be more natural and client-facing while preserving the factual substance.");
-  }
-
-  try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.1,
-      max_tokens: 200,
-      messages: [
-        {
-          role: "system",
-          content: `You are a precise editor. You will receive a draft interview question and the policy evidence it is based on.
-
-Your job is to produce a single improved version of the question. Rules:
-- Output ONLY the rewritten question text, nothing else
-- Keep it as a single question (no multi-part compounds)
-- Use plain, conversational language a caseworker would ask a client face-to-face
-- Preserve the factual substance and evidence grounding
-- Do NOT add new concepts not in the evidence
-- Do NOT make it sound like an internal worker instruction or documentation prompt
-- Do NOT use policy jargon, legal terminology, or compliance language
-- Keep important qualifiers (time windows, severity levels, specific conditions) from the evidence
-
-${instructions.join("\n")}`,
-        },
-        {
-          role: "user",
-          content: `Original question: ${question}\n\nEvidence:\n${snippetContext}`,
-        },
-      ],
-    });
-
-    const rewritten = completion.choices[0]?.message?.content?.trim();
-    if (!rewritten || rewritten.length < 10 || rewritten.length > 300) return null;
-    
-    // Strip any wrapping quotes the model might add
-    return rewritten.replace(/^["']|["']$/g, "").trim();
-  } catch (err) {
-    console.error("[generate-guidance-phase1] Rewrite attempt failed:", err);
-    return null;
-  }
-}
 
 type GroundingCode =
   | "INSUFFICIENT_GROUNDED_SUPPORT"
@@ -993,28 +917,19 @@ No text outside JSON.
       }
     }
 
-    // ── 7. Post-generation validation with rewrite-before-drop ──
+    // ── 7. Post-generation validation (single-pass, no rewrite) ──
     const validatedQuestions: (typeof parsed.questions[0] & {
       validation_status: QuestionOutcome;
       review_flags?: ReviewFlag[];
-      original_question?: string; // set if rewritten
     })[] = [];
     const droppedQuestions: { question: string; reason: string; citationCount: number; details?: Record<string, unknown> }[] = [];
     const dropReasonCounts: Record<string, number> = {};
     const softFailCounts: Record<string, number> = {};
     const questionTraces: QuestionTrace[] = [];
-    
-    // Rewrite diagnostics
-    let rewriteAttemptCount = 0;
-    let rewriteSuccessCount = 0;
-    let rewriteDropCount = 0;
     const finalStatusDistribution: Record<QuestionOutcome, number> = {
       pass: 0,
       warning: 0,
-      rewritten_pass: 0,
-      rewritten_warning: 0,
       dropped_hard: 0,
-      dropped_after_rewrite_failed: 0,
     };
 
     for (const q of parsed.questions) {
@@ -1049,10 +964,14 @@ No text outside JSON.
         });
       }
 
-      // ── Gate C: Specificity preservation (soft fail unless extreme) ──
+      // ── Gate C: Specificity preservation ──
+      // Improved: only hard-fail at catastrophic loss (score < 0.15)
+      // Soft-fail (warning-worthy) only when score < 0.4 (material loss)
+      // Score >= 0.4 with minor qualifier loss → pass with no penalty
       const specResult = validateSpecificityPreservation(q.question, citedTexts);
       if (!specResult.preserved) {
-        if (specResult.score < 0.25) {
+        if (specResult.score < 0.15) {
+          // Catastrophic specificity loss — nearly all qualifiers dropped
           signals.push({
             severity: "hard_fail",
             reason: "specificity_lost",
@@ -1061,7 +980,8 @@ No text outside JSON.
               lost_qualifiers: specResult.lostQualifiers.map((lq) => lq.label),
             },
           });
-        } else {
+        } else if (specResult.score < 0.4) {
+          // Material specificity loss — significant qualifiers missing
           signals.push({
             severity: "soft_fail",
             reason: "specificity_lost",
@@ -1070,8 +990,10 @@ No text outside JSON.
               lost_qualifiers: specResult.lostQualifiers.map((lq) => lq.label),
             },
           });
-          if (specResult.score < 0.5) reviewFlags.push("specificity_soft_fail");
-          else reviewFlags.push("partial_qualifier_loss");
+          reviewFlags.push("specificity_soft_fail");
+        } else {
+          // Minor qualifier loss (score >= 0.4) — not worth penalizing
+          // Just track it for diagnostics, no signal or flag
         }
       }
 
@@ -1093,7 +1015,6 @@ No text outside JSON.
           score: +specResult.score.toFixed(2),
           lost_qualifiers: specResult.lostQualifiers.map(lq => lq.label),
         },
-        rewrite_attempted: false,
         final_outcome: "pass", // will be updated
       };
 
@@ -1101,90 +1022,9 @@ No text outside JSON.
       const hardFails = signals.filter((s) => s.severity === "hard_fail");
       const softFails = signals.filter((s) => s.severity === "soft_fail");
 
-      // Compute snippet quality for rewrite eligibility
-      const qualities = citedTexts.map(computeSnippetSupportQuality);
-      const maxQuality = qualities.length > 0 ? Math.max(...qualities) : 0;
-
-      // ── WOULD-DROP path: try rewrite-before-drop ──
-      const wouldDrop = hardFails.length > 0 || 
-        (softFails.length >= 2 && maxQuality < 0.6);
-
-      if (wouldDrop) {
-        const allReasons = [...hardFails, ...softFails].map(s => s.reason ?? "unknown");
-        
-        // Check if this is a rewrite candidate
-        if (isRewriteCandidate(signals, maxQuality)) {
-          rewriteAttemptCount++;
-          trace.rewrite_attempted = true;
-          
-          const lostQualifierLabels = specResult.lostQualifiers.map(lq => lq.label);
-          const rewritten = await attemptQuestionRewrite(
-            q.question,
-            citedTexts,
-            lostQualifierLabels,
-            allReasons,
-          );
-          
-          if (rewritten) {
-            // Re-validate the rewritten question
-            const rewriteStyleResult = validateClientFacingStyle(rewritten, citedTexts);
-            const rewriteSupportResult = validateQuestionSupport(rewritten, citedTexts);
-            const rewriteSpecResult = validateSpecificityPreservation(rewritten, citedTexts);
-            
-            // Rewritten question must pass style (hard requirement) and not have hard support failures
-            const styleOk = rewriteStyleResult.clientFacing;
-            const supportOk = rewriteSupportResult.supported || 
-              !["no_snippet_text", "snippet_too_short", "weak_structural_support"].includes(rewriteSupportResult.reason ?? "");
-            
-            if (styleOk && supportOk) {
-              rewriteSuccessCount++;
-              trace.rewritten_question = rewritten.slice(0, 200);
-              
-              // Determine if rewritten version gets pass or warning
-              const hasSpecWarning = !rewriteSpecResult.preserved && rewriteSpecResult.score < 0.5;
-              const hasSupportWarning = !rewriteSupportResult.supported;
-              const rewriteOutcome: QuestionOutcome = (hasSpecWarning || hasSupportWarning) 
-                ? "rewritten_warning" : "rewritten_pass";
-              
-              trace.final_outcome = rewriteOutcome;
-              finalStatusDistribution[rewriteOutcome]++;
-              
-              const enrichedQ = {
-                ...q,
-                question: rewritten,
-                original_question: q.question,
-                validation_status: rewriteOutcome,
-                ...(reviewFlags.length > 0 ? { review_flags: reviewFlags } : {}),
-              };
-              
-              validatedQuestions.push(enrichedQ);
-              questionTraces.push(trace);
-              
-              console.log(
-                `[generate-guidance-phase1] REWRITTEN (${rewriteOutcome}): "${q.question.slice(0, 80)}" → "${rewritten.slice(0, 80)}"`
-              );
-              continue;
-            }
-          }
-          
-          // Rewrite failed or didn't pass re-validation
-          rewriteDropCount++;
-          trace.final_outcome = "dropped_after_rewrite_failed";
-          finalStatusDistribution.dropped_after_rewrite_failed++;
-          
-          const reasons = allReasons.join("+");
-          dropReasonCounts[`rewrite_failed`] = (dropReasonCounts[`rewrite_failed`] ?? 0) + 1;
-          droppedQuestions.push({
-            question: q.question.slice(0, 120),
-            reason: `dropped_after_rewrite_failed:${reasons}`,
-            citationCount: q.citations.length,
-          });
-          questionTraces.push(trace);
-          continue;
-        }
-        
-        // Not a rewrite candidate — hard drop
-        const primary = hardFails.length > 0 ? hardFails[0] : softFails[0];
+      // Hard fails always drop
+      if (hardFails.length > 0) {
+        const primary = hardFails[0];
         const reason = primary?.reason ?? "unknown";
         dropReasonCounts[reason] = (dropReasonCounts[reason] ?? 0) + 1;
         trace.final_outcome = "dropped_hard";
@@ -1199,17 +1039,40 @@ No text outside JSON.
         continue;
       }
 
-      // ── PASS path ──
-      // Track soft fail reasons for diagnostics
+      // Soft fails: only drop if multiple soft fails AND snippet quality is genuinely low
+      if (softFails.length >= 2) {
+        const qualities = citedTexts.map(computeSnippetSupportQuality);
+        const maxQuality = qualities.length > 0 ? Math.max(...qualities) : 0;
+        
+        // If snippet quality is decent (>= 0.5), keep with warning instead of dropping
+        if (maxQuality < 0.4) {
+          const primary = softFails[0];
+          const reason = primary?.reason ?? "unknown";
+          dropReasonCounts[reason] = (dropReasonCounts[reason] ?? 0) + 1;
+          trace.final_outcome = "dropped_hard";
+          finalStatusDistribution.dropped_hard++;
+          droppedQuestions.push({
+            question: q.question.slice(0, 120),
+            reason: `stacked_soft_fails:${softFails.map(s => s.reason).join("+")}`,
+            citationCount: q.citations.length,
+          });
+          questionTraces.push(trace);
+          continue;
+        }
+      }
+
+      // ── PASS / WARNING path ──
       for (const sf of softFails) {
         const r = sf.reason ?? "unknown";
         softFailCounts[r] = (softFailCounts[r] ?? 0) + 1;
       }
 
-      const hasSignificantSoftFail = softFails.length >= 2 ||
-        reviewFlags.includes("specificity_soft_fail") ||
-        reviewFlags.includes("weak_support_soft_fail");
-      const validationStatus: QuestionOutcome = hasSignificantSoftFail ? "warning" : "pass";
+      // Warning only for genuinely significant concerns:
+      // - 2+ soft fails (but kept because snippet quality saved them)
+      // - specificity_soft_fail (material qualifier loss, score < 0.4)
+      const hasSignificantConcern = softFails.length >= 2 ||
+        reviewFlags.includes("specificity_soft_fail");
+      const validationStatus: QuestionOutcome = hasSignificantConcern ? "warning" : "pass";
       
       trace.final_outcome = validationStatus;
       finalStatusDistribution[validationStatus]++;
@@ -1231,23 +1094,20 @@ No text outside JSON.
     }
 
     const strongCount = validatedQuestions.filter((q) => 
-      q.validation_status === "pass" || q.validation_status === "rewritten_pass"
+      q.validation_status === "pass"
     ).length;
     const warningCount = validatedQuestions.filter((q) => 
-      q.validation_status === "warning" || q.validation_status === "rewritten_warning"
+      q.validation_status === "warning"
     ).length;
 
     console.log(
-      `[generate-guidance-phase1] Validation: ${parsed.questions.length} generated → ${strongCount} strong, ${warningCount} warning, ${droppedQuestions.length} dropped`
-    );
-    console.log(
-      `[generate-guidance-phase1] Rewrite stats: attempts=${rewriteAttemptCount} success=${rewriteSuccessCount} drops=${rewriteDropCount}`
+      `[generate-guidance-phase1] Validation: ${parsed.questions.length} generated → ${strongCount} pass, ${warningCount} warning, ${droppedQuestions.length} dropped`
     );
     console.log(
       `[generate-guidance-phase1] Final status distribution: ${JSON.stringify(finalStatusDistribution)}`
     );
     if (Object.keys(dropReasonCounts).length > 0) {
-      console.log(`[generate-guidance-phase1] Hard/drop reason distribution: ${JSON.stringify(dropReasonCounts)}`);
+      console.log(`[generate-guidance-phase1] Drop reason distribution: ${JSON.stringify(dropReasonCounts)}`);
     }
     if (Object.keys(softFailCounts).length > 0) {
       console.log(`[generate-guidance-phase1] Soft fail distribution (kept): ${JSON.stringify(softFailCounts)}`);
@@ -1284,11 +1144,6 @@ No text outside JSON.
         total_dropped: droppedQuestions.length,
         hard_fail_distribution: dropReasonCounts,
         soft_fail_distribution: softFailCounts,
-        rewrite_stats: {
-          attempts: rewriteAttemptCount,
-          successes: rewriteSuccessCount,
-          drops: rewriteDropCount,
-        },
         final_status_distribution: finalStatusDistribution,
       };
 
@@ -1334,11 +1189,6 @@ No text outside JSON.
       total_dropped: droppedQuestions.length,
       hard_fail_distribution: dropReasonCounts,
       soft_fail_distribution: softFailCounts,
-      rewrite_stats: {
-        attempts: rewriteAttemptCount,
-        successes: rewriteSuccessCount,
-        drops: rewriteDropCount,
-      },
       final_status_distribution: finalStatusDistribution,
     };
 
