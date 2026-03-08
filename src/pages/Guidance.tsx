@@ -6,19 +6,21 @@ import {
   Loader2,
   Copy,
   Check,
-  RotateCcw,
   BookOpen,
   AlertTriangle,
   FileText,
   Pencil,
   ExternalLink,
+  ShieldCheck,
+  ShieldAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { useState, useCallback } from "react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import {
   type GuidanceQuestion,
@@ -31,6 +33,7 @@ import { CitationsModal } from "@/components/session/CitationsModal";
 export default function Guidance() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const {
     session,
@@ -39,11 +42,16 @@ export default function Guidance() {
     runState,
     runError,
     runGuidance,
-    clearResults,
   } = useGuidanceSession(sessionId);
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [citationsModal, setCitationsModal] = useState<{ citations: string[]; question: string } | null>(null);
+
+  // Scroll to top on mount (fixes post-template-upload scroll issue)
+  useEffect(() => {
+    window.scrollTo(0, 0);
+    contentRef.current?.scrollTo(0, 0);
+  }, []);
 
   // ── Helpers ────────────────────────────────────────────────────
   const handleBack = () => navigate("/dashboard");
@@ -111,9 +119,9 @@ export default function Guidance() {
 
   // ── Derived state ─────────────────────────────────────────────
   const hasTemplate = !!session.templateId;
-  const hasScope = !!session.guidanceScope;
   const output = session.guidanceOutput;
   const scopeLabel = formatScope(session.guidanceScope, session.guidanceScopeOther);
+  const isSuccess = runState === "success" && output && output.questions.length > 0;
 
   // Determine if we should show a specific error banner
   const isTemplateRequired = runError?.code === "TEMPLATE_REQUIRED";
@@ -126,6 +134,38 @@ export default function Guidance() {
       groupedQuestions[cat] = output.questions.filter((q) => q.category === cat);
     }
   }
+
+  // Grounding badge helper
+  const getGroundingBadge = (q: GuidanceQuestion) => {
+    const status = q.validation_status;
+    if (status === "warning") {
+      return (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 border-amber-300/50 text-amber-700 dark:text-amber-400">
+                <ShieldAlert className="h-2.5 w-2.5" />
+                Review grounding
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-[240px]">
+              <p className="text-xs">This question is grounded in policy evidence but may benefit from review against the cited sources.</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      );
+    }
+    // "pass" or unset — show strong grounding
+    if (q.citations.length > 0) {
+      return (
+        <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 border-primary/20 text-primary">
+          <ShieldCheck className="h-2.5 w-2.5" />
+          Strong grounding
+        </Badge>
+      );
+    }
+    return null;
+  };
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -140,7 +180,9 @@ export default function Guidance() {
               <div>
                 <div className="flex items-center gap-2">
                   <Sparkles className="h-5 w-5 text-primary" />
-                  <h1 className="text-xl font-semibold text-foreground">Generate Guidance</h1>
+                  <h1 className="text-xl font-semibold text-foreground">
+                    {isSuccess ? "Guidance Ready" : "Generate Guidance"}
+                  </h1>
                 </div>
                 <p className="text-sm text-muted-foreground">
                   {session.caseLabel}
@@ -169,7 +211,7 @@ export default function Guidance() {
       </header>
 
       {/* ── Content ── */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto" ref={contentRef}>
         <div className="container mx-auto px-6 py-6 max-w-5xl">
           {/* Intent guardrail */}
           <Alert className="mb-6 border-primary/20 bg-primary/5">
@@ -223,13 +265,15 @@ export default function Guidance() {
                           {session.templateName || "Template attached"}
                         </Badge>
                       </div>
-                      <button
-                        onClick={handleChangeTemplate}
-                        className="text-xs text-primary hover:underline flex items-center gap-1"
-                      >
-                        <Pencil className="h-3 w-3" />
-                        Change template
-                      </button>
+                      {!isSuccess && (
+                        <button
+                          onClick={handleChangeTemplate}
+                          className="text-xs text-primary hover:underline flex items-center gap-1"
+                        >
+                          <Pencil className="h-3 w-3" />
+                          Change template
+                        </button>
+                      )}
                     </>
                   ) : (
                     <div className="text-center py-4">
@@ -348,7 +392,6 @@ export default function Guidance() {
                     )}
                     <div>
                       <Button variant="outline" size="sm" className="mt-2" onClick={runGuidance}>
-                        <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
                         Try again
                       </Button>
                     </div>
@@ -357,7 +400,7 @@ export default function Guidance() {
               )}
 
               {/* Insufficient grounding state */}
-              {runState === "success" && output && output.grounding_status === "insufficient" && (
+              {runState === "success" && output && output.grounding_status === "insufficient" && output.questions.length === 0 && (
                 <Card className="border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20">
                   <CardContent className="py-10 text-center">
                     <AlertTriangle className="h-10 w-10 mx-auto text-amber-500/70 mb-4" />
@@ -381,37 +424,27 @@ export default function Guidance() {
                         <Badge variant="outline" className="text-[10px] font-mono">
                           {output.total_generated} generated → {output.total_grounded ?? 0} grounded
                         </Badge>
-                        <Badge variant="outline" className="text-[10px] font-mono text-amber-600">
-                          {output.grounding_reason}
-                        </Badge>
                       </div>
                     )}
-                    {output.questions.length > 0 && (
-                      <p className="text-xs text-muted-foreground italic mb-3">
-                        {output.questions.length} partially grounded question{output.questions.length !== 1 ? "s" : ""} shown below — review with caution.
-                      </p>
-                    )}
-                    <Button variant="outline" size="sm" onClick={runGuidance}>
-                      <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
-                      Try again
-                    </Button>
                   </CardContent>
                 </Card>
               )}
 
               {/* Success — Questions display */}
-              {runState === "success" && output && (output.grounding_status !== "insufficient" || output.questions.length > 0) && (
+              {runState === "success" && output && output.questions.length > 0 && (
                 <div className="space-y-4">
                   {/* Success completion banner */}
-                  {output.grounding_status !== "insufficient" && output.questions.length > 0 && (
-                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-primary/5 border border-primary/15">
-                      <Check className="h-4 w-4 text-primary shrink-0" />
-                      <p className="text-sm text-foreground">
-                        <span className="font-medium">Guidance ready</span>
-                        <span className="text-muted-foreground"> — {output.questions.length} question{output.questions.length !== 1 ? "s" : ""} generated and grounded in your policy pack.</span>
+                  <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-primary/5 border border-primary/15">
+                    <Check className="h-5 w-5 text-primary shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-foreground">Guidance ready</p>
+                      <p className="text-xs text-muted-foreground">
+                        {output.questions.length} question{output.questions.length !== 1 ? "s" : ""} generated and grounded in your policy pack.
+                        {(output.total_grounded_warning ?? 0) > 0 && ` ${output.total_grounded_warning} flagged for review.`}
                       </p>
                     </div>
-                  )}
+                  </div>
+
                   {/* Summary bar */}
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -486,6 +519,8 @@ export default function Guidance() {
                                 <div className="flex-1">
                                   <p className="text-sm text-foreground leading-relaxed">{q.question}</p>
                                   <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                                    {/* Grounding indicator */}
+                                    {getGroundingBadge(q)}
                                     {q.citations.length > 0 && (
                                       <div className="flex items-center gap-1 flex-wrap">
                                         <BookOpen className="h-3 w-3 text-muted-foreground" />
@@ -543,17 +578,11 @@ export default function Guidance() {
             Back to Dashboard
           </Button>
           <div className="flex items-center gap-2">
-            {runState === "success" && output && output.questions.length > 0 ? (
-              <>
-                <Button variant="ghost" size="sm" onClick={() => { clearResults(); }} className="text-muted-foreground text-xs gap-1.5">
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Regenerate
-                </Button>
-                <Button onClick={handleBack}>
-                  <Check className="h-4 w-4 mr-2" />
-                  Done
-                </Button>
-              </>
+            {isSuccess ? (
+              <Button onClick={handleBack}>
+                <Check className="h-4 w-4 mr-2" />
+                Done
+              </Button>
             ) : (
               <Button
                 onClick={runGuidance}

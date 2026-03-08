@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { FileText, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,11 @@ export function SaveTemplateModal({
   saving = false,
 }: SaveTemplateModalProps) {
   const [name, setName] = useState(defaultName);
+
+  // Sync when modal opens with new default
+  useEffect(() => {
+    if (open) setName(defaultName);
+  }, [open, defaultName]);
 
   const handleConfirm = () => {
     const trimmed = name.trim();
