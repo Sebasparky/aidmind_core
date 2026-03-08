@@ -336,7 +336,7 @@ export default function Guidance() {
             </div>
 
             {/* ── Right: Output Panel ── */}
-            <div className="lg:col-span-3">
+            <div className="lg:col-span-3" ref={actionPanelRef}>
               {/* No template */}
               {!hasTemplate && runState !== "error" && (
                 <Card className="border-dashed">

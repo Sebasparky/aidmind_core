@@ -331,17 +331,14 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                   <div className="flex flex-wrap items-center gap-2">
                     {usage.guidanceUsed ? (
                       <Button
-                        variant="secondary"
+                        variant="default"
                         size="sm"
-                        className="gap-1.5 text-xs border border-primary/20 bg-primary/10 text-primary hover:bg-primary/15"
+                        className="gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-0"
                         onClick={() => handleGenerateGuidance(session)}
                         data-tour="guidance-button"
                       >
                         <CheckCircle2 className="h-3.5 w-3.5" />
                         View Guidance
-                        <Badge variant="outline" className="ml-0.5 text-[9px] px-1 py-0 h-4 border-primary/30 text-primary bg-primary/5">
-                          Complete
-                        </Badge>
                       </Button>
                     ) : (
                       <Button
