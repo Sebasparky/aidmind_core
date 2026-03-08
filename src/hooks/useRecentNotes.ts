@@ -11,6 +11,8 @@ export interface RecentNote {
   interactionType: string;
   status: NoteStatus;
   updatedAt: Date;
+  guidanceCompleted: boolean;
+  reviewerCompleted: boolean;
 }
 
 type SessionRow = Tables<"sessions">;
@@ -96,6 +98,14 @@ export function generateTitle(session: SessionRow): string {
 
 // Transform a session row to RecentNote
 function sessionToNote(session: SessionRow): RecentNote {
+  // Derive guidance completion from session metadata written by update_session_guidance_phase1
+  const meta = session.metadata as Record<string, unknown> | null;
+  const gp1 = meta?.guidance_phase1 as Record<string, unknown> | undefined;
+  const guidanceCompleted = !!(gp1 && Array.isArray(gp1.questions) && gp1.questions.length > 0);
+
+  // Derive reviewer completion from review_document_id presence
+  const reviewerCompleted = !!session.review_document_id;
+
   return {
     id: session.id,
     sessionId: session.session_id,
@@ -103,6 +113,8 @@ function sessionToNote(session: SessionRow): RecentNote {
     interactionType: normalizeInteractionType(session.interaction_type),
     status: mapStateToStatus(session),
     updatedAt: new Date(session.updated_at),
+    guidanceCompleted,
+    reviewerCompleted,
   };
 }
 

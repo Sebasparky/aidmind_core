@@ -6,8 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { StartNoteModal } from "./StartNoteModal";
-import { useRecentNotes } from "@/hooks/useRecentNotes";
-import { useSessionToolUsage, getToolUsage } from "@/hooks/useSessionToolUsage";
+import { useRecentNotes, type RecentNote } from "@/hooks/useRecentNotes";
 import { useEyeLogger } from "@/hooks/useEyeLogger";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
@@ -32,6 +31,8 @@ interface ActiveSession {
   interactionType: string;
   lastAccessed: Date;
   createdAt: Date;
+  guidanceCompleted: boolean;
+  reviewerCompleted: boolean;
 }
 
 function formatRelativeTime(date: Date): string {
@@ -84,12 +85,10 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         interactionType: note.interactionType || "Documentation",
         lastAccessed: note.updatedAt,
         createdAt: note.updatedAt,
+        guidanceCompleted: note.guidanceCompleted,
+        reviewerCompleted: note.reviewerCompleted,
       }));
   }, [notes]);
-
-  // Derive tool usage from eye_events
-  const sessionIds = useMemo(() => activeSessions.map((s) => s.sessionId), [activeSessions]);
-  const { usageMap } = useSessionToolUsage(sessionIds);
 
   // Register session IDs into context for cross-panel lookup
   useEffect(() => {
@@ -288,8 +287,8 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         ) : (
           <div className="space-y-3">
             {filteredActiveSessions.map((session) => {
-              const usage = getToolUsage(usageMap, session.sessionId);
-              const allToolsUsed = usage.toolCount >= 2;
+              const toolCount = (session.guidanceCompleted ? 1 : 0) + (session.reviewerCompleted ? 1 : 0);
+              const allToolsUsed = toolCount >= 2;
 
               return (
                 <div
@@ -312,9 +311,9 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                       </p>
                       <Badge 
                         variant="secondary"
-                        className={cn("text-xs shrink-0", getToolsUsedColor(usage.toolCount))}
+                        className={cn("text-xs shrink-0", getToolsUsedColor(toolCount))}
                       >
-                        Tools: {usage.toolCount}/2
+                        Tools: {toolCount}/2
                       </Badge>
                     </div>
                     <div className="flex items-center gap-2 mt-1">
@@ -329,7 +328,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
 
                   {/* Tool actions + session actions */}
                   <div className="flex flex-wrap items-center gap-2">
-                    {usage.guidanceUsed ? (
+                    {session.guidanceCompleted ? (
                       <Button
                         variant="default"
                         size="sm"
@@ -361,7 +360,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                       <FileText className="h-3.5 w-3.5" />
                       Case Notes
                     </Button>
-                    {usage.reviewerUsed ? (
+                    {session.reviewerCompleted ? (
                       <Button
                         variant="default"
                         size="sm"
