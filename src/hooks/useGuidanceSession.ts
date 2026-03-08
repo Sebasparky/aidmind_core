@@ -3,7 +3,8 @@
  *
  * Handles:
  * - Loading session metadata (name, scope, template, existing guidance)
- * - Invoking generate-guidance-phase1 edge function
+ * - Step A: Invoking compile-policy-pack edge function
+ * - Step B: Invoking generate-guidance-phase1 edge function
  * - Polling session for guidance_json after successful generation
  * - Eye event logging for tool runs
  */
@@ -26,11 +27,12 @@ export interface GuidanceSessionData {
   guidanceOutput: GuidanceOutput | null;
 }
 
-export type GuidanceRunState = "idle" | "running" | "success" | "error";
+export type GuidanceRunState = "idle" | "running" | "compiling" | "generating" | "success" | "error";
 
 export interface GuidanceRunError {
   message: string;
   code?: string;
+  step?: "compile" | "generate" | "invoke";
 }
 
 export function useGuidanceSession(sessionId: string | undefined) {
@@ -118,7 +120,7 @@ export function useGuidanceSession(sessionId: string | undefined) {
   }, [fetchSession]);
 
   // ── Poll for guidance output after edge function returns ──────
-  const pollForGuidance = useCallback(async (dbId: string, maxRetries = 6, delayMs = 500): Promise<GuidanceOutput | null> => {
+  const pollForGuidance = useCallback(async (dbId: string, maxRetries = 10, delayMs = 1500): Promise<GuidanceOutput | null> => {
     for (let i = 0; i < maxRetries; i++) {
       await new Promise((r) => setTimeout(r, delayMs));
 
@@ -141,12 +143,17 @@ export function useGuidanceSession(sessionId: string | undefined) {
     return null;
   }, []);
 
-  // ── Run guidance ─────────────────────────────────────────────
+  // ── Run guidance (compile → generate) ───────────────────────
   const runGuidance = useCallback(async () => {
     if (!session) return;
+    if (!session.templateId) {
+      setRunState("error");
+      setRunError({ message: "No template attached to this session. Upload a template first.", code: "TEMPLATE_REQUIRED", step: "compile" });
+      return;
+    }
 
     const requestId = crypto.randomUUID();
-    setRunState("running");
+    setRunState("compiling");
     setRunError(null);
 
     // Eye: tool.run.started
@@ -154,17 +161,70 @@ export function useGuidanceSession(sessionId: string | undefined) {
       eventType: "tool.run.started",
       sessionId: session.sessionId,
       requestId,
-      toolName: "generate_guidance_phase1",
+      toolName: "guidance_pipeline",
     });
 
     try {
+      // ── Step A: Compile policy pack ────────────────────────────
+      // Skip if session already has a policy pack
+      if (!session.hasPolicyPack) {
+        console.log("[useGuidanceSession] Compiling policy pack…");
+
+        const { data: compileResponse, error: compileError } = await supabase.functions.invoke(
+          "compile-policy-pack",
+          {
+            body: {
+              session_id: session.id,
+              template_id: session.templateId,
+              guardrails: {},
+            },
+          }
+        );
+
+        if (compileError) {
+          throw Object.assign(
+            new Error(compileError.message || "Failed to invoke compile-policy-pack"),
+            { step: "compile" as const }
+          );
+        }
+
+        if (compileResponse && !compileResponse.success) {
+          const code = compileResponse.code || "COMPILE_FAILED";
+          const message = compileResponse.error || "Policy pack compilation failed";
+          setRunState("error");
+          setRunError({ message, code, step: "compile" });
+
+          await logEvent({
+            eventType: "tool.run.failed",
+            sessionId: session.sessionId,
+            requestId,
+            result: "failure",
+            toolName: "compile_policy_pack",
+            metadata: { error_code: code },
+          });
+          return;
+        }
+
+        // Update local state to reflect compiled pack
+        setSession((prev) => prev ? { ...prev, hasPolicyPack: true } : prev);
+        console.log("[useGuidanceSession] Policy pack compiled:", compileResponse?.compiled_policy_pack_id);
+      } else {
+        console.log("[useGuidanceSession] Policy pack already exists, skipping compile step");
+      }
+
+      // ── Step B: Generate guidance phase 1 ──────────────────────
+      setRunState("generating");
+
       const { data: response, error } = await supabase.functions.invoke(
         "generate-guidance-phase1",
         { body: { session_id: session.id } }
       );
 
       if (error) {
-        throw new Error(error.message || "Edge function invocation failed");
+        throw Object.assign(
+          new Error(error.message || "Edge function invocation failed"),
+          { step: "generate" as const }
+        );
       }
 
       // Check for structured error responses
@@ -172,7 +232,7 @@ export function useGuidanceSession(sessionId: string | undefined) {
         const code = response.code || "UNKNOWN";
         const message = response.error || "Generation failed";
         setRunState("error");
-        setRunError({ message, code });
+        setRunError({ message, code, step: "generate" });
 
         await logEvent({
           eventType: "tool.run.failed",
@@ -185,7 +245,7 @@ export function useGuidanceSession(sessionId: string | undefined) {
         return;
       }
 
-      // Success — poll for guidance output in session metadata
+      // ── Step C: Poll for guidance output ───────────────────────
       const output = await pollForGuidance(session.id);
 
       if (output) {
@@ -206,6 +266,7 @@ export function useGuidanceSession(sessionId: string | undefined) {
         setRunError({
           message: "Generation completed but results were not saved. Please try again.",
           code: "POLL_TIMEOUT",
+          step: "generate",
         });
 
         await logEvent({
@@ -219,16 +280,18 @@ export function useGuidanceSession(sessionId: string | undefined) {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
+      const step = (err as { step?: string })?.step === "compile" ? "compile" : 
+                   (err as { step?: string })?.step === "generate" ? "generate" : "invoke";
       setRunState("error");
-      setRunError({ message, code: "INVOKE_ERROR" });
+      setRunError({ message, code: "INVOKE_ERROR", step });
 
       await logEvent({
         eventType: "tool.run.failed",
         sessionId: session.sessionId,
         requestId,
         result: "failure",
-        toolName: "generate_guidance_phase1",
-        metadata: { error_code: "INVOKE_ERROR" },
+        toolName: step === "compile" ? "compile_policy_pack" : "generate_guidance_phase1",
+        metadata: { error_code: "INVOKE_ERROR", step },
       });
     }
   }, [session, logEvent, pollForGuidance]);

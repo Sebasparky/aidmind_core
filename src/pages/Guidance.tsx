@@ -316,13 +316,17 @@ export default function Guidance() {
                 </Card>
               )}
 
-              {/* Running */}
-              {runState === "running" && (
+              {/* Running (compiling or generating) */}
+              {(runState === "running" || runState === "compiling" || runState === "generating") && (
                 <Card>
                   <CardContent className="py-16 text-center">
                     <Loader2 className="h-10 w-10 mx-auto text-primary animate-spin mb-4" />
-                    <p className="text-sm text-muted-foreground">Generating questions from policy pack…</p>
-                    <p className="text-xs text-muted-foreground mt-1">This usually takes 10–20 seconds.</p>
+                    <p className="text-sm text-muted-foreground">
+                      {runState === "compiling"
+                        ? "Compiling policy pack from knowledge base…"
+                        : "Generating questions from policy pack…"}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">This usually takes 15–30 seconds.</p>
                   </CardContent>
                 </Card>
               )}
@@ -332,7 +336,9 @@ export default function Guidance() {
                 <Card className="border-destructive/30">
                   <CardContent className="py-10 text-center">
                     <AlertTriangle className="h-10 w-10 mx-auto text-destructive/50 mb-4" />
-                    <p className="text-sm text-destructive font-medium mb-1">Generation failed</p>
+                    <p className="text-sm text-destructive font-medium mb-1">
+                      {runError?.step === "compile" ? "Policy pack compilation failed" : "Generation failed"}
+                    </p>
                     <p className="text-xs text-muted-foreground mb-1">{runError?.message}</p>
                     {runError?.code && (
                       <Badge variant="outline" className="text-[10px] font-mono mb-3">
@@ -486,10 +492,10 @@ export default function Guidance() {
             )}
             <Button
               onClick={runGuidance}
-              disabled={runState === "running" || !hasTemplate}
+              disabled={runState === "running" || runState === "compiling" || runState === "generating" || !hasTemplate}
             >
-              {runState === "running" ? (
-                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Generating…</>
+              {runState === "compiling" || runState === "generating" || runState === "running" ? (
+                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {runState === "compiling" ? "Compiling…" : "Generating…"}</>
               ) : (
                 <><Sparkles className="h-4 w-4 mr-2" /> Generate 12 Questions</>
               )}

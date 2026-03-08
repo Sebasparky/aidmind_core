@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { corsHeaders } from "../_shared/cors.ts";
+import { buildCorsSecurityHeaders } from "../_shared/security-headers.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
 
 /* ── Types ── */
@@ -27,10 +27,13 @@ const HARD_MAX_TOTAL_CHUNKS = 100;
 
 /* ── Helpers ── */
 
+// Dynamic CORS headers — set per-request
+let _corsHeaders: Record<string, string> = {};
+
 function json(status: number, body: Record<string, unknown>) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { ..._corsHeaders, "Content-Type": "application/json" },
   });
 }
 
@@ -119,7 +122,8 @@ async function embed(
 /* ── Main handler ── */
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+  _corsHeaders = buildCorsSecurityHeaders(req);
+  if (req.method === "OPTIONS") return new Response(null, { headers: _corsHeaders });
   if (req.method !== "POST") return json(405, { success: false, error: "Method not allowed" });
 
   const supabase = createClient(
