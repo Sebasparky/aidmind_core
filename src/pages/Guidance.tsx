@@ -511,6 +511,7 @@ export default function Guidance() {
           onOpenChange={(open) => !open && setCitationsModal(null)}
           citations={citationsModal.citations}
           questionText={citationsModal.question}
+          sessionDbId={session.id}
         />
       )}
     </div>
