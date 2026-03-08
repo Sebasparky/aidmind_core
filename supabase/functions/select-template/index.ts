@@ -181,7 +181,7 @@ Deno.serve(async (req) => {
       }
 
       if (!template.is_active) {
-        return json(409, { success: false, error: "Template is not active", code: "TEMPLATE_INACTIVE" });
+        return json(req, 409, { success: false, error: "Template is not active", code: "TEMPLATE_INACTIVE" });
       }
 
       if (template.extraction_status !== "ready") {
