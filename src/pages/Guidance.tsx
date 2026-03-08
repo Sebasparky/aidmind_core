@@ -310,7 +310,7 @@ export default function Guidance() {
                   <CardContent className="py-16 text-center">
                     <Sparkles className="h-10 w-10 mx-auto text-muted-foreground/30 mb-4" />
                     <p className="text-sm text-muted-foreground">
-                      Click <strong>Generate 12 Questions</strong> below to produce interview questions
+                      Click <strong>Generate Questions</strong> below to produce interview questions
                       from your session's policy pack.
                     </p>
                   </CardContent>
