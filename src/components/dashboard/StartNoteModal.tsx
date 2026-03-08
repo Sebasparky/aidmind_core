@@ -90,6 +90,8 @@ export function StartNoteModal({ open, onOpenChange, onSessionCreated }: StartNo
         guidance_scope_other:
           guidanceScope === "other" ? guidanceScopeOther.trim() : null,
         state: "READY_FOR_INPUT",
+        tenant_id: tenant!.tenantId,
+        user_id: user!.id,
       });
 
       if (error) throw error;
