@@ -207,7 +207,7 @@ serve(async (req) => {
       return errJson(409, "NO_TENANT", "Session has no tenant_id");
     }
 
-    reviewDocId = session.review_document_id;
+    reviewDocId = session.review_document_id as string;
 
     // ── 2. Fetch review document ─────────────────────────────────────────
 
