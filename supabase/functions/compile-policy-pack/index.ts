@@ -23,16 +23,32 @@ interface MergedChunk {
   query_indices: number[];
 }
 
-const HARD_MAX_TOTAL_CHUNKS = 100;
+/* ── Hard limits ── */
+const HARD_MAX_TOTAL_CHUNKS = 80;
 
-/* ── Diversity-aware selection constants ── */
-const NEARBY_CHUNK_WINDOW = 1;
-const JACCARD_DUPLICATE_THRESHOLD = 0.75;
-const CONTAINMENT_THRESHOLD = 0.80;
-const MAX_CHUNKS_PER_DOCUMENT = 4;
+/* ── Greedy selector tuning constants ── */
+
+// Weights for the dynamic scoring function
+const W_SIMILARITY = 0.35;
+const W_NOVELTY = 0.30;
+const W_COVERAGE = 0.25;
+const W_DIVERSITY = 0.10;
+
+// Jaccard threshold: chunks above this vs ANY selected chunk get a heavy novelty penalty
+const JACCARD_HARD_SKIP = 0.80;
+// Containment: if >85% of candidate tokens already appear in the union of selected text, hard skip
+const CONTAINMENT_HARD_SKIP = 0.85;
+// Adjacent chunk window for diversity penalty (same document)
+const ADJACENT_WINDOW = 2;
+// Minimum region spacing to get full diversity bonus (same document)
+const IDEAL_REGION_SPACING = 8;
+// Greedy window size: consider this many top-unseen candidates per iteration
+const GREEDY_WINDOW = 6;
+// Safety cap: absolute max chunks from a single document (secondary guardrail only)
+const DOC_SAFETY_CAP = 10;
+
 /* ── Helpers ── */
 
-// Dynamic CORS headers — set per-request
 let _corsHeaders: Record<string, string> = {};
 
 function json(status: number, body: Record<string, unknown>) {
@@ -79,7 +95,7 @@ function chunkTemplate(
   return final;
 }
 
-const MAX_QUERY_CHARS = 12000; // ~3000 tokens safe limit for embedding models
+const MAX_QUERY_CHARS = 12000;
 
 function truncateForEmbedding(text: string, maxChars = MAX_QUERY_CHARS): string {
   return text.length <= maxChars ? text : text.slice(0, maxChars);
@@ -97,7 +113,7 @@ function buildRetrievalQuery(
   return truncateForEmbedding(parts.join("\n"));
 }
 
-/* ── Diversity-aware selection helpers ── */
+/* ── Text analysis helpers ── */
 
 function normalizeText(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
@@ -117,95 +133,331 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
   return union === 0 ? 1 : intersection / union;
 }
 
-function containmentRatio(candidate: Set<string>, existing: Set<string>): number {
+function containmentRatio(candidate: Set<string>, unionSet: Set<string>): number {
   if (candidate.size === 0) return 1;
   let contained = 0;
   for (const t of candidate) {
-    if (existing.has(t)) contained++;
+    if (unionSet.has(t)) contained++;
   }
   return contained / candidate.size;
 }
 
-interface SelectionDiagnostics {
-  total_raw: number;
-  unique_before_filter: number;
-  final_selected: number;
-  skipped_adjacent: number;
-  skipped_near_duplicate: number;
-  skipped_containment: number;
-  skipped_doc_cap: number;
+/* ── Greedy selector ── */
+
+interface SelectionState {
+  selected: MergedChunk[];
+  selectedTokenSets: Set<string>[];
+  // Union of all tokens across selected chunks — for containment check
+  unionTokens: Set<string>;
+  // Per-document: list of selected chunk_indices
+  docIndices: Map<string, number[]>;
+  // Per-document: count of selected chunks
+  docCount: Map<string, number>;
+  // Per-query: how many selected chunks cover this query index
+  queryCoverage: Map<number, number>;
+  // Total number of unique query indices across all candidates
+  totalQueries: number;
 }
 
-function selectDiverseChunks(
-  candidates: MergedChunk[],
-  maxTotal: number,
-): MergedChunk[] {
-  const sorted = [...candidates].sort((a, b) => b.similarity - a.similarity);
+interface SelectionDiagnostics {
+  total_raw_matches: number;
+  unique_after_id_dedupe: number;
+  final_selected: number;
+  hard_skipped_jaccard: number;
+  hard_skipped_containment: number;
+  hard_skipped_doc_cap: number;
+  documents_represented: number;
+  queries_covered: number;
+  queries_total: number;
+  avg_similarity: number;
+}
 
-  const selected: MergedChunk[] = [];
-  const selectedTokenSets: Set<string>[] = [];
-  const docSelectedIndices = new Map<string, number[]>();
-  const docCount = new Map<string, number>();
-
-  const diag: SelectionDiagnostics = {
-    total_raw: sorted.length,
-    unique_before_filter: sorted.length,
-    final_selected: 0,
-    skipped_adjacent: 0,
-    skipped_near_duplicate: 0,
-    skipped_containment: 0,
-    skipped_doc_cap: 0,
+function initState(totalQueries: number): SelectionState {
+  return {
+    selected: [],
+    selectedTokenSets: [],
+    unionTokens: new Set(),
+    docIndices: new Map(),
+    docCount: new Map(),
+    queryCoverage: new Map(),
+    totalQueries,
   };
+}
 
-  for (const chunk of sorted) {
-    if (selected.length >= maxTotal) break;
+/**
+ * Compute novelty score for a candidate against current selection state.
+ * Returns 0..1 where 1 = fully novel, 0 = fully redundant.
+ */
+function computeNovelty(
+  candidateTokens: Set<string>,
+  state: SelectionState,
+): number {
+  if (state.selected.length === 0) return 1;
 
-    // Rule E: per-document cap
-    const currentDocCount = docCount.get(chunk.document_id) ?? 0;
-    if (currentDocCount >= MAX_CHUNKS_PER_DOCUMENT) {
-      diag.skipped_doc_cap++;
-      continue;
-    }
+  // Check containment against union — fast global check
+  const unionContainment = containmentRatio(candidateTokens, state.unionTokens);
+  // Invert: high containment = low novelty
+  const noveltyFromUnion = 1 - unionContainment;
 
-    // Rule B: adjacent chunk suppression
-    const docIndices = docSelectedIndices.get(chunk.document_id) ?? [];
-    const isAdjacent = docIndices.some(
-      (idx) => Math.abs(idx - chunk.chunk_index) <= NEARBY_CHUNK_WINDOW,
-    );
-    if (isAdjacent) {
-      diag.skipped_adjacent++;
-      continue;
-    }
+  // Also check max pairwise Jaccard — catches near-duplicates even if union is large
+  let maxJaccard = 0;
+  for (const existing of state.selectedTokenSets) {
+    const j = jaccardSimilarity(candidateTokens, existing);
+    if (j > maxJaccard) maxJaccard = j;
+  }
+  const noveltyFromJaccard = 1 - maxJaccard;
 
-    // Rule C & D: text-based dedup
-    const candidateTokens = tokenize(chunk.content);
-    let skipDueToText = false;
+  // Take the more conservative (lower) novelty estimate
+  return Math.min(noveltyFromUnion, noveltyFromJaccard);
+}
 
-    for (const existingTokens of selectedTokenSets) {
-      if (jaccardSimilarity(candidateTokens, existingTokens) >= JACCARD_DUPLICATE_THRESHOLD) {
-        diag.skipped_near_duplicate++;
-        skipDueToText = true;
-        break;
-      }
-      if (containmentRatio(candidateTokens, existingTokens) >= CONTAINMENT_THRESHOLD) {
-        diag.skipped_containment++;
-        skipDueToText = true;
-        break;
-      }
-    }
-    if (skipDueToText) continue;
+/**
+ * Compute query coverage gain: how much does this candidate improve
+ * coverage of under-served template queries?
+ * Returns 0..1 where 1 = covers entirely uncovered queries.
+ */
+function computeCoverageGain(
+  queryIndices: number[],
+  state: SelectionState,
+): number {
+  if (queryIndices.length === 0) return 0;
 
-    selected.push(chunk);
-    selectedTokenSets.push(candidateTokens);
-    docSelectedIndices.set(chunk.document_id, [...docIndices, chunk.chunk_index]);
-    docCount.set(chunk.document_id, currentDocCount + 1);
+  let gain = 0;
+  for (const qi of queryIndices) {
+    const currentCoverage = state.queryCoverage.get(qi) ?? 0;
+    // Diminishing returns: first chunk covering a query = 1.0, second = 0.5, third = 0.25, etc.
+    gain += 1 / (1 + currentCoverage);
+  }
+  // Normalize by number of query indices this chunk covers
+  return gain / queryIndices.length;
+}
+
+/**
+ * Compute document-region diversity score.
+ * Rewards chunks that come from regions of a document not yet represented.
+ * Returns 0..1 where 1 = maximally diverse placement.
+ */
+function computeRegionDiversity(
+  docId: string,
+  chunkIndex: number,
+  state: SelectionState,
+): number {
+  const existing = state.docIndices.get(docId);
+  if (!existing || existing.length === 0) return 1; // New document = max diversity
+
+  // Find minimum distance to any already-selected chunk from same document
+  let minDist = Infinity;
+  for (const idx of existing) {
+    const d = Math.abs(chunkIndex - idx);
+    if (d < minDist) minDist = d;
   }
 
-  diag.final_selected = selected.length;
-  console.log("[compile-policy-pack] Selection diagnostics:", JSON.stringify(diag));
+  if (minDist <= ADJACENT_WINDOW) {
+    // Very close = low diversity (but not hard-skipped; scoring handles it)
+    return 0.1;
+  }
 
-  return selected;
+  // Scale linearly up to IDEAL_REGION_SPACING
+  return Math.min(1, minDist / IDEAL_REGION_SPACING);
 }
+
+/**
+ * Compute the dynamic composite score for a candidate chunk.
+ */
+function scoreCandidate(
+  chunk: MergedChunk,
+  candidateTokens: Set<string>,
+  state: SelectionState,
+  maxSimilarity: number,
+): number {
+  // Normalize similarity to 0..1 range relative to the best candidate
+  const simNorm = maxSimilarity > 0 ? chunk.similarity / maxSimilarity : 0;
+
+  const novelty = computeNovelty(candidateTokens, state);
+  const coverage = computeCoverageGain(chunk.query_indices, state);
+  const diversity = computeRegionDiversity(chunk.document_id, chunk.chunk_index, state);
+
+  return (
+    W_SIMILARITY * simNorm +
+    W_NOVELTY * novelty +
+    W_COVERAGE * coverage +
+    W_DIVERSITY * diversity
+  );
+}
+
+/**
+ * Add a chunk to the selection state.
+ */
+function addToState(chunk: MergedChunk, tokens: Set<string>, state: SelectionState): void {
+  state.selected.push(chunk);
+  state.selectedTokenSets.push(tokens);
+
+  // Update union tokens
+  for (const t of tokens) {
+    state.unionTokens.add(t);
+  }
+
+  // Update doc indices
+  const docIdx = state.docIndices.get(chunk.document_id) ?? [];
+  docIdx.push(chunk.chunk_index);
+  state.docIndices.set(chunk.document_id, docIdx);
+
+  // Update doc count
+  state.docCount.set(chunk.document_id, (state.docCount.get(chunk.document_id) ?? 0) + 1);
+
+  // Update query coverage
+  for (const qi of chunk.query_indices) {
+    state.queryCoverage.set(qi, (state.queryCoverage.get(qi) ?? 0) + 1);
+  }
+}
+
+/**
+ * Windowed greedy selector.
+ *
+ * Candidates arrive sorted by base cosine similarity descending.
+ * At each iteration, we look at the next GREEDY_WINDOW unseen candidates,
+ * compute their dynamic scores against the current selected set,
+ * pick the best one, and continue.
+ *
+ * This lets the algorithm skip locally-redundant high-similarity clusters
+ * and reach deeper into the candidate stream for diverse, high-value chunks.
+ */
+function greedySelect(
+  candidates: MergedChunk[],
+  maxTotal: number,
+  totalQueries: number,
+): { selected: MergedChunk[]; diagnostics: SelectionDiagnostics } {
+  // Sort by similarity descending as the base ordering
+  const sorted = [...candidates].sort((a, b) => b.similarity - a.similarity);
+  const maxSimilarity = sorted.length > 0 ? sorted[0].similarity : 1;
+
+  const state = initState(totalQueries);
+
+  const diag: SelectionDiagnostics = {
+    total_raw_matches: 0, // filled by caller
+    unique_after_id_dedupe: sorted.length,
+    final_selected: 0,
+    hard_skipped_jaccard: 0,
+    hard_skipped_containment: 0,
+    hard_skipped_doc_cap: 0,
+    documents_represented: 0,
+    queries_covered: 0,
+    queries_total: totalQueries,
+    avg_similarity: 0,
+  };
+
+  // Pre-tokenize all candidates (one-time cost)
+  const tokenCache = new Map<string, Set<string>>();
+  for (const c of sorted) {
+    tokenCache.set(c.chunk_id, tokenize(c.content));
+  }
+
+  // Track which candidates have been consumed (selected or hard-skipped)
+  const consumed = new Set<string>();
+  // Pointer into the sorted array
+  let pointer = 0;
+
+  while (state.selected.length < maxTotal) {
+    // Gather next window of unconsumed candidates
+    const window: MergedChunk[] = [];
+    let scan = pointer;
+    while (window.length < GREEDY_WINDOW && scan < sorted.length) {
+      const c = sorted[scan];
+      if (!consumed.has(c.chunk_id)) {
+        window.push(c);
+      }
+      scan++;
+    }
+
+    if (window.length === 0) break; // Exhausted all candidates
+
+    // Evaluate each candidate in the window
+    let bestScore = -Infinity;
+    let bestIdx = -1;
+    let bestTokens: Set<string> | null = null;
+    const hardSkipped: string[] = [];
+
+    for (let i = 0; i < window.length; i++) {
+      const chunk = window[i];
+      const tokens = tokenCache.get(chunk.chunk_id)!;
+
+      // Hard skip: document safety cap
+      const docCnt = state.docCount.get(chunk.document_id) ?? 0;
+      if (docCnt >= DOC_SAFETY_CAP) {
+        hardSkipped.push(chunk.chunk_id);
+        diag.hard_skipped_doc_cap++;
+        continue;
+      }
+
+      // Hard skip: near-duplicate (Jaccard)
+      let isNearDupe = false;
+      for (const existing of state.selectedTokenSets) {
+        if (jaccardSimilarity(tokens, existing) >= JACCARD_HARD_SKIP) {
+          isNearDupe = true;
+          break;
+        }
+      }
+      if (isNearDupe) {
+        hardSkipped.push(chunk.chunk_id);
+        diag.hard_skipped_jaccard++;
+        continue;
+      }
+
+      // Hard skip: containment
+      if (state.selected.length > 0 && containmentRatio(tokens, state.unionTokens) >= CONTAINMENT_HARD_SKIP) {
+        hardSkipped.push(chunk.chunk_id);
+        diag.hard_skipped_containment++;
+        continue;
+      }
+
+      // Compute dynamic score
+      const score = scoreCandidate(chunk, tokens, state, maxSimilarity);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = i;
+        bestTokens = tokens;
+      }
+    }
+
+    // Mark hard-skipped candidates as consumed
+    for (const id of hardSkipped) {
+      consumed.add(id);
+    }
+
+    if (bestIdx === -1) {
+      // All candidates in this window were hard-skipped; advance pointer and retry
+      pointer = scan;
+      continue;
+    }
+
+    // Add best candidate to selection
+    const chosen = window[bestIdx];
+    addToState(chosen, bestTokens!, state);
+    consumed.add(chosen.chunk_id);
+
+    // Advance pointer past consumed candidates at the front
+    while (pointer < sorted.length && consumed.has(sorted[pointer].chunk_id)) {
+      pointer++;
+    }
+  }
+
+  // Compute diagnostics
+  diag.final_selected = state.selected.length;
+  diag.documents_represented = state.docIndices.size;
+  diag.queries_covered = state.queryCoverage.size;
+
+  if (state.selected.length > 0) {
+    let simSum = 0;
+    for (const c of state.selected) simSum += c.similarity;
+    diag.avg_similarity = parseFloat((simSum / state.selected.length).toFixed(4));
+  }
+
+  console.log("[compile-policy-pack] Greedy selection diagnostics:", JSON.stringify(diag));
+
+  return { selected: state.selected, diagnostics: diag };
+}
+
+/* ── Embedding helper ── */
 
 async function embed(
   text: string,
@@ -357,8 +609,9 @@ Deno.serve(async (req) => {
     const sections = chunkTemplate(template.content);
     const queries = sections.map((s) => buildRetrievalQuery(s, guardrails));
 
-    // 6. Embed + retrieve per query, merge results
+    // 6. Embed + retrieve per query, merge results by chunk_id
     const chunkMap = new Map<string, MergedChunk>();
+    let totalRawMatches = 0;
 
     for (let qi = 0; qi < queries.length; qi++) {
       const vec = await embed(queries[qi], OPENAI_API_KEY, EMBEDDING_MODEL);
@@ -376,6 +629,7 @@ Deno.serve(async (req) => {
       if (rpcErr) throw new Error(`RPC match_document_chunks failed (query ${qi}): ${rpcErr.message}`);
 
       for (const m of matches ?? []) {
+        totalRawMatches++;
         if (
           m.id == null ||
           m.document_id == null ||
@@ -407,13 +661,16 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Smart diversity-aware chunk selection
-    const merged = selectDiverseChunks(
+    // 7. Greedy diversity-aware chunk selection
+    const { selected: merged, diagnostics } = greedySelect(
       [...chunkMap.values()],
       max_total_chunks,
+      queries.length,
     );
+    diagnostics.total_raw_matches = totalRawMatches;
+    console.log("[compile-policy-pack] Final diagnostics (with raw count):", JSON.stringify(diagnostics));
 
-    // 7. Update retrieval_runs with results
+    // 8. Update retrieval_runs with results
     const { error: runUpdateErr } = await supabase
       .from("retrieval_runs")
       .update({
@@ -426,7 +683,7 @@ Deno.serve(async (req) => {
 
     if (runUpdateErr) throw new Error(`Failed to update retrieval_run: ${runUpdateErr.message}`);
 
-    // 8. Insert compiled_policy_pack
+    // 9. Insert compiled_policy_pack
     const { data: packRow, error: packErr } = await supabase
       .from("compiled_policy_packs")
       .insert({
@@ -438,6 +695,7 @@ Deno.serve(async (req) => {
         metadata: {
           total_queries: queries.length,
           selected_chunk_count: merged.length,
+          selection_diagnostics: diagnostics,
         },
       })
       .select("id")
@@ -446,7 +704,7 @@ Deno.serve(async (req) => {
     if (packErr) throw new Error(`Failed to insert compiled_policy_pack: ${packErr.message}`);
     const compiled_policy_pack_id = packRow.id;
 
-    // 8b. Update session with policy_pack_id
+    // 9b. Update session with policy_pack_id
     const { error: sessionUpdateErr } = await supabase
       .from("sessions")
       .update({ policy_pack_id: compiled_policy_pack_id })
@@ -458,7 +716,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    // 9. Insert compiled_policy_pack_chunks in batches
+    // 10. Insert compiled_policy_pack_chunks in batches
     const chunkRows = merged.map((c, idx) => ({
       compiled_policy_pack_id,
       tenant_id,
@@ -481,7 +739,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    // 10. Log completion
+    // 11. Log completion
     try {
       await logEyeEvent(supabase, {
         session_id,
@@ -493,7 +751,7 @@ Deno.serve(async (req) => {
       console.error("Eye event failed:", err);
     }
 
-    // 11. Build preview (max 240 chars, never full content)
+    // 12. Build preview (max 240 chars, never full content)
     const top_chunks_preview = merged.slice(0, 5).map((c) => ({
       document_id: c.document_id,
       chunk_index: c.chunk_index,
@@ -507,6 +765,7 @@ Deno.serve(async (req) => {
       retrieval_run_id,
       query_count: queries.length,
       selected_chunk_count: merged.length,
+      selection_diagnostics: diagnostics,
       top_chunks_preview,
     });
   } catch (e) {
