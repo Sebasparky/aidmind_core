@@ -45,7 +45,7 @@ function formatRelativeTime(date: Date): string {
   return `${diffDays}d ago`;
 }
 
-export function Header() {
+export function Header({ hideSearch = false }: { hideSearch?: boolean }) {
   const navigate = useNavigate();
   const { guardActive, guardedNavigate } = useNavigationGuard();
   const { searchQuery, setSearchQuery, clearSearch } = useDashboard();
@@ -126,29 +126,33 @@ export function Header() {
           <BookOpen className="h-4 w-4" />
           <span className="hidden sm:inline">Retrieve</span>
         </Button>
-        <div className="h-5 w-px bg-border flex-shrink-0" />
-        <div className="flex-1" data-tour="dashboard-search">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            type="text"
-            placeholder="Search sessions, tools..."
-            className="pl-10 pr-10 h-10 bg-secondary border-border [&::-webkit-search-cancel-button]:hidden"
-            aria-label="Search sessions and tools"
-            value={localSearch}
-            onChange={(e) => setLocalSearch(e.target.value)}
-          />
-          {localSearch && (
-            <button
-              onClick={handleClearSearch}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-              aria-label="Clear search"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-        </div>
+        {!hideSearch && (
+          <>
+            <div className="h-5 w-px bg-border flex-shrink-0" />
+            <div className="flex-1" data-tour="dashboard-search">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  type="text"
+                  placeholder="Search sessions, tools..."
+                  className="pl-10 pr-10 h-10 bg-secondary border-border [&::-webkit-search-cancel-button]:hidden"
+                  aria-label="Search sessions and tools"
+                  value={localSearch}
+                  onChange={(e) => setLocalSearch(e.target.value)}
+                />
+                {localSearch && (
+                  <button
+                    onClick={handleClearSearch}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    aria-label="Clear search"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Right: Activity + User */}
