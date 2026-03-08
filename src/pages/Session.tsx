@@ -4,6 +4,8 @@ import { useSessionMachine, SessionState, ResumeBundle } from "@/hooks/useSessio
 import { useSessionNavigationGuard } from "@/hooks/useSessionNavigationGuard";
 import { useSessionHeartbeat } from "@/hooks/useSessionHeartbeat";
 import { useNavigationGuard } from "@/contexts/NavigationGuardContext";
+import { useAuth } from "@/contexts/AuthContext";
+import { useTenant } from "@/hooks/useTenant";
 import { useDashboard } from "@/contexts/DashboardContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
