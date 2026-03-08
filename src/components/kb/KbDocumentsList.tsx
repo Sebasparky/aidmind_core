@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useKbDocuments, type IngestionStatus } from "@/hooks/useKbDocuments";
 import { supabase } from "@/integrations/supabase/client";
 import { kickExtractor } from "@/lib/kb/kbUploadService";
+import { useTenant } from "@/hooks/useTenant";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
