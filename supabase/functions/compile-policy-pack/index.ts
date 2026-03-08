@@ -207,8 +207,7 @@ function selectDiverseChunks(
   return selected;
 }
 
-
-  text: string,
+async function embed(
   apiKey: string,
   model: string,
 ): Promise<number[]> {
