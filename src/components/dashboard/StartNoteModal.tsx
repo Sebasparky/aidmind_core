@@ -51,6 +51,9 @@ const SCOPE_OPTIONS = [
 ] as const;
 
 export function StartNoteModal({ open, onOpenChange, onSessionCreated }: StartNoteModalProps) {
+  const { user } = useAuth();
+  const { tenant } = useTenant();
+
   const [caseLabel, setCaseLabel] = useState("");
   const [interactionType, setInteractionType] = useState("");
   const [guidanceScope, setGuidanceScope] = useState("");
