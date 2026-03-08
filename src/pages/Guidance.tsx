@@ -67,10 +67,25 @@ export default function Guidance() {
     }, delay);
   }, [loading, cameFromTemplate]);
 
+  const { logEvent } = useEyeLogger();
+
   // ── Helpers ────────────────────────────────────────────────────
   const handleBack = () => navigate("/dashboard");
   const handleChangeTemplate = () => navigate(`/guidance/${sessionId}/template`);
   const handleSelectTemplate = () => navigate(`/guidance/${sessionId}/template`);
+
+  // Done: log explicit GUIDANCE_GENERATED event so dashboard picks it up immediately
+  const handleDone = async () => {
+    if (session) {
+      await logEvent({
+        eventType: "GUIDANCE_GENERATED",
+        sessionId: session.sessionId,
+        result: "success",
+        toolName: "guidance_pipeline",
+      });
+    }
+    navigate("/dashboard");
+  };
 
   const handleCopyQuestion = async (question: string, qId: string) => {
     await navigator.clipboard.writeText(question);
