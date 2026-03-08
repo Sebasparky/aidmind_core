@@ -28,11 +28,12 @@ const HARD_MAX_TOTAL_CHUNKS = 80;
 
 /* ── Greedy selector tuning constants ── */
 
-// Weights for the dynamic scoring function
-const W_SIMILARITY = 0.35;
-const W_NOVELTY = 0.30;
-const W_COVERAGE = 0.25;
-const W_DIVERSITY = 0.10;
+// Weights for the dynamic scoring function (must sum to 1.0)
+const W_SIMILARITY = 0.28;
+const W_NOVELTY = 0.25;
+const W_COVERAGE = 0.20;
+const W_DIVERSITY = 0.07;
+const W_USEFULNESS = 0.20; // evidence usefulness weight
 
 // Jaccard threshold: chunks above this vs ANY selected chunk get a heavy novelty penalty
 const JACCARD_HARD_SKIP = 0.80;
