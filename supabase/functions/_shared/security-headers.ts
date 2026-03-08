@@ -854,7 +854,7 @@ export function buildCorsHeaders(req: Request): Record<string, string> {
     // - authorization: for bearer tokens (used by authenticated endpoints)
     // - x-client-info: Supabase client metadata
     // - apikey: Supabase anon key (not sensitive, publishable)
-    "Access-Control-Allow-Headers": "content-type, authorization, x-client-info, apikey",
+    "Access-Control-Allow-Headers": "content-type, authorization, x-client-info, apikey, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
     "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
     "Access-Control-Max-Age": "86400", // 24 hours preflight cache
     // NOTE: Access-Control-Allow-Credentials is NOT set (default: false)
