@@ -82,7 +82,7 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (sessionErr) throw new Error(`Failed to fetch session: ${sessionErr.message}`);
-    if (!session) return json(404, { success: false, error: "Session not found", code: "SESSION_NOT_FOUND" });
+    if (!session) return json(req, 404, { success: false, error: "Session not found", code: "SESSION_NOT_FOUND" });
 
     const tenantId = session.tenant_id;
     if (!tenantId) return json(400, { success: false, error: "Session has no tenant", code: "NO_TENANT" });
