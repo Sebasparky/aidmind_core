@@ -402,15 +402,36 @@ function greedySelect(
   maxTotal: number,
   totalQueries: number,
 ): { selected: MergedChunk[]; diagnostics: SelectionDiagnostics } {
+  // --- Low-information chunk filtering ---
+  let filteredLowInfo = 0;
+  const qualityCandidates: MergedChunk[] = [];
+  for (const c of candidates) {
+    const iq = computeInfoQuality(c.content);
+    if (iq < INFO_QUALITY_EXCLUDE) {
+      filteredLowInfo++;
+      continue;
+    }
+    // Apply a similarity penalty for borderline chunks
+    if (iq < INFO_QUALITY_PENALTY_THRESHOLD) {
+      qualityCandidates.push({ ...c, similarity: c.similarity * iq });
+    } else {
+      qualityCandidates.push(c);
+    }
+  }
+  if (filteredLowInfo > 0) {
+    console.log(`[compile-policy-pack] Filtered ${filteredLowInfo} low-information chunks`);
+  }
+
   // Sort by similarity descending as the base ordering
-  const sorted = [...candidates].sort((a, b) => b.similarity - a.similarity);
+  const sorted = qualityCandidates.sort((a, b) => b.similarity - a.similarity);
   const maxSimilarity = sorted.length > 0 ? sorted[0].similarity : 1;
 
   const state = initState(totalQueries);
 
   const diag: SelectionDiagnostics = {
     total_raw_matches: 0, // filled by caller
-    unique_after_id_dedupe: sorted.length,
+    unique_after_id_dedupe: candidates.length,
+    filtered_low_info: filteredLowInfo,
     final_selected: 0,
     hard_skipped_jaccard: 0,
     hard_skipped_containment: 0,
