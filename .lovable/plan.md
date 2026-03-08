@@ -1,26 +1,44 @@
 
 
-## Add Tour Steps for Tool Completion, Session History Statuses, and Search Bar
+## Root Cause
+
+The dashboard completion state fails because **`eye_events` has only RESTRICTIVE RLS policies and zero PERMISSIVE policies**. In PostgreSQL RLS, with no permissive policy granting access, all operations are denied by default — even when restrictive policies evaluate to `true`.
+
+This means:
+- The `useEyeLogger` INSERT silently fails (error is caught and swallowed)
+- The `useSessionToolUsage` SELECT returns zero rows every time
+- The dashboard never sees any completion events, regardless of what the Guidance page writes
+
+The entire `eye_events`-based approach for dashboard completion is fundamentally broken for regular caseworker users.
+
+## Solution
+
+**Stop inferring completion from analytics events. Read it directly from session data already being fetched.**
+
+The backend `update_session_guidance_phase1` DB function already writes `metadata.guidance_phase1` (with questions array) into the `sessions` table when guidance succeeds. The `useRecentNotes` hook already fetches `sessions.*` including `metadata`. We just need to surface that data to the dashboard cards.
 
 ### Changes
 
-**1. `src/components/tour/tour-steps.ts`** — Add/update 3 steps in `caseworkerTour`:
+**1. `src/hooks/useRecentNotes.ts`**
+- Add `guidanceCompleted` and `reviewerCompleted` booleans to `RecentNote` interface
+- In `sessionToNote`, derive `guidanceCompleted` from `metadata.guidance_phase1.questions` existing
+- Derive `reviewerCompleted` from `review_document_id` being non-null
 
-- **Update "Close a session" step** (step index 3): Revise description to explain that once both tools (Guidance + Reviewer) are used, the session status changes to "Done" (shown as tool progress 2/2), and that closing gives two outcomes: "Completed" (both tools used) or "Closed early" (not all tools used).
+**2. `src/components/dashboard/ActiveSessionsPanel.tsx`**
+- Remove the `useSessionToolUsage` import and hook call
+- Read `guidanceCompleted` / `reviewerCompleted` directly from each session's note data
+- Keep the existing green "View Guidance" / "View Review" button styling (already looks good)
 
-- **Update "Session History" step** (step index 5): Revise description to mention that sessions appear here as either "Completed" or "Closed early" depending on tool usage at time of closing.
+**3. `src/pages/Guidance.tsx`**
+- Remove the `handleDone` eye event logging (it was silently failing anyway)
+- Simplify `handleDone` to just navigate back to dashboard
+- The completion signal is already persisted by the backend edge function — no client-side write needed
 
-- **Add new "Search" step**: Insert a step (after "Start a new session", as step index 1) anchored to a `dashboard-search` data-tour attribute. Title: "Search across dashboard". Description explains it filters all three columns in real-time by keyword.
+This eliminates the fragile event inference entirely. Completion state is durable, survives refresh, and updates via the existing realtime subscription on the `sessions` table.
 
-**2. `src/components/layout/Header.tsx`** — Add `data-tour="dashboard-search"` to the search input container so the tour can anchor to it.
-
-### Updated step order
-
-1. Start a new session (`create-session`)
-2. Search across dashboard (`dashboard-search`) — **NEW**
-3. Generate Guidance (`guidance-button`)
-4. Run Reviewer (`reviewer-button`)
-5. Close a session (`close-session`) — **UPDATED text**
-6. Derived Signals (`derived-signals`)
-7. Session History (`session-history`) — **UPDATED text**
+### What stays the same
+- All existing UI improvements (toast position, template dedup, scroll behavior, grounding badges)
+- The green emerald "View Guidance" / "View Review" button styling
+- The "Done" button on the Guidance page
+- Eye event logging in `useGuidanceSession` for audit purposes (that uses service_role via edge functions, which works fine)
 
