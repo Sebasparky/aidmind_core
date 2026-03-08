@@ -533,22 +533,29 @@ export default function Guidance() {
             Back to Dashboard
           </Button>
           <div className="flex items-center gap-2">
-            {runState === "success" && output && (
-              <Button variant="outline" onClick={clearResults}>
-                <RotateCcw className="h-4 w-4 mr-2" />
-                Clear
+            {runState === "success" && output && output.questions.length > 0 ? (
+              <>
+                <Button variant="ghost" size="sm" onClick={() => { clearResults(); }} className="text-muted-foreground text-xs gap-1.5">
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Regenerate
+                </Button>
+                <Button onClick={handleBack}>
+                  <Check className="h-4 w-4 mr-2" />
+                  Done
+                </Button>
+              </>
+            ) : (
+              <Button
+                onClick={runGuidance}
+                disabled={runState === "running" || runState === "compiling" || runState === "generating" || !hasTemplate}
+              >
+                {runState === "compiling" || runState === "generating" || runState === "running" ? (
+                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {runState === "compiling" ? "Compiling…" : "Generating…"}</>
+                ) : (
+                  <><Sparkles className="h-4 w-4 mr-2" /> Generate Questions</>
+                )}
               </Button>
             )}
-            <Button
-              onClick={runGuidance}
-              disabled={runState === "running" || runState === "compiling" || runState === "generating" || !hasTemplate}
-            >
-              {runState === "compiling" || runState === "generating" || runState === "running" ? (
-                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {runState === "compiling" ? "Compiling…" : "Generating…"}</>
-              ) : (
-                <><Sparkles className="h-4 w-4 mr-2" /> Generate Questions</>
-              )}
-            </Button>
           </div>
         </div>
       </div>

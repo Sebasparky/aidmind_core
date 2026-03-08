@@ -27,6 +27,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { usePdfTextExtractor } from "@/hooks/usePdfTextExtractor";
 import { useTenant } from "@/hooks/useTenant";
 import { toast } from "sonner";
+import { SaveTemplateModal } from "@/components/session/SaveTemplateModal";
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
 
@@ -61,6 +62,7 @@ export default function GuidanceTemplateSelection() {
   const [scopeLabel, setScopeLabel] = useState<string | null>(null);
   const [dbTemplates, setDbTemplates] = useState<DbTemplate[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(true);
+  const [showSaveModal, setShowSaveModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // PDF text extraction
