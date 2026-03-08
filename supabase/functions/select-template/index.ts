@@ -157,7 +157,7 @@ Deno.serve(async (req) => {
       // ── Existing template selection path ─────────────────────
       const tidResult = validateUuid("template_id", templateId);
       if (!tidResult.ok) {
-        return json(400, { success: false, error: "Invalid template_id format", code: "INVALID_TEMPLATE_ID" });
+        return json(req, 400, { success: false, error: "Invalid template_id format", code: "INVALID_TEMPLATE_ID" });
       }
 
       const { data: template, error: templateErr } = await supabase
