@@ -61,7 +61,7 @@ Deno.serve(async (req) => {
   }
 
   // ── Validate session_id ──────────────────────────────────────
-  if (!sessionId) return json(400, { success: false, error: "session_id is required", code: "SESSION_ID_REQUIRED" });
+  if (!sessionId) return json(req, 400, { success: false, error: "session_id is required", code: "SESSION_ID_REQUIRED" });
 
   const sessionIdResult = validateUuid("session_id", sessionId);
   if (!sessionIdResult.ok) {
