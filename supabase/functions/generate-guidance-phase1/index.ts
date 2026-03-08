@@ -1118,6 +1118,9 @@ No text outside JSON.
           preserved: specResult.preserved,
           score: +specResult.score.toFixed(2),
           lost_qualifiers: specResult.lostQualifiers.map(lq => lq.label),
+          concept_family: specResult.conceptFamily,
+          considered: specResult.consideredQualifiers,
+          ignored: specResult.ignoredQualifiers,
         },
         final_outcome: "pass", // will be updated
       };
