@@ -83,7 +83,7 @@ export default function KbDocumentsList() {
       await supabase
         .from("kb_ingestion_jobs" as any)
         .insert({
-          tenant_id: tenantId,
+          tenant_id: tenant.tenantId,
           kb_document_id: docId,
           status: "queued",
           priority: 60,
