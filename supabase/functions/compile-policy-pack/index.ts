@@ -47,6 +47,80 @@ const GREEDY_WINDOW = 6;
 // Safety cap: absolute max chunks from a single document (secondary guardrail only)
 const DOC_SAFETY_CAP = 10;
 
+/* ── Low-information chunk detection ── */
+
+const LOW_INFO_PHRASES = [
+  "table of contents",
+  "contents page",
+  "list of figures",
+  "list of tables",
+  "list of appendices",
+  "appendix index",
+  "revision history",
+  "document control",
+  "page intentionally left blank",
+];
+
+/**
+ * Compute a low-information penalty score for a chunk.
+ * Returns 0..1 where 0 = definitely low-info (filter out), 1 = high-info (keep).
+ */
+function computeInfoQuality(content: string): number {
+  if (!content || content.trim().length === 0) return 0;
+
+  const text = content.trim();
+  const lower = text.toLowerCase();
+  const totalLen = text.length;
+
+  // 1. Check for known low-info phrases
+  for (const phrase of LOW_INFO_PHRASES) {
+    if (lower.includes(phrase)) return 0.1;
+  }
+
+  // 2. Analyze line structure
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return 0;
+
+  // Count lines that look like headings/section numbers (short, numbered, no sentence structure)
+  const headingPattern = /^(\d+[\.\d]*\s|[-•]\s|[A-Z][A-Z\s]{2,}$|#{1,6}\s|section\s+\d)/i;
+  let headingLines = 0;
+  let shortLines = 0; // lines under 40 chars
+  let proseLines = 0; // lines with at least one sentence-like structure
+
+  for (const line of lines) {
+    if (headingPattern.test(line)) headingLines++;
+    if (line.length < 40) shortLines++;
+    // Prose: contains at least one period, question mark, or comma and is >50 chars
+    if (line.length > 50 && /[.,;:?!]/.test(line)) proseLines++;
+  }
+
+  const headingRatio = headingLines / lines.length;
+  const shortRatio = shortLines / lines.length;
+  const proseRatio = proseLines / lines.length;
+
+  // 3. Mostly headings/section labels = low info
+  if (headingRatio > 0.6 && proseRatio < 0.15) return 0.15;
+
+  // 4. Mostly very short lines with no prose
+  if (shortRatio > 0.75 && proseRatio < 0.1) return 0.2;
+
+  // 5. Very short overall content (under 100 chars of substance)
+  if (totalLen < 100) return 0.3;
+
+  // 6. Low prose density (lots of lines but very few with real sentences)
+  if (lines.length > 5 && proseRatio < 0.1) return 0.35;
+
+  // 7. Moderate quality
+  if (proseRatio < 0.25) return 0.7;
+
+  return 1.0;
+}
+
+// Threshold: chunks with infoQuality below this are excluded entirely
+const INFO_QUALITY_EXCLUDE = 0.2;
+// Chunks between EXCLUDE and this threshold get a similarity penalty
+const INFO_QUALITY_PENALTY_THRESHOLD = 0.5;
+
 /* ── Helpers ── */
 
 let _corsHeaders: Record<string, string> = {};
