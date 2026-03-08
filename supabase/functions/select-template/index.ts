@@ -85,7 +85,7 @@ Deno.serve(async (req) => {
     if (!session) return json(req, 404, { success: false, error: "Session not found", code: "SESSION_NOT_FOUND" });
 
     const tenantId = session.tenant_id;
-    if (!tenantId) return json(400, { success: false, error: "Session has no tenant", code: "NO_TENANT" });
+    if (!tenantId) return json(req, 400, { success: false, error: "Session has no tenant", code: "NO_TENANT" });
 
     // ── 2. Resolve template_id ─────────────────────────────────
     let resolvedTemplateId: string;
