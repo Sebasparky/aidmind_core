@@ -174,14 +174,29 @@ function computeSnippetSupportQuality(text: string): number {
 const SNIPPET_QUALITY_THRESHOLD = 0.3;
 
 /**
- * Extract meaningful (non-generic) terms from text.
+ * Extract meaningful (non-generic) terms from text, with naive stemming
+ * for better paraphrase recognition.
  */
 function extractMeaningfulTerms(text: string): string[] {
-  return text
+  const raw = text
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, "")
     .split(/\s+/)
     .filter((w) => w.length > 3 && !GENERIC_WORDS.has(w));
+  return raw.map(naiveStem);
+}
+
+/**
+ * Extract meaningful terms WITHOUT stemming (for checking exact qualifier presence).
+ */
+function extractRawTerms(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, "")
+      .split(/\s+/)
+      .filter((w) => w.length > 3 && !GENERIC_WORDS.has(w))
+  );
 }
 
 /**
