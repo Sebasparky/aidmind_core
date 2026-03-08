@@ -11,7 +11,6 @@ import {
   FileText,
   Pencil,
   ExternalLink,
-  ShieldCheck,
   ShieldAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -47,10 +46,17 @@ export default function Guidance() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [citationsModal, setCitationsModal] = useState<{ citations: string[]; question: string } | null>(null);
 
-  // Scroll to top on mount (fixes post-template-upload scroll issue)
+  // Scroll to top on initial mount only (fixes post-template-upload scroll issue)
+  const hasScrolled = useRef(false);
   useEffect(() => {
-    window.scrollTo(0, 0);
-    contentRef.current?.scrollTo(0, 0);
+    if (!hasScrolled.current) {
+      hasScrolled.current = true;
+      // Use requestAnimationFrame to ensure DOM is painted before scrolling
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+        contentRef.current?.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+      });
+    }
   }, []);
 
   // ── Helpers ────────────────────────────────────────────────────
@@ -135,10 +141,9 @@ export default function Guidance() {
     }
   }
 
-  // Grounding badge helper
+  // Grounding badge helper — only show warnings, not on every question
   const getGroundingBadge = (q: GuidanceQuestion) => {
-    const status = q.validation_status;
-    if (status === "warning") {
+    if (q.validation_status === "warning") {
       return (
         <TooltipProvider>
           <Tooltip>
@@ -155,15 +160,7 @@ export default function Guidance() {
         </TooltipProvider>
       );
     }
-    // "pass" or unset — show strong grounding
-    if (q.citations.length > 0) {
-      return (
-        <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 border-primary/20 text-primary">
-          <ShieldCheck className="h-2.5 w-2.5" />
-          Strong grounding
-        </Badge>
-      );
-    }
+    // Pass / unset — no badge needed, citations provide traceability
     return null;
   };
 

@@ -103,12 +103,20 @@ export default function GuidanceTemplateSelection() {
         .eq("is_active", true)
         .eq("extraction_status", "ready")
         .order("created_at", { ascending: false })
-        .limit(20);
+        .limit(50);
 
       if (error) {
         console.error("[GuidanceTemplateSelection] Failed to fetch templates:", error);
       } else {
-        setDbTemplates((data as DbTemplate[]) ?? []);
+        // Deduplicate by name — keep the most recent entry for each unique name
+        const seen = new Map<string, DbTemplate>();
+        for (const tpl of (data as DbTemplate[]) ?? []) {
+          const key = tpl.name.trim().toLowerCase();
+          if (!seen.has(key)) {
+            seen.set(key, tpl);
+          }
+        }
+        setDbTemplates(Array.from(seen.values()));
       }
       setLoadingTemplates(false);
     };
@@ -213,7 +221,7 @@ export default function GuidanceTemplateSelection() {
 
   // ── Real upload handler ─────────────────────────────────
   const handleUploadClick = () => {
-    if (!selectedTemplate) return;
+    if (!selectedTemplate || isUploading) return;
     if (selectedTemplate.source === "upload") {
       // Show save modal for new uploads
       setShowSaveModal(true);
