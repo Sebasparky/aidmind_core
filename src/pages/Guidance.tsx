@@ -279,7 +279,8 @@ export default function Guidance() {
                   <Separator />
                   <p className="text-xs text-muted-foreground">
                     The tool reads policy snippets from your session's compiled policy pack
-                    and generates 12 targeted interview questions across 6 categories.
+                    and generates up to 12 targeted interview questions across 6 categories.
+                    Only questions with strong policy grounding are returned.
                   </p>
                 </CardContent>
               </Card>
