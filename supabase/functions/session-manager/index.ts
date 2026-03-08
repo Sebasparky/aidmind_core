@@ -105,6 +105,11 @@ Deno.serve(async (req) => {
           metadata: {},
         };
 
+        if (data.case_id) insertData.case_id = data.case_id;
+        if (data.case_label) insertData.case_label = data.case_label;
+        if (data.client_label) insertData.client_label = data.client_label;
+        if (data.interaction_type) insertData.interaction_type = data.interaction_type;
+
         if (scope) {
           insertData.guidance_scope = scope;
           insertData.guidance_scope_other = scope === "other" ? (data.guidance_scope_other ?? "").trim() : null;
