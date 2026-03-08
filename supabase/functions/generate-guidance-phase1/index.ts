@@ -1217,7 +1217,11 @@ No text outside JSON.
         status: trace?.final_outcome ?? "unknown",
         support: trace?.support_result.supported ? "pass" : trace?.support_result.reason ?? "fail",
         style: trace?.style_result.clientFacing ? "pass" : trace?.style_result.reason ?? "fail",
-        specificity: `${trace?.specificity_result.score ?? "?"} (lost: ${(trace?.specificity_result.lost_qualifiers ?? []).join(",") || "none"})`,
+        specificity_score: trace?.specificity_result.score ?? "?",
+        concept_family: trace?.specificity_result.concept_family ?? "?",
+        spec_considered: (trace?.specificity_result.considered ?? []).join(",") || "none",
+        spec_ignored: (trace?.specificity_result.ignored ?? []).join(",") || "none",
+        spec_lost: (trace?.specificity_result.lost_qualifiers ?? []).join(",") || "none",
       };
     });
     console.log(`[generate-guidance-phase1] QUESTION_LIFECYCLE: ${JSON.stringify(lifecycleLog)}`);
