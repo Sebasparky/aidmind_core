@@ -1,20 +1,20 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logEyeEvent } from "../_shared/eye.ts";
-import { corsSecurityHeaders } from "../_shared/security-headers.ts";
+import { buildCorsSecurityHeaders } from "../_shared/security-headers.ts";
 import { validateUuid, validatePlainText } from "../_shared/input-validation.ts";
 
 const MAX_TEMPLATE_SIZE = 20 * 1024 * 1024; // 20 MB
 
-function json(status: number, body: Record<string, unknown>) {
+function json(req: Request, status: number, body: Record<string, unknown>) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+    headers: { ...buildCorsSecurityHeaders(req), "Content-Type": "application/json" },
   });
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: corsSecurityHeaders });
-  if (req.method !== "POST") return json(405, { success: false, error: "Method not allowed" });
+  if (req.method === "OPTIONS") return new Response(null, { headers: buildCorsSecurityHeaders(req) });
+  if (req.method !== "POST") return json(req, 405, { success: false, error: "Method not allowed" });
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
@@ -56,21 +56,21 @@ Deno.serve(async (req) => {
       templateVersion = body.template_version;
       templateName = body.template_name;
     } catch {
-      return json(400, { success: false, error: "Invalid JSON body", code: "INVALID_JSON" });
+      return json(req, 400, { success: false, error: "Invalid JSON body", code: "INVALID_JSON" });
     }
   }
 
   // ── Validate session_id ──────────────────────────────────────
-  if (!sessionId) return json(400, { success: false, error: "session_id is required", code: "SESSION_ID_REQUIRED" });
+  if (!sessionId) return json(req, 400, { success: false, error: "session_id is required", code: "SESSION_ID_REQUIRED" });
 
   const sessionIdResult = validateUuid("session_id", sessionId);
   if (!sessionIdResult.ok) {
-    return json(400, { success: false, error: "Invalid session_id format", code: "INVALID_SESSION_ID" });
+    return json(req, 400, { success: false, error: "Invalid session_id format", code: "INVALID_SESSION_ID" });
   }
 
   // Must provide either template_id OR upload
   if (!templateId && !uploadFile) {
-    return json(400, { success: false, error: "Provide template_id or template_upload", code: "TEMPLATE_INPUT_REQUIRED" });
+    return json(req, 400, { success: false, error: "Provide template_id or template_upload", code: "TEMPLATE_INPUT_REQUIRED" });
   }
 
   try {
@@ -82,10 +82,10 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (sessionErr) throw new Error(`Failed to fetch session: ${sessionErr.message}`);
-    if (!session) return json(404, { success: false, error: "Session not found", code: "SESSION_NOT_FOUND" });
+    if (!session) return json(req, 404, { success: false, error: "Session not found", code: "SESSION_NOT_FOUND" });
 
     const tenantId = session.tenant_id;
-    if (!tenantId) return json(400, { success: false, error: "Session has no tenant", code: "NO_TENANT" });
+    if (!tenantId) return json(req, 400, { success: false, error: "Session has no tenant", code: "NO_TENANT" });
 
     // ── 2. Resolve template_id ─────────────────────────────────
     let resolvedTemplateId: string;
@@ -95,10 +95,10 @@ Deno.serve(async (req) => {
     if (uploadFile) {
       // ── Upload path ──────────────────────────────────────────
       if (uploadFile.type !== "application/pdf") {
-        return json(400, { success: false, error: "Only PDF files are accepted", code: "INVALID_FILE_TYPE" });
+        return json(req, 400, { success: false, error: "Only PDF files are accepted", code: "INVALID_FILE_TYPE" });
       }
       if (uploadFile.size > MAX_TEMPLATE_SIZE) {
-        return json(400, { success: false, error: "File exceeds 20MB limit", code: "FILE_TOO_LARGE" });
+        return json(req, 400, { success: false, error: "File exceeds 20MB limit", code: "FILE_TOO_LARGE" });
       }
 
       // Validate template_name if provided
@@ -157,7 +157,7 @@ Deno.serve(async (req) => {
       // ── Existing template selection path ─────────────────────
       const tidResult = validateUuid("template_id", templateId);
       if (!tidResult.ok) {
-        return json(400, { success: false, error: "Invalid template_id format", code: "INVALID_TEMPLATE_ID" });
+        return json(req, 400, { success: false, error: "Invalid template_id format", code: "INVALID_TEMPLATE_ID" });
       }
 
       const { data: template, error: templateErr } = await supabase
@@ -167,7 +167,7 @@ Deno.serve(async (req) => {
         .maybeSingle();
 
       if (templateErr) throw new Error(`Failed to fetch template: ${templateErr.message}`);
-      if (!template) return json(404, { success: false, error: "Template not found", code: "TEMPLATE_NOT_FOUND" });
+      if (!template) return json(req, 404, { success: false, error: "Template not found", code: "TEMPLATE_NOT_FOUND" });
 
       // Tenant isolation
       if (template.tenant_id !== tenantId) {
@@ -177,15 +177,15 @@ Deno.serve(async (req) => {
           serviceName: "select-template",
           payload: { template_id: tidResult.value, result: "denied", reason_code: "TENANT_MISMATCH" },
         });
-        return json(403, { success: false, error: "Template does not belong to this tenant", code: "TENANT_MISMATCH" });
+        return json(req, 403, { success: false, error: "Template does not belong to this tenant", code: "TENANT_MISMATCH" });
       }
 
       if (!template.is_active) {
-        return json(409, { success: false, error: "Template is not active", code: "TEMPLATE_INACTIVE" });
+        return json(req, 409, { success: false, error: "Template is not active", code: "TEMPLATE_INACTIVE" });
       }
 
       if (template.extraction_status !== "ready") {
-        return json(409, {
+        return json(req, 409, {
           success: false,
           error: `Template extraction not ready (status: "${template.extraction_status}")`,
           code: "TEMPLATE_NOT_READY",
@@ -194,7 +194,7 @@ Deno.serve(async (req) => {
 
       // Optional version check
       if (templateVersion !== undefined && templateVersion !== template.version) {
-        return json(409, {
+        return json(req, 409, {
           success: false,
           error: `Version mismatch: expected "${templateVersion}", got "${template.version}"`,
           code: "VERSION_MISMATCH",
@@ -243,7 +243,7 @@ Deno.serve(async (req) => {
     });
 
     // ── 5. Response ────────────────────────────────────────────
-    return json(200, {
+    return json(req, 200, {
       success: true,
       session_id: sessionIdResult.value,
       template_id: resolvedTemplateId,
@@ -258,6 +258,6 @@ Deno.serve(async (req) => {
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
     console.error("[select-template] error:", message);
-    return json(500, { success: false, error: message, code: "INTERNAL_ERROR" });
+    return json(req, 500, { success: false, error: message, code: "INTERNAL_ERROR" });
   }
 });
