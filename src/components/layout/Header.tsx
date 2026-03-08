@@ -1,4 +1,4 @@
-import { Search, Bell, ChevronDown, X, Check, Activity } from "lucide-react";
+import { Search, Bell, ChevronDown, X, Check, Activity, BookOpen } from "lucide-react";
 import { AidMindBrand } from "@/components/brand/AidMindBrand";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -108,8 +108,26 @@ export function Header() {
       {/* Left: Logo */}
       <AidMindBrand size="md" showWordmark={false} onClick={handleLogoClick} />
 
-      {/* Center: Search */}
-      <div className="flex-1 max-w-xl mx-8" data-tour="dashboard-search">
+      {/* Center: Retrieve + Search */}
+      <div className="flex items-center flex-1 max-w-2xl mx-8 gap-3">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="flex-shrink-0 gap-2 text-muted-foreground hover:text-foreground font-medium"
+          onClick={() => {
+            if (guardActive) {
+              guardedNavigate("/retrieve");
+            } else {
+              navigate("/retrieve");
+            }
+          }}
+          aria-label="Open Retrieve"
+        >
+          <BookOpen className="h-4 w-4" />
+          <span className="hidden sm:inline">Retrieve</span>
+        </Button>
+        <div className="h-5 w-px bg-border flex-shrink-0" />
+        <div className="flex-1" data-tour="dashboard-search">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
@@ -129,6 +147,7 @@ export function Header() {
               <X className="h-4 w-4" />
             </button>
           )}
+        </div>
         </div>
       </div>
 
