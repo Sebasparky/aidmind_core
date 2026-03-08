@@ -316,13 +316,17 @@ export default function Guidance() {
                 </Card>
               )}
 
-              {/* Running */}
-              {runState === "running" && (
+              {/* Running (compiling or generating) */}
+              {(runState === "running" || runState === "compiling" || runState === "generating") && (
                 <Card>
                   <CardContent className="py-16 text-center">
                     <Loader2 className="h-10 w-10 mx-auto text-primary animate-spin mb-4" />
-                    <p className="text-sm text-muted-foreground">Generating questions from policy pack…</p>
-                    <p className="text-xs text-muted-foreground mt-1">This usually takes 10–20 seconds.</p>
+                    <p className="text-sm text-muted-foreground">
+                      {runState === "compiling"
+                        ? "Compiling policy pack from knowledge base…"
+                        : "Generating questions from policy pack…"}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">This usually takes 15–30 seconds.</p>
                   </CardContent>
                 </Card>
               )}
