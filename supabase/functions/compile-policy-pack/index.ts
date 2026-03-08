@@ -122,6 +122,180 @@ const INFO_QUALITY_EXCLUDE = 0.2;
 // Chunks between EXCLUDE and this threshold get a similarity penalty
 const INFO_QUALITY_PENALTY_THRESHOLD = 0.5;
 
+/* ── Evidence usefulness scoring ── */
+
+/**
+ * Scope-specific operational terms that indicate high-value assessment/intake content.
+ * These augment the generic positive signals when a scope is active.
+ */
+const SCOPE_OPERATIONAL_TERMS: Record<string, string[]> = {
+  child_welfare: [
+    "safety assessment", "risk factors", "family assessment", "caregiver",
+    "household", "home visit", "maltreatment", "child safety", "placement",
+    "prior reports", "protective services", "family supports", "parenting",
+    "living arrangement", "supervision", "abuse", "neglect", "permanency",
+    "family functioning", "child wellbeing", "kinship", "reunification",
+    "case plan", "safety plan", "family risk", "child risk",
+  ],
+  mental_health: [
+    "symptoms", "functioning", "treatment history", "medications",
+    "safety concerns", "crisis", "psychiatric", "diagnosis", "providers",
+    "prior care", "suicidal", "self-harm", "behavioral health",
+    "mental status", "clinical assessment", "therapy", "counseling",
+    "psychosocial", "trauma", "anxiety", "depression",
+  ],
+  substance_use: [
+    "use patterns", "substances used", "treatment history", "withdrawal",
+    "medication-assisted", "recovery", "relapse", "co-occurring",
+    "prior services", "sobriety", "dosage", "frequency", "route of use",
+    "overdose", "detox", "harm reduction", "screening", "CAGE", "AUDIT",
+  ],
+  domestic_violence: [
+    "safety planning", "lethality", "protective order", "power and control",
+    "survivor", "perpetrator", "incident", "escalation", "children exposed",
+    "shelter", "danger assessment", "coercive control",
+  ],
+  housing_homelessness: [
+    "housing history", "eviction", "shelter", "barriers to housing",
+    "housing stability", "chronic homelessness", "rapid re-housing",
+    "lease", "landlord", "utility", "housing assessment",
+  ],
+};
+
+/**
+ * Generic positive signals indicating assessment/intake/interview utility.
+ */
+const USEFULNESS_POSITIVE_PHRASES: string[] = [
+  "assessment", "screening", "intake", "interview", "evaluate", "determine",
+  "document", "documentation", "required information", "data collection",
+  "risk factors", "safety factors", "indicators", "criteria", "checklist",
+  "responsibilities", "required reporting", "must assess", "shall document",
+  "caseworker", "case worker", "worker must", "worker shall", "worker should",
+  "information gathering", "questions to ask", "areas to explore",
+  "factors to consider", "elements to assess", "items to document",
+  "referral", "service coordination", "agency involvement", "provider",
+  "records", "case plan", "service plan", "treatment plan",
+  "household composition", "family members", "caregiver", "parent",
+  "child", "children", "placement", "living arrangement",
+  "safety", "risk", "protective factors", "strengths",
+  "prior history", "prior services", "prior contact", "prior involvement",
+  "visit", "home visit", "observation",
+];
+
+/**
+ * Concrete case-fact nouns that indicate operational content.
+ */
+const USEFULNESS_FACT_NOUNS: string[] = [
+  "child", "parent", "caregiver", "household", "family", "placement",
+  "safety", "risk", "services", "referral", "treatment", "records",
+  "case plan", "assessment", "screening", "documentation", "visit",
+  "agency", "provider", "medication", "diagnosis", "symptoms",
+  "income", "housing", "employment", "education", "transportation",
+];
+
+/**
+ * Negative signals indicating non-operational content.
+ */
+const USEFULNESS_NEGATIVE_PHRASES: string[] = [
+  "references", "bibliography", "legal and related references",
+  "source/date", "works cited", "further reading",
+  "purpose of this document", "vision", "mission statement",
+  "strategic plan", "overview of the program", "background",
+  "history of the program", "legislative history", "certification",
+  "administrative rule", "funding", "appropriation", "budget",
+  "title iv-e", "federal match", "reimbursement rate",
+  "advocacy", "public awareness", "community education campaign",
+  "preamble", "whereas", "be it enacted", "be it resolved",
+  "table of contents", "list of figures", "appendix index",
+];
+
+/**
+ * Compute evidence usefulness: how likely is this chunk to support
+ * generating concrete, factual, client-facing intake/assessment questions?
+ *
+ * Returns 0..1 where:
+ *   0   = not useful for question generation (abstract/admin/reference)
+ *   0.5 = neutral / uncertain
+ *   1   = highly useful (assessment guidance, risk factors, documentation requirements)
+ *
+ * Tuning constants:
+ *   POSITIVE_PHRASE_WEIGHT = 0.04  — per positive phrase hit
+ *   NEGATIVE_PHRASE_WEIGHT = 0.08  — per negative phrase hit (penalty)
+ *   FACT_NOUN_WEIGHT       = 0.025 — per fact noun hit
+ *   SCOPE_TERM_WEIGHT      = 0.035 — per scope-specific operational term hit
+ *   MAX_RAW_SCORE          = 1.0   — cap before normalization
+ */
+const POSITIVE_PHRASE_WEIGHT = 0.04;
+const NEGATIVE_PHRASE_WEIGHT = 0.08;
+const FACT_NOUN_WEIGHT = 0.025;
+const SCOPE_TERM_WEIGHT = 0.035;
+
+function computeEvidenceUsefulness(content: string, scope?: string | null): number {
+  if (!content || content.trim().length < 50) return 0.1;
+
+  const lower = content.toLowerCase();
+
+  // Count positive phrase hits
+  let positiveHits = 0;
+  for (const phrase of USEFULNESS_POSITIVE_PHRASES) {
+    if (lower.includes(phrase)) positiveHits++;
+  }
+
+  // Count fact noun hits (deduplicated by checking word boundaries)
+  let factHits = 0;
+  for (const noun of USEFULNESS_FACT_NOUNS) {
+    // Use simple includes for multi-word, regex for single words
+    if (noun.includes(" ")) {
+      if (lower.includes(noun)) factHits++;
+    } else {
+      if (new RegExp(`\\b${noun}\\b`).test(lower)) factHits++;
+    }
+  }
+
+  // Count negative phrase hits
+  let negativeHits = 0;
+  for (const phrase of USEFULNESS_NEGATIVE_PHRASES) {
+    if (lower.includes(phrase)) negativeHits++;
+  }
+
+  // Count scope-specific operational term hits
+  let scopeHits = 0;
+  if (scope && SCOPE_OPERATIONAL_TERMS[scope]) {
+    for (const term of SCOPE_OPERATIONAL_TERMS[scope]) {
+      if (lower.includes(term)) scopeHits++;
+    }
+  }
+
+  // Detect instructional / imperative language (strong positive signal)
+  const imperativePatterns = [
+    /\b(must|shall|should|required to|need to)\s+(assess|document|evaluate|screen|determine|collect|gather|record|report|verify|obtain)\b/,
+    /\b(assess|evaluate|screen|document|determine|identify|review|examine|investigate)\s+(the|each|all|any|whether)\b/,
+  ];
+  let imperativeBonus = 0;
+  for (const p of imperativePatterns) {
+    if (p.test(lower)) imperativeBonus += 0.08;
+  }
+
+  // Detect enumerated lists of factors/criteria (strong positive signal)
+  const lines = content.split("\n").filter(l => l.trim().length > 0);
+  const numberedOrBulletedLines = lines.filter(l => /^\s*(\d+[\.\)]\s|[-•●]\s)/.test(l));
+  const enumerationBonus = numberedOrBulletedLines.length >= 3 ? 0.06 : 0;
+
+  // Compute raw score
+  const rawScore = (
+    positiveHits * POSITIVE_PHRASE_WEIGHT +
+    factHits * FACT_NOUN_WEIGHT +
+    scopeHits * SCOPE_TERM_WEIGHT +
+    imperativeBonus +
+    enumerationBonus -
+    negativeHits * NEGATIVE_PHRASE_WEIGHT
+  );
+
+  // Normalize to 0..1 with a baseline of 0.3 (neutral content gets ~0.3)
+  const normalized = Math.max(0, Math.min(1, 0.3 + rawScore));
+  return parseFloat(normalized.toFixed(3));
+}
+
 /* ── Helpers ── */
 
 let _corsHeaders: Record<string, string> = {};
