@@ -815,9 +815,23 @@ Deno.serve(async (req) => {
     if (runInsertErr) throw new Error(`Failed to insert retrieval_run: ${runInsertErr.message}`);
     retrieval_run_id = runRow.id;
 
-    // 5. Generate retrieval queries from template sections
+    // 5. Generate scope-aware retrieval queries from template sections
     const sections = chunkTemplate(template.content);
-    const queries = sections.map((s) => buildRetrievalQuery(s, guardrails));
+
+    // Diagnostics: log scope influence per section
+    const sectionDiagnostics = sections.map((s, i) => {
+      const specificity = computeSectionSpecificity(s);
+      const scopeInfluence = sessionScope
+        ? specificity <= 0.3 ? "strong" : specificity <= 0.6 ? "moderate" : "light"
+        : "none";
+      return { section: i, specificity: parseFloat(specificity.toFixed(2)), scopeInfluence };
+    });
+    console.log(`[compile-policy-pack] Scope-aware retrieval diagnostics:`, JSON.stringify({
+      scope: sessionScope,
+      sections: sectionDiagnostics,
+    }));
+
+    const queries = sections.map((s) => buildRetrievalQuery(s, guardrails, sessionScope));
 
     // 6. Embed + retrieve per query, merge results by chunk_id
     const chunkMap = new Map<string, MergedChunk>();
