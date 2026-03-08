@@ -899,6 +899,36 @@ Examples of BAD questions (do not generate these):
 - "Are there any safety factors present that require protective interventions?" (too jargon-heavy; rephrase as a natural question)
 
 ------------------------------------------------------------
+DISTINCT FACTUAL DIMENSIONS (CRITICAL)
+
+Before composing questions, identify the distinct factual dimensions supported by the policy excerpts. A factual dimension is a separate piece of information a caseworker may need to collect — for example:
+
+- Who lives in the home (household composition)
+- Whether any child was injured (injury presence)
+- What the most serious injury was (injury severity)
+- Whether the family is homeless or facing eviction (housing instability)
+- Whether current housing is physically unsafe (housing conditions)
+- Whether the caretaker had a substance abuse problem within the past year (substance use)
+- Whether community services were used as immediate safety resources (service involvement)
+- Whether the caregiver can provide protection and supervision (caregiver capacity)
+
+ANTI-COLLAPSE RULE:
+If a policy excerpt supports multiple distinct factual dimensions, generate SEPARATE questions for each dimension when they are not redundant. Do NOT collapse multiple supported facts into one broader representative question.
+
+Two questions are duplicates ONLY if they seek substantially the same factual answer from the client. Questions are NOT duplicates just because:
+- They come from the same snippet
+- They fall in the same category
+- They relate to the same broad topic area
+
+Examples of DISTINCT, non-duplicate pairs (generate both when supported):
+- "Is the family currently homeless or facing eviction?" vs "Is the current housing physically unsafe for the child?" (different conditions)
+- "Was any child injured?" vs "What was the most serious injury?" (presence vs severity — but prefer combining into one well-scoped question when natural)
+- "Have services been recommended?" vs "Have services been used as immediate safety resources?" (recommendation vs use as safety resource)
+- "Has the caretaker had a substance abuse problem within the past year?" vs "Is the caregiver able to provide protection and supervision for the child?" (substance use vs caregiver capacity)
+
+Within any category (e.g., Risk / Needs / Safety Factors), prefer coverage across different supported dimensions rather than stopping after one question from that general topic area. A single dense snippet may justify 2-3 questions if it contains 2-3 genuinely distinct factual dimensions.
+
+------------------------------------------------------------
 CATEGORY GUIDANCE (up to 2 per category, as evidence supports)
 
 Aim for coverage across these categories when evidence permits:
