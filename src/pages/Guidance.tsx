@@ -27,6 +27,7 @@ import {
   GUIDANCE_CATEGORIES,
 } from "@/lib/tools/guidance-types";
 import { useGuidanceSession } from "@/hooks/useGuidanceSession";
+import { useEyeLogger } from "@/hooks/useEyeLogger";
 import { CitationsModal } from "@/components/session/CitationsModal";
 
 export default function Guidance() {
@@ -67,10 +68,32 @@ export default function Guidance() {
     }, delay);
   }, [loading, cameFromTemplate]);
 
+  const { logEvent } = useEyeLogger();
+
+  // Auto-redirect to template selection if no template attached (skip intermediate screen)
+  useEffect(() => {
+    if (!loading && session && !session.templateId && !cameFromTemplate) {
+      navigate(`/guidance/${sessionId}/template`, { replace: true });
+    }
+  }, [loading, session, cameFromTemplate, sessionId, navigate]);
+
   // ── Helpers ────────────────────────────────────────────────────
   const handleBack = () => navigate("/dashboard");
   const handleChangeTemplate = () => navigate(`/guidance/${sessionId}/template`);
   const handleSelectTemplate = () => navigate(`/guidance/${sessionId}/template`);
+
+  // Done: log explicit GUIDANCE_GENERATED event so dashboard picks it up immediately
+  const handleDone = async () => {
+    if (session) {
+      await logEvent({
+        eventType: "GUIDANCE_GENERATED",
+        sessionId: session.sessionId,
+        result: "success",
+        toolName: "guidance_pipeline",
+      });
+    }
+    navigate("/dashboard");
+  };
 
   const handleCopyQuestion = async (question: string, qId: string) => {
     await navigator.clipboard.writeText(question);
@@ -584,7 +607,7 @@ export default function Guidance() {
           </Button>
           <div className="flex items-center gap-2">
             {isSuccess ? (
-              <Button onClick={handleBack}>
+              <Button onClick={handleDone}>
                 <Check className="h-4 w-4 mr-2" />
                 Done
               </Button>
