@@ -1,17 +1,20 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import OpenAI from "https://esm.sh/openai@4.28.0";
 import { logEyeEvent } from "../_shared/eye.ts";
-import { corsSecurityHeaders } from "../_shared/security-headers.ts";
+import { buildCorsSecurityHeaders } from "../_shared/security-headers.ts";
 import { validateUuid } from "../_shared/input-validation.ts";
 
 const openai = new OpenAI({
   apiKey: Deno.env.get("OPENAI_API_KEY")!,
 });
 
+// Dynamic CORS headers — set per-request so the helper can read the Origin
+let _corsHeaders: Record<string, string> = {};
+
 function json(status: number, body: Record<string, unknown>) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+    headers: { ..._corsHeaders, "Content-Type": "application/json" },
   });
 }
 
