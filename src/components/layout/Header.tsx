@@ -45,7 +45,7 @@ function formatRelativeTime(date: Date): string {
   return `${diffDays}d ago`;
 }
 
-export function Header() {
+export function Header({ hideSearch = false }: { hideSearch?: boolean }) {
   const navigate = useNavigate();
   const { guardActive, guardedNavigate } = useNavigationGuard();
   const { searchQuery, setSearchQuery, clearSearch } = useDashboard();
