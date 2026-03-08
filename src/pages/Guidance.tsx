@@ -82,16 +82,9 @@ export default function Guidance() {
   const handleChangeTemplate = () => navigate(`/guidance/${sessionId}/template`);
   const handleSelectTemplate = () => navigate(`/guidance/${sessionId}/template`);
 
-  // Done: log explicit GUIDANCE_GENERATED event so dashboard picks it up immediately
-  const handleDone = async () => {
-    if (session) {
-      await logEvent({
-        eventType: "GUIDANCE_GENERATED",
-        sessionId: session.sessionId,
-        result: "success",
-        toolName: "guidance_pipeline",
-      });
-    }
+  // Done: completion is already persisted in session metadata by the backend.
+  // Just navigate back — the dashboard reads metadata.guidance_phase1 directly.
+  const handleDone = () => {
     navigate("/dashboard");
   };
 

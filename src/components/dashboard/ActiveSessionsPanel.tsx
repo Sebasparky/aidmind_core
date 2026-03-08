@@ -360,7 +360,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                       <FileText className="h-3.5 w-3.5" />
                       Case Notes
                     </Button>
-                    {usage.reviewerUsed ? (
+                    {session.reviewerCompleted ? (
                       <Button
                         variant="default"
                         size="sm"
