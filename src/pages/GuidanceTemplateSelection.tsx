@@ -212,10 +212,22 @@ export default function GuidanceTemplateSelection() {
   };
 
   // ── Real upload handler ─────────────────────────────────
-  const handleUploadTemplate = async () => {
+  const handleUploadClick = () => {
+    if (!selectedTemplate) return;
+    if (selectedTemplate.source === "upload") {
+      // Show save modal for new uploads
+      setShowSaveModal(true);
+    } else {
+      // Existing templates go straight through
+      doUploadTemplate(selectedTemplate.name);
+    }
+  };
+
+  const doUploadTemplate = async (templateName: string) => {
     if (!selectedTemplate || !sessionId) return;
     setIsUploading(true);
     setUploadError(null);
+    setShowSaveModal(false);
 
     try {
       // Resolve session UUID from session_id text
@@ -236,7 +248,7 @@ export default function GuidanceTemplateSelection() {
         const formData = new FormData();
         formData.append("session_id", sessionUuid);
         formData.append("template_upload", selectedTemplate.file);
-        formData.append("template_name", selectedTemplate.name);
+        formData.append("template_name", templateName);
 
         // Include extracted text if available
         if (fullText && fullText.trim().length > 0) {
@@ -272,12 +284,12 @@ export default function GuidanceTemplateSelection() {
           throw new Error("Template was uploaded but extraction failed. Please try a different file.");
         }
 
-        toast.success("Template uploaded and ready for guidance generation.");
+        toast.success(`Template "${templateName}" saved and ready.`);
 
         navigate(`/guidance/${sessionId}`, {
           state: {
             templateId: result.template_id,
-            templateName: result.template?.name,
+            templateName: result.template?.name || templateName,
             templateSource: "upload",
           },
         });
