@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Sparkles, Shield, Clock, RefreshCw, Check, X, CheckCircle2, FileText } from "lucide-react";
+import { Plus, Sparkles, Shield, Clock, RefreshCw, Check, X, CheckCircle2, FileText, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -329,31 +329,32 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
 
                   {/* Tool actions + session actions */}
                   <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      variant={usage.guidanceUsed ? "secondary" : "outline"}
-                      size="sm"
-                      className={cn(
-                        "gap-1.5 text-xs",
-                        usage.guidanceUsed && "border-primary/20 bg-primary/10 text-primary hover:bg-primary/15"
-                      )}
-                      onClick={() => handleGenerateGuidance(session)}
-                      data-tour="guidance-button"
-                    >
-                      {usage.guidanceUsed ? (
-                        <>
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                          Guidance
-                          <Badge variant="outline" className="ml-1 text-[9px] px-1 py-0 h-4 border-primary/30 text-primary">
-                            Complete
-                          </Badge>
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="h-3.5 w-3.5" />
-                          Guidance
-                        </>
-                      )}
-                    </Button>
+                    {usage.guidanceUsed ? (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="gap-1.5 text-xs border border-primary/20 bg-primary/10 text-primary hover:bg-primary/15"
+                        onClick={() => handleGenerateGuidance(session)}
+                        data-tour="guidance-button"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        View Guidance
+                        <Badge variant="outline" className="ml-0.5 text-[9px] px-1 py-0 h-4 border-primary/30 text-primary bg-primary/5">
+                          Complete
+                        </Badge>
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 text-xs"
+                        onClick={() => handleGenerateGuidance(session)}
+                        data-tour="guidance-button"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" />
+                        Guidance
+                      </Button>
+                    )}
                     <Button
                       variant="outline"
                       size="sm"
@@ -363,31 +364,32 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                       <FileText className="h-3.5 w-3.5" />
                       Case Notes
                     </Button>
-                    <Button
-                      variant={usage.reviewerUsed ? "secondary" : "outline"}
-                      size="sm"
-                      className={cn(
-                        "gap-1.5 text-xs",
-                        usage.reviewerUsed && "border-primary/20 bg-primary/10 text-primary hover:bg-primary/15"
-                      )}
-                      onClick={() => handleRunReviewer(session)}
-                      data-tour="reviewer-button"
-                    >
-                      {usage.reviewerUsed ? (
-                        <>
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                          Reviewer
-                          <Badge variant="outline" className="ml-1 text-[9px] px-1 py-0 h-4 border-primary/30 text-primary">
-                            Complete
-                          </Badge>
-                        </>
-                      ) : (
-                        <>
-                          <Shield className="h-3.5 w-3.5" />
-                          Reviewer
-                        </>
-                      )}
-                    </Button>
+                    {usage.reviewerUsed ? (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="gap-1.5 text-xs border border-primary/20 bg-primary/10 text-primary hover:bg-primary/15"
+                        onClick={() => handleRunReviewer(session)}
+                        data-tour="reviewer-button"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        View Review
+                        <Badge variant="outline" className="ml-0.5 text-[9px] px-1 py-0 h-4 border-primary/30 text-primary bg-primary/5">
+                          Complete
+                        </Badge>
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 text-xs"
+                        onClick={() => handleRunReviewer(session)}
+                        data-tour="reviewer-button"
+                      >
+                        <Shield className="h-3.5 w-3.5" />
+                        Reviewer
+                      </Button>
+                    )}
                     
                     <div className="ml-auto">
                       <TooltipProvider>

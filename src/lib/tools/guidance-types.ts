@@ -43,6 +43,8 @@ export interface GuidanceQuestion {
   category: GuidanceCategory;
   question: string;
   citations: string[]; // snippet_id references
+  validation_status?: "pass" | "warning";
+  review_flags?: string[];
 }
 
 export interface GuidanceOutput {
@@ -53,6 +55,8 @@ export interface GuidanceOutput {
   grounding_reason?: string;
   total_generated?: number;
   total_grounded?: number;
+  total_grounded_strong?: number;
+  total_grounded_warning?: number;
   total_dropped?: number;
 }
 
