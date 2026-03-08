@@ -19,6 +19,8 @@ import {
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { Loader2 } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { useTenant } from "@/hooks/useTenant";
 
 interface StartNoteModalProps {
   open: boolean;
@@ -49,6 +51,9 @@ const SCOPE_OPTIONS = [
 ] as const;
 
 export function StartNoteModal({ open, onOpenChange, onSessionCreated }: StartNoteModalProps) {
+  const { user } = useAuth();
+  const { tenant } = useTenant();
+
   const [caseLabel, setCaseLabel] = useState("");
   const [interactionType, setInteractionType] = useState("");
   const [guidanceScope, setGuidanceScope] = useState("");
@@ -63,7 +68,7 @@ export function StartNoteModal({ open, onOpenChange, onSessionCreated }: StartNo
     guidanceScope !== "other" || guidanceScopeOther.trim().length >= 3;
 
   const isValid =
-    caseLabel.trim().length > 0 && guidanceScope.length > 0 && scopeOtherValid;
+    caseLabel.trim().length > 0 && guidanceScope.length > 0 && scopeOtherValid && !!tenant?.tenantId;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,6 +90,8 @@ export function StartNoteModal({ open, onOpenChange, onSessionCreated }: StartNo
         guidance_scope_other:
           guidanceScope === "other" ? guidanceScopeOther.trim() : null,
         state: "READY_FOR_INPUT",
+        tenant_id: tenant!.tenantId,
+        user_id: user!.id,
       });
 
       if (error) throw error;

@@ -6,6 +6,8 @@ interface SessionData {
   case_label?: string;
   client_label?: string;
   interaction_type?: string;
+  tenant_id: string;
+  user_id: string;
   request_id?: string; // Idempotency key
 }
 

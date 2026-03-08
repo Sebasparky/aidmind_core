@@ -144,6 +144,8 @@ interface UseSessionMachineProps {
   caseLabel: string;
   clientLabel: string;
   interactionType: string;
+  tenantId: string;
+  userId: string;
   resumeBundle?: ResumeBundle;
 }
 
@@ -152,6 +154,8 @@ export function useSessionMachine({
   caseLabel,
   clientLabel,
   interactionType,
+  tenantId,
+  userId,
   resumeBundle,
 }: UseSessionMachineProps) {
   const [state, setState] = useState<SessionState>("NEW");
@@ -218,6 +222,8 @@ export function useSessionMachine({
         case_label: caseLabel,
         client_label: clientLabel,
         interaction_type: interactionType,
+        tenant_id: tenantId,
+        user_id: userId,
         request_id: requestId,
       });
       
@@ -256,7 +262,7 @@ export function useSessionMachine({
     } else {
       setState("READY_FOR_INPUT");
     }
-  }, [state, generateRequestId, resumeBundle, sessionApi, caseId, caseLabel, clientLabel, interactionType]);
+  }, [state, generateRequestId, resumeBundle, sessionApi, caseId, caseLabel, clientLabel, interactionType, tenantId, userId]);
 
   // V1: PASTE_TEXT_NOTES: READY_FOR_INPUT → TEXT_PROVIDED
   // In v1, this is the primary input method (no audio upload/transcription)

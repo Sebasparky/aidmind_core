@@ -14,9 +14,14 @@ const ALLOWED_SCOPES = new Set([
 interface SessionRequest {
   action: SessionAction;
   session_id?: string;
+  request_id?: string;
   data?: {
     tenant_id?: string;
     user_id?: string;
+    case_id?: string;
+    case_label?: string;
+    client_label?: string;
+    interaction_type?: string;
     status?: string;
     template_id?: string | null;
     interview_notes?: string | null;
@@ -99,6 +104,11 @@ Deno.serve(async (req) => {
           status: "initialized",
           metadata: {},
         };
+
+        if (data.case_id) insertData.case_id = data.case_id;
+        if (data.case_label) insertData.case_label = data.case_label;
+        if (data.client_label) insertData.client_label = data.client_label;
+        if (data.interaction_type) insertData.interaction_type = data.interaction_type;
 
         if (scope) {
           insertData.guidance_scope = scope;
