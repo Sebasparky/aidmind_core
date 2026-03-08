@@ -682,6 +682,33 @@ export default function Guidance() {
           sessionDbId={session.id}
         />
       )}
+
+      {/* Leave confirmation dialog */}
+      <Dialog open={showLeaveDialog} onOpenChange={setShowLeaveDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Finish guidance before leaving?</DialogTitle>
+            <DialogDescription>
+              You've already generated guidance questions for this session. Would you like to mark guidance as complete before returning to the dashboard?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex flex-col gap-2 sm:flex-col">
+            <Button onClick={async () => { setShowLeaveDialog(false); await handleDone(); }} disabled={markingDone}>
+              {markingDone ? (
+                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving…</>
+              ) : (
+                <><Check className="h-4 w-4 mr-2" /> Done and return</>
+              )}
+            </Button>
+            <Button variant="outline" onClick={() => { setShowLeaveDialog(false); navigate("/dashboard"); }}>
+              Leave without marking done
+            </Button>
+            <Button variant="ghost" onClick={() => setShowLeaveDialog(false)}>
+              Stay here
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
