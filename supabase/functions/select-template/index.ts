@@ -194,7 +194,7 @@ Deno.serve(async (req) => {
 
       // Optional version check
       if (templateVersion !== undefined && templateVersion !== template.version) {
-        return json(409, {
+        return json(req, 409, {
           success: false,
           error: `Version mismatch: expected "${templateVersion}", got "${template.version}"`,
           code: "VERSION_MISMATCH",
