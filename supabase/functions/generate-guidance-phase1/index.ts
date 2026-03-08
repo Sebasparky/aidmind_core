@@ -62,7 +62,8 @@ type DropReason =
   | "internal_worker_prompt"
   | "documentation_only_source"
   | "policy_jargon_not_transformed"
-  | "classification_or_justification_prompt";
+  | "classification_or_justification_prompt"
+  | "specificity_lost";
 
 /**
  * Compute structural quality of a snippet (aligned with compile-time computeInfoQuality).
