@@ -167,7 +167,7 @@ Deno.serve(async (req) => {
         .maybeSingle();
 
       if (templateErr) throw new Error(`Failed to fetch template: ${templateErr.message}`);
-      if (!template) return json(404, { success: false, error: "Template not found", code: "TEMPLATE_NOT_FOUND" });
+      if (!template) return json(req, 404, { success: false, error: "Template not found", code: "TEMPLATE_NOT_FOUND" });
 
       // Tenant isolation
       if (template.tenant_id !== tenantId) {
