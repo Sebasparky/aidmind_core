@@ -137,6 +137,13 @@ export default function Guidance() {
   const scopeLabel = formatScope(session.guidanceScope, session.guidanceScopeOther);
   const isSuccess = runState === "success" && output && output.questions.length > 0;
 
+  // Auto-redirect to template selection if no template attached (skip intermediate screen)
+  useEffect(() => {
+    if (!loading && session && !hasTemplate && !cameFromTemplate) {
+      navigate(`/guidance/${sessionId}/template`, { replace: true });
+    }
+  }, [loading, session, hasTemplate, cameFromTemplate, sessionId, navigate]);
+
   // Determine if we should show a specific error banner
   const isTemplateRequired = runError?.code === "TEMPLATE_REQUIRED";
   const isScopeRequired = runError?.code === "SCOPE_REQUIRED";
