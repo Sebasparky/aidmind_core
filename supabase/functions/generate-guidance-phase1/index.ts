@@ -119,7 +119,7 @@ interface QuestionTrace {
   original_question: string;
   support_result: { supported: boolean; reason?: string; details?: Record<string, unknown> };
   style_result: { clientFacing: boolean; reason?: string; details?: Record<string, unknown> };
-  specificity_result: { preserved: boolean; score: number; lost_qualifiers: string[] };
+  specificity_result: { preserved: boolean; score: number; lost_qualifiers: string[]; concept_family: string; considered: string[]; ignored: string[] };
   final_outcome: QuestionOutcome;
 }
 
@@ -483,7 +483,48 @@ function validateClientFacingStyle(
   return { clientFacing: true };
 }
 
-/* ── Specificity-preservation validator ── */
+/* ── Concept-family classification for concept-scoped specificity ── */
+
+type ConceptFamily =
+  | "substance_use"
+  | "housing_instability"
+  | "unsafe_housing_conditions"
+  | "caregiver_capacity"
+  | "injury_severity"
+  | "immediate_safety_resources"
+  | "general_safety"
+  | "prior_history"
+  | "other";
+
+function classifyQuestionConcept(question: string): ConceptFamily {
+  const q = question.toLowerCase();
+  if (/\b(substance|drug|alcohol|addiction|intoxicat|sober|sobriety|drinking|using)\b/.test(q)) return "substance_use";
+  if (/\b(homeless|homelessness|eviction|evicted|facing\s+eviction|unhoused|shelter)\b/.test(q)) return "housing_instability";
+  if (/\b(physically\s+unsafe|unsafe\s+housing|unsafe.*\bhome|housing.*\bunsafe|structurally\s+unsound)\b/.test(q)) return "unsafe_housing_conditions";
+  if (/\b(ability|able|unable|capable|capacity)\b.{0,30}\b(protect|supervis|care|nurtur|provide|parent)/i.test(q)) return "caregiver_capacity";
+  if (/\b(injur|harm|wound|bruise|fracture|burn|most\s+serious)\b/.test(q)) return "injury_severity";
+  if (/\bimmediate\s+safety\s+resource/.test(q) || /\bcommunity\s+service.*\bsafety\s+resource/.test(q)) return "immediate_safety_resources";
+  if (/\b(prior|previous|past)\b.{0,20}\b(report|referral|involvement|history)\b/.test(q)) return "prior_history";
+  if (/\b(safe|danger|risk|threat|concern|protective)\b/.test(q)) return "general_safety";
+  return "other";
+}
+
+/** Which concept families each qualifier is relevant to */
+const QUALIFIER_CONCEPT_RELEVANCE: Record<string, ConceptFamily[]> = {
+  time_window:                        ["substance_use", "prior_history"],
+  immediate_safety:                   ["general_safety", "immediate_safety_resources"],
+  imminent_risk:                      ["general_safety", "injury_severity"],
+  severity_most_serious:              ["injury_severity"],
+  purpose_immediate_safety_resources: ["immediate_safety_resources"],
+  caregiver_capacity:                 ["caregiver_capacity", "substance_use"],
+  physically_unsafe:                  ["unsafe_housing_conditions"],
+  homeless_or_eviction:               ["housing_instability"],
+  facing_eviction:                    ["housing_instability"],
+  prior_reports:                      ["prior_history", "general_safety"],
+  medication_assisted_treatment:      ["substance_use"],
+};
+
+/* ── Specificity-preservation validator (concept-scoped) ── */
 
 const IMPORTANT_QUALIFIER_PATTERNS: {
   snippetDetector: RegExp;
@@ -547,22 +588,29 @@ const IMPORTANT_QUALIFIER_PATTERNS: {
   },
 ];
 
-function validateSpecificityPreservation(
-  question: string,
-  citedSnippetTexts: string[],
-): {
+interface SpecificityResult {
   preserved: boolean;
   lostQualifiers: { label: string; snippetEvidence: string }[];
   score: number;
-} {
-  const combinedSnippet = citedSnippetTexts.join(" ");
-  const detected: { label: string; snippetEvidence: string; preserved: boolean }[] = [];
+  conceptFamily: ConceptFamily;
+  consideredQualifiers: string[];
+  ignoredQualifiers: string[];
+}
 
+function validateSpecificityPreservation(
+  question: string,
+  citedSnippetTexts: string[],
+): SpecificityResult {
+  const combinedSnippet = citedSnippetTexts.join(" ");
+  const conceptFamily = classifyQuestionConcept(question);
+
+  // Detect all qualifiers present in the snippet
+  const allDetected: { label: string; snippetEvidence: string; preserved: boolean }[] = [];
   for (const pattern of IMPORTANT_QUALIFIER_PATTERNS) {
     const snippetMatch = combinedSnippet.match(pattern.snippetDetector);
     if (snippetMatch) {
       const preserved = pattern.questionCheck.test(question);
-      detected.push({
+      allDetected.push({
         label: pattern.label,
         snippetEvidence: snippetMatch[0].slice(0, 60),
         preserved,
@@ -570,19 +618,47 @@ function validateSpecificityPreservation(
     }
   }
 
-  if (detected.length === 0) {
-    return { preserved: true, lostQualifiers: [], score: 1.0 };
+  if (allDetected.length === 0) {
+    return { preserved: true, lostQualifiers: [], score: 1.0, conceptFamily, consideredQualifiers: [], ignoredQualifiers: [] };
   }
 
-  const lost = detected.filter((d) => !d.preserved);
-  const score = detected.length > 0
-    ? (detected.length - lost.length) / detected.length
-    : 1.0;
+  // Filter to only qualifiers relevant to this question's concept family
+  const relevant: typeof allDetected = [];
+  const ignored: string[] = [];
+
+  for (const d of allDetected) {
+    const families = QUALIFIER_CONCEPT_RELEVANCE[d.label];
+    if (families && families.includes(conceptFamily)) {
+      relevant.push(d);
+    } else if (conceptFamily === "other") {
+      // For "other" concept, consider all qualifiers (conservative)
+      relevant.push(d);
+    } else {
+      ignored.push(d.label);
+    }
+  }
+
+  if (relevant.length === 0) {
+    return {
+      preserved: true,
+      lostQualifiers: [],
+      score: 1.0,
+      conceptFamily,
+      consideredQualifiers: [],
+      ignoredQualifiers: ignored,
+    };
+  }
+
+  const lost = relevant.filter((d) => !d.preserved);
+  const score = (relevant.length - lost.length) / relevant.length;
 
   return {
     preserved: lost.length === 0,
     lostQualifiers: lost.map((l) => ({ label: l.label, snippetEvidence: l.snippetEvidence })),
     score,
+    conceptFamily,
+    consideredQualifiers: relevant.map(r => r.label),
+    ignoredQualifiers: ignored,
   };
 }
 
@@ -1042,6 +1118,9 @@ No text outside JSON.
           preserved: specResult.preserved,
           score: +specResult.score.toFixed(2),
           lost_qualifiers: specResult.lostQualifiers.map(lq => lq.label),
+          concept_family: specResult.conceptFamily,
+          considered: specResult.consideredQualifiers,
+          ignored: specResult.ignoredQualifiers,
         },
         final_outcome: "pass", // will be updated
       };
@@ -1138,7 +1217,11 @@ No text outside JSON.
         status: trace?.final_outcome ?? "unknown",
         support: trace?.support_result.supported ? "pass" : trace?.support_result.reason ?? "fail",
         style: trace?.style_result.clientFacing ? "pass" : trace?.style_result.reason ?? "fail",
-        specificity: `${trace?.specificity_result.score ?? "?"} (lost: ${(trace?.specificity_result.lost_qualifiers ?? []).join(",") || "none"})`,
+        specificity_score: trace?.specificity_result.score ?? "?",
+        concept_family: trace?.specificity_result.concept_family ?? "?",
+        spec_considered: (trace?.specificity_result.considered ?? []).join(",") || "none",
+        spec_ignored: (trace?.specificity_result.ignored ?? []).join(",") || "none",
+        spec_lost: (trace?.specificity_result.lost_qualifiers ?? []).join(",") || "none",
       };
     });
     console.log(`[generate-guidance-phase1] QUESTION_LIFECYCLE: ${JSON.stringify(lifecycleLog)}`);
