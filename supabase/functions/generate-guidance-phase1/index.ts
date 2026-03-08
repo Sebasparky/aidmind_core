@@ -29,6 +29,100 @@ function extractJSON(text: string) {
   return JSON.parse(match[0]);
 }
 
+/* ── Support-strength validation ── */
+
+const LOW_INFO_PHRASES = [
+  "table of contents",
+  "contents page",
+  "list of figures",
+  "list of tables",
+  "revision history",
+  "page intentionally left blank",
+];
+
+/**
+ * Validate whether a question is genuinely supported by its cited snippets.
+ * Returns { supported: boolean, reason?: string }
+ */
+function validateQuestionSupport(
+  question: string,
+  citedSnippetTexts: string[],
+): { supported: boolean; reason?: string } {
+  if (citedSnippetTexts.length === 0) {
+    return { supported: false, reason: "no_snippet_text" };
+  }
+
+  const combinedText = citedSnippetTexts.join(" ").toLowerCase();
+  const combinedLen = combinedText.replace(/\s+/g, " ").trim().length;
+
+  // 1. Check if all cited snippets are low-information
+  let allLowInfo = true;
+  for (const text of citedSnippetTexts) {
+    const lower = text.toLowerCase();
+    const isLowInfo = LOW_INFO_PHRASES.some((p) => lower.includes(p));
+    if (!isLowInfo) {
+      // Also check: is it mostly headings/short lines with no prose?
+      const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+      const proseLines = lines.filter((l) => l.length > 50 && /[.,;:?!]/.test(l));
+      if (proseLines.length > 0 || lines.length <= 2) {
+        allLowInfo = false;
+        break;
+      }
+    }
+  }
+  if (allLowInfo) {
+    return { supported: false, reason: "low_info_snippets" };
+  }
+
+  // 2. Check if combined snippet text is too short to be meaningful evidence
+  if (combinedLen < 80) {
+    return { supported: false, reason: "snippet_too_short" };
+  }
+
+  // 3. Check for topical overlap: do key terms from the question appear in the snippets?
+  const questionWords = new Set(
+    question
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, "")
+      .split(/\s+/)
+      .filter((w) => w.length > 3) // skip small words
+  );
+
+  // Remove common interview/generic words that don't indicate topical relevance
+  const genericWords = new Set([
+    "what", "when", "where", "which", "does", "have", "been", "this", "that",
+    "with", "from", "your", "about", "into", "they", "their", "there", "were",
+    "will", "would", "could", "should", "other", "first", "last", "most",
+    "more", "than", "each", "some", "also", "currently", "specific", "please",
+    "describe", "explain", "provide", "information", "details",
+  ]);
+
+  const meaningfulQuestionWords = [...questionWords].filter((w) => !genericWords.has(w));
+
+  if (meaningfulQuestionWords.length > 0) {
+    let matched = 0;
+    for (const w of meaningfulQuestionWords) {
+      if (combinedText.includes(w)) matched++;
+    }
+    const overlapRatio = matched / meaningfulQuestionWords.length;
+
+    // If less than 20% of meaningful question terms appear in snippet text → weak support
+    if (overlapRatio < 0.15 && meaningfulQuestionWords.length >= 3) {
+      return { supported: false, reason: "weak_topical_overlap" };
+    }
+  }
+
+  return { supported: true };
+}
+
+/* ── Insufficient grounding reason codes ── */
+type GroundingCode =
+  | "INSUFFICIENT_GROUNDED_SUPPORT"
+  | "LOW_INFORMATION_POLICY_PACK"
+  | "WEAK_CITATION_SUPPORT";
+
+const MIN_GROUNDED_QUESTIONS = 3;
+
 Deno.serve(async (req) => {
   _corsHeaders = buildCorsSecurityHeaders(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: _corsHeaders });
@@ -121,6 +215,25 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── 2b. Pre-check: is the policy pack mostly low-information? ──
+    const snippetMap = new Map<string, string>();
+    let lowInfoCount = 0;
+    for (const s of snippets) {
+      snippetMap.set(s.snippet_id, s.chunk_text);
+      const lower = (s.chunk_text || "").toLowerCase();
+      const isLowInfo = LOW_INFO_PHRASES.some((p) => lower.includes(p));
+      const lines = (s.chunk_text || "").split("\n").map((l: string) => l.trim()).filter(Boolean);
+      const proseLines = lines.filter((l: string) => l.length > 50 && /[.,;:?!]/.test(l));
+      if (isLowInfo || (lines.length > 3 && proseLines.length === 0)) {
+        lowInfoCount++;
+      }
+    }
+
+    if (lowInfoCount > snippets.length * 0.8) {
+      console.warn(`[generate-guidance-phase1] Policy pack is ${Math.round((lowInfoCount/snippets.length)*100)}% low-info snippets`);
+      // Still attempt generation but log warning — validation will catch weak questions
+    }
+
     // ── 3. Format snippets for LLM ─────────────────────────────
     const snippetIdSet = new Set<string>();
     const formatted = snippets
@@ -151,7 +264,17 @@ ${scopeLine}
 
 You are given policy excerpts that are relevant to the template being completed for this program and jurisdiction.
 
-Your task is to generate exactly 12 targeted interview questions that the caseworker should ask the client to gather the factual information needed to complete the template accurately and in compliance with policy.
+Your task is to generate UP TO 12 targeted interview questions that the caseworker should ask the client to gather the factual information needed to complete the template accurately and in compliance with policy.
+
+CRITICAL GROUNDING RULES:
+
+- Only generate a question if the cited policy snippet ACTUALLY SUPPORTS asking it.
+- The cited snippet must contain substantive policy text that justifies the question — not just a topically related heading, table of contents entry, or section label.
+- Do NOT infer generic intake questions from broad topical relevance alone.
+- Do NOT use structural headings, contents pages, index pages, or section listings as support unless they contain substantive guidance text.
+- It is ACCEPTABLE and PREFERRED to return fewer than 12 questions if the policy excerpts do not provide sufficient grounding for more.
+- Quality and grounding matter more than quantity. 4 well-grounded questions are better than 12 weakly grounded ones.
+- If the policy excerpts are too weak, too structural, or too vague to support any meaningful questions, return an empty questions array.
 
 These must be CLIENT-FACING, FACT-FIRST questions.
 
@@ -160,20 +283,24 @@ DO NOT:
 - Ask abstract legal or regulatory questions
 - Ask the client to interpret definitions or determine eligibility
 - Ask vague filler questions such as "Is there anything else?"
+- Generate questions that go beyond what the cited snippet actually says
+- Stretch a citation to cover a question the snippet does not support
 
-The goal is to generate structured investigative questions that help capture concrete facts.
+The goal is to generate structured investigative questions that help capture concrete facts, grounded in real policy text.
 
 ------------------------------------------------------------
-CATEGORY REQUIREMENTS (exact counts)
+CATEGORY GUIDANCE (up to 2 per category, as evidence supports)
 
-You must generate:
+Aim for coverage across these categories when evidence permits:
 
-- Timeline: exactly 2 questions  
-- Individuals & Relationships: exactly 2 questions  
-- Event / Situation Details: exactly 2 questions  
-- Risk / Needs / Safety Factors: exactly 2 questions  
-- Agency / Service Involvement: exactly 2 questions  
-- Documentation / Evidence / Records: exactly 2 questions  
+- Timeline: up to 2 questions  
+- Individuals & Relationships: up to 2 questions  
+- Event / Situation Details: up to 2 questions  
+- Risk / Needs / Safety Factors: up to 2 questions  
+- Agency / Service Involvement: up to 2 questions  
+- Documentation / Evidence / Records: up to 2 questions  
+
+Do NOT force questions into a category if the evidence does not support it. Skip categories with insufficient evidence.
 
 ------------------------------------------------------------
 QUESTION QUALITY RULES
@@ -198,10 +325,10 @@ Prefer questions that produce concise, extractable answers that can be directly 
 CITATION REQUIREMENTS
 
 - Each question MUST cite at least one valid snippet_id from the provided policy excerpts.
+- The cited snippet must contain actual policy substance that supports the question — not just a topically adjacent heading.
 - Do not invent snippet IDs.
 - Try to distribute citations across multiple snippets.
 - Do not use the same snippet_id for more than 3 questions unless unavoidable.
-- Questions must be meaningfully grounded in the cited policy.
 
 ------------------------------------------------------------
 Return STRICT JSON only in this format:
@@ -216,7 +343,7 @@ Return STRICT JSON only in this format:
   ]
 }
 
-Exactly 12 questions.
+Return 0 to 12 questions. An empty array is valid if evidence is insufficient.
 No text outside JSON.
 `,
         },
@@ -230,13 +357,18 @@ No text outside JSON.
     const raw = completion.choices[0]?.message?.content;
     if (!raw) throw new Error("Model returned empty response");
 
-    // ── 5. Parse and validate output ───────────────────────────
+    // ── 6. Parse and validate output ───────────────────────────
     const parsed = extractJSON(raw);
 
-    if (!parsed.questions || parsed.questions.length !== 12) {
-      throw new Error(`Model did not return exactly 12 questions (got ${parsed.questions?.length ?? 0})`);
+    if (!parsed.questions || !Array.isArray(parsed.questions)) {
+      throw new Error("Model did not return a questions array");
     }
 
+    if (parsed.questions.length > 12) {
+      throw new Error(`Model returned more than 12 questions (got ${parsed.questions.length})`);
+    }
+
+    // Validate citation IDs
     for (const q of parsed.questions) {
       if (!q.question || !q.citations || q.citations.length === 0) {
         throw new Error("Invalid question format: missing question or citations");
@@ -249,17 +381,98 @@ No text outside JSON.
       }
     }
 
-    // ── 6. Build guidance payload with template_id + scope ────
+    // ── 7. Post-generation support-strength validation ─────────
+    const validatedQuestions: typeof parsed.questions = [];
+    const droppedQuestions: { question: string; reason: string }[] = [];
+
+    for (const q of parsed.questions) {
+      const citedTexts = q.citations
+        .map((cid: string) => snippetMap.get(cid))
+        .filter(Boolean) as string[];
+
+      const result = validateQuestionSupport(q.question, citedTexts);
+
+      if (result.supported) {
+        validatedQuestions.push(q);
+      } else {
+        droppedQuestions.push({ question: q.question.slice(0, 80), reason: result.reason ?? "unknown" });
+      }
+    }
+
+    console.log(
+      `[generate-guidance-phase1] Validation: ${parsed.questions.length} generated → ${validatedQuestions.length} grounded, ${droppedQuestions.length} dropped`
+    );
+    if (droppedQuestions.length > 0) {
+      console.log("[generate-guidance-phase1] Dropped questions:", JSON.stringify(droppedQuestions));
+    }
+
+    // ── 8. Check if we have enough grounded questions ──────────
+    if (validatedQuestions.length < MIN_GROUNDED_QUESTIONS) {
+      const reasonCode: GroundingCode = validatedQuestions.length === 0
+        ? (lowInfoCount > snippets.length * 0.5 ? "LOW_INFORMATION_POLICY_PACK" : "INSUFFICIENT_GROUNDED_SUPPORT")
+        : "WEAK_CITATION_SUPPORT";
+
+      console.warn(
+        `[generate-guidance-phase1] Insufficient grounded questions: ${validatedQuestions.length}/${parsed.questions.length}. Reason: ${reasonCode}`
+      );
+
+      // Save the insufficient-grounding result to session metadata so UI can display it
+      const insufficientPayload = {
+        generated_at: new Date().toISOString(),
+        model,
+        template_id: templateId,
+        guidance_scope: guidanceScope,
+        ...(guidanceScope === "other" && guidanceScopeOther ? { guidance_scope_other: guidanceScopeOther } : {}),
+        questions: validatedQuestions, // may be 0-2 questions
+        grounding_status: "insufficient" as const,
+        grounding_reason: reasonCode,
+        total_generated: parsed.questions.length,
+        total_grounded: validatedQuestions.length,
+        total_dropped: droppedQuestions.length,
+      };
+
+      await supabase.rpc("update_session_guidance_phase1", {
+        session_id_input: sessionIdResult.value,
+        guidance_json: insufficientPayload,
+      });
+
+      // ── Eye: tool.run.completed (with insufficient grounding) ──
+      await logEyeEvent(supabase, {
+        session_id: sessionIdResult.value,
+        event_type: "tool.run.completed",
+        serviceName: "generate-guidance-phase1",
+        payload: {
+          request_id: requestId,
+          resource_type: "tool",
+          resource_id: "generate_guidance_phase1",
+          template_id: templateId,
+          guidance_scope: guidanceScope,
+          question_count: validatedQuestions.length,
+          snippet_count: snippetIdSet.size,
+          grounding_status: "insufficient",
+          grounding_reason: reasonCode,
+          result: "success",
+        },
+      });
+
+      return json(200, { success: true, grounding_status: "insufficient", grounding_reason: reasonCode });
+    }
+
+    // ── 9. Build guidance payload with validated questions ────
     const guidancePayload = {
       generated_at: new Date().toISOString(),
       model,
       template_id: templateId,
       guidance_scope: guidanceScope,
       ...(guidanceScope === "other" && guidanceScopeOther ? { guidance_scope_other: guidanceScopeOther } : {}),
-      questions: parsed.questions,
+      questions: validatedQuestions,
+      grounding_status: "sufficient" as const,
+      total_generated: parsed.questions.length,
+      total_grounded: validatedQuestions.length,
+      total_dropped: droppedQuestions.length,
     };
 
-    // ── 7. Save to session ─────────────────────────────────────
+    // ── 10. Save to session ────────────────────────────────────
     const updateResponse = await supabase.rpc("update_session_guidance_phase1", {
       session_id_input: sessionIdResult.value,
       guidance_json: guidancePayload,
@@ -282,8 +495,10 @@ No text outside JSON.
         resource_id: "generate_guidance_phase1",
         template_id: templateId,
         guidance_scope: guidanceScope,
-        question_count: parsed.questions.length,
+        question_count: validatedQuestions.length,
         snippet_count: snippetIdSet.size,
+        total_generated: parsed.questions.length,
+        total_dropped: droppedQuestions.length,
         result: "success",
       },
     });

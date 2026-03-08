@@ -279,7 +279,8 @@ export default function Guidance() {
                   <Separator />
                   <p className="text-xs text-muted-foreground">
                     The tool reads policy snippets from your session's compiled policy pack
-                    and generates 12 targeted interview questions across 6 categories.
+                    and generates up to 12 targeted interview questions across 6 categories.
+                    Only questions with strong policy grounding are returned.
                   </p>
                 </CardContent>
               </Card>
@@ -309,7 +310,7 @@ export default function Guidance() {
                   <CardContent className="py-16 text-center">
                     <Sparkles className="h-10 w-10 mx-auto text-muted-foreground/30 mb-4" />
                     <p className="text-sm text-muted-foreground">
-                      Click <strong>Generate 12 Questions</strong> below to produce interview questions
+                      Click <strong>Generate Questions</strong> below to produce interview questions
                       from your session's policy pack.
                     </p>
                   </CardContent>
@@ -355,15 +356,63 @@ export default function Guidance() {
                 </Card>
               )}
 
+              {/* Insufficient grounding state */}
+              {runState === "success" && output && output.grounding_status === "insufficient" && (
+                <Card className="border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20">
+                  <CardContent className="py-10 text-center">
+                    <AlertTriangle className="h-10 w-10 mx-auto text-amber-500/70 mb-4" />
+                    <p className="text-sm font-medium text-foreground mb-2">
+                      Insufficient policy grounding
+                    </p>
+                    <p className="text-xs text-muted-foreground max-w-md mx-auto mb-3">
+                      AidMind could not generate reliably grounded guidance from the currently selected policy sources.
+                      {output.grounding_reason === "LOW_INFORMATION_POLICY_PACK" &&
+                        " The policy pack contains mostly structural or low-information content."}
+                      {output.grounding_reason === "WEAK_CITATION_SUPPORT" &&
+                        " The generated questions could not be adequately supported by the available policy text."}
+                      {output.grounding_reason === "INSUFFICIENT_GROUNDED_SUPPORT" &&
+                        " Too few questions could be grounded in substantive policy text."}
+                    </p>
+                    <p className="text-xs text-muted-foreground mb-4">
+                      Add more relevant policy material to the knowledge base, or try a different template.
+                    </p>
+                    {output.total_generated != null && (
+                      <div className="flex items-center justify-center gap-3 mb-4">
+                        <Badge variant="outline" className="text-[10px] font-mono">
+                          {output.total_generated} generated → {output.total_grounded ?? 0} grounded
+                        </Badge>
+                        <Badge variant="outline" className="text-[10px] font-mono text-amber-600">
+                          {output.grounding_reason}
+                        </Badge>
+                      </div>
+                    )}
+                    {output.questions.length > 0 && (
+                      <p className="text-xs text-muted-foreground italic mb-3">
+                        {output.questions.length} partially grounded question{output.questions.length !== 1 ? "s" : ""} shown below — review with caution.
+                      </p>
+                    )}
+                    <Button variant="outline" size="sm" onClick={runGuidance}>
+                      <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                      Try again
+                    </Button>
+                  </CardContent>
+                </Card>
+              )}
+
               {/* Success — Questions display */}
-              {runState === "success" && output && (
+              {runState === "success" && output && (output.grounding_status !== "insufficient" || output.questions.length > 0) && (
                 <div className="space-y-4">
                   {/* Summary bar */}
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 flex-wrap">
                       <Badge variant="secondary" className="text-xs">
-                        {output.questions.length} questions
+                        {output.questions.length} question{output.questions.length !== 1 ? "s" : ""}
                       </Badge>
+                      {output.total_dropped != null && output.total_dropped > 0 && (
+                        <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                          {output.total_dropped} dropped (weak grounding)
+                        </Badge>
+                      )}
                       <Badge variant="outline" className="text-xs font-mono">
                         {output.model}
                       </Badge>
@@ -389,7 +438,7 @@ export default function Guidance() {
 
                   {/* Review notice */}
                   <p className="text-xs text-muted-foreground italic">
-                    Review and edit before using — these are AI-generated suggestions, not final documentation.
+                    Review and edit before using — these are AI-generated suggestions grounded in your policy pack, not final documentation.
                   </p>
 
                   {/* Category cards */}
@@ -497,7 +546,7 @@ export default function Guidance() {
               {runState === "compiling" || runState === "generating" || runState === "running" ? (
                 <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {runState === "compiling" ? "Compiling…" : "Generating…"}</>
               ) : (
-                <><Sparkles className="h-4 w-4 mr-2" /> Generate 12 Questions</>
+                <><Sparkles className="h-4 w-4 mr-2" /> Generate Questions</>
               )}
             </Button>
           </div>
