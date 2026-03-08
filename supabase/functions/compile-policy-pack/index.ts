@@ -1124,6 +1124,7 @@ Deno.serve(async (req) => {
             content: m.content ?? "",
             metadata: m.metadata ?? {},
             query_indices: [qi],
+            evidence_usefulness: 0, // computed later in greedySelect
           });
         }
       }
