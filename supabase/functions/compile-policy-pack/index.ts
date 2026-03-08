@@ -25,6 +25,11 @@ interface MergedChunk {
 
 const HARD_MAX_TOTAL_CHUNKS = 100;
 
+/* ── Diversity-aware selection constants ── */
+const NEARBY_CHUNK_WINDOW = 1;
+const JACCARD_DUPLICATE_THRESHOLD = 0.75;
+const CONTAINMENT_THRESHOLD = 0.80;
+const MAX_CHUNKS_PER_DOCUMENT = 4;
 /* ── Helpers ── */
 
 // Dynamic CORS headers — set per-request
