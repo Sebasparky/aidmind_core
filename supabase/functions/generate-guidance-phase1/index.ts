@@ -122,19 +122,26 @@ function extractMeaningfulTerms(text: string): string[] {
 }
 
 /**
- * Multi-gate support-strength validator.
+ * Multi-gate support-strength validator with hard/soft hierarchy.
  *
- * Gate 1: empty / missing snippet text
- * Gate 2: snippet text too short
- * Gate 3: all snippets structurally weak (headings, outlines, low prose)
- * Gate 4: question introduces too many unsupported concepts
- * Gate 5: weak topical overlap (secondary signal)
+ * HARD gates (immediate reject):
+ *   Gate 1: empty / missing snippet text
+ *   Gate 2: snippet text too short
+ *   Gate 3: all snippets structurally weak (headings, outlines, low prose)
+ *
+ * SOFT gates (reject only in combination or when snippet quality is low):
+ *   Gate 4: concept coverage (question introduces many unsupported terms)
+ *   Gate 5: topical overlap (low literal term overlap)
+ *
+ * A question passes if it clears all hard gates AND at least one of:
+ *   - snippet quality is high enough to tolerate soft-gate weakness
+ *   - soft gates are not both weak
  */
 function validateQuestionSupport(
   question: string,
   citedSnippetTexts: string[],
 ): { supported: boolean; reason?: DropReason; details?: Record<string, unknown> } {
-  // Gate 1: no snippets at all
+  // ── HARD GATE 1: no snippets at all ──
   if (citedSnippetTexts.length === 0) {
     return { supported: false, reason: "no_snippet_text" };
   }
@@ -142,17 +149,16 @@ function validateQuestionSupport(
   const combinedText = citedSnippetTexts.join(" ");
   const combinedLen = combinedText.replace(/\s+/g, " ").trim().length;
 
-  // Gate 2: combined text too short
+  // ── HARD GATE 2: combined text too short ──
   if (combinedLen < 80) {
     return { supported: false, reason: "snippet_too_short", details: { combinedLen } };
   }
 
-  // Gate 3: structural quality check (aligned with compile-time computeInfoQuality)
+  // ── HARD GATE 3: structural quality check ──
   const qualities = citedSnippetTexts.map(computeSnippetSupportQuality);
   const avgQuality = qualities.reduce((a, b) => a + b, 0) / qualities.length;
   const maxQuality = Math.max(...qualities);
 
-  // If even the best snippet is structurally weak, reject
   if (maxQuality < SNIPPET_QUALITY_THRESHOLD) {
     return {
       supported: false,
@@ -161,58 +167,109 @@ function validateQuestionSupport(
     };
   }
 
-  // Gate 4: concept coverage — does the question introduce too many unsupported concepts?
+  // ── SOFT GATES: concept coverage + topical overlap ──
+  // These are evaluated together; rejection requires combined weakness.
+
   const questionTerms = extractMeaningfulTerms(question);
   const snippetTermSet = new Set(extractMeaningfulTerms(combinedText));
 
-  if (questionTerms.length >= 3) {
-    let matched = 0;
-    const unmatched: string[] = [];
-    for (const term of questionTerms) {
-      if (snippetTermSet.has(term)) {
-        matched++;
-      } else {
-        unmatched.push(term);
-      }
-    }
-    const coverageRatio = matched / questionTerms.length;
+  // If question has very few meaningful terms, skip soft gates (simple question = fine)
+  if (questionTerms.length < 3) {
+    return { supported: true };
+  }
 
-    // If the question introduces >70% unsupported concepts, reject
-    if (coverageRatio < 0.25) {
+  let matched = 0;
+  const unmatched: string[] = [];
+  for (const term of questionTerms) {
+    if (snippetTermSet.has(term)) {
+      matched++;
+    } else {
+      unmatched.push(term);
+    }
+  }
+  const coverageRatio = matched / questionTerms.length;
+
+  // Determine quality tier for adaptive thresholds
+  // High-quality snippets get more tolerance for wording mismatch
+  const isHighQuality = maxQuality >= 0.8 && avgQuality >= 0.6;
+  const isMediumQuality = maxQuality >= 0.5;
+
+  // Concept coverage: only hard-reject at very extreme levels,
+  // and only when snippet quality can't compensate
+  const conceptCoverageThreshold = isHighQuality ? 0.10 : isMediumQuality ? 0.15 : 0.20;
+  const conceptFailed = coverageRatio < conceptCoverageThreshold;
+
+  // Topical overlap: secondary signal
+  const overlapThreshold = isHighQuality ? 0.08 : isMediumQuality ? 0.12 : 0.18;
+  const overlapFailed = coverageRatio < overlapThreshold;
+
+  // Decision logic: reject only when soft signals agree the question is weak
+  // For high-quality snippets: both must fail (very tolerant of paraphrasing)
+  // For medium-quality: concept failure alone is enough if very low
+  // For low-quality: either failure triggers rejection
+  if (isHighQuality) {
+    // High-quality prose: only reject if coverage is extremely low
+    if (conceptFailed && overlapFailed) {
       return {
         supported: false,
         reason: "unsupported_question_concepts",
         details: {
           coverageRatio: +coverageRatio.toFixed(2),
+          qualityTier: "high",
           questionTermCount: questionTerms.length,
           matchedCount: matched,
           sampleUnmatched: unmatched.slice(0, 5),
         },
       };
     }
+    // Otherwise: high-quality snippet with some overlap → allow
+    return { supported: true };
   }
 
-  // Gate 5: topical overlap — secondary signal, only if snippets are structurally okay
-  // Weight this gate less if structural quality is high
-  if (questionTerms.length >= 3) {
-    let matched = 0;
-    for (const term of questionTerms) {
-      if (snippetTermSet.has(term)) matched++;
-    }
-    const overlapRatio = matched / questionTerms.length;
-
-    // Only reject for weak overlap if structural quality is also mediocre
-    const overlapThreshold = avgQuality > 0.7 ? 0.12 : 0.18;
-    if (overlapRatio < overlapThreshold) {
+  if (isMediumQuality) {
+    // Medium quality: reject if concept coverage is very poor
+    if (coverageRatio < 0.12) {
       return {
         supported: false,
-        reason: "weak_topical_overlap",
+        reason: "unsupported_question_concepts",
         details: {
-          overlapRatio: +overlapRatio.toFixed(2),
-          avgSnippetQuality: +avgQuality.toFixed(2),
+          coverageRatio: +coverageRatio.toFixed(2),
+          qualityTier: "medium",
+          questionTermCount: questionTerms.length,
+          matchedCount: matched,
+          sampleUnmatched: unmatched.slice(0, 5),
         },
       };
     }
+    // Medium quality + some coverage → allow
+    return { supported: true };
+  }
+
+  // Low quality (but above hard gate 3): stricter soft checks
+  if (conceptFailed) {
+    return {
+      supported: false,
+      reason: "unsupported_question_concepts",
+      details: {
+        coverageRatio: +coverageRatio.toFixed(2),
+        qualityTier: "low",
+        questionTermCount: questionTerms.length,
+        matchedCount: matched,
+        sampleUnmatched: unmatched.slice(0, 5),
+      },
+    };
+  }
+
+  if (overlapFailed) {
+    return {
+      supported: false,
+      reason: "weak_topical_overlap",
+      details: {
+        overlapRatio: +coverageRatio.toFixed(2),
+        qualityTier: "low",
+        avgSnippetQuality: +avgQuality.toFixed(2),
+      },
+    };
   }
 
   return { supported: true };
