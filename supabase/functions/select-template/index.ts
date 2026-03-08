@@ -56,7 +56,7 @@ Deno.serve(async (req) => {
       templateVersion = body.template_version;
       templateName = body.template_name;
     } catch {
-      return json(400, { success: false, error: "Invalid JSON body", code: "INVALID_JSON" });
+      return json(req, 400, { success: false, error: "Invalid JSON body", code: "INVALID_JSON" });
     }
   }
 
