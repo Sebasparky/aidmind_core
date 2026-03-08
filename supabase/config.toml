@@ -47,3 +47,6 @@ verify_jwt = false
 
 [functions.get-citation-details]
 verify_jwt = false
+
+[functions.records-room]
+verify_jwt = false
