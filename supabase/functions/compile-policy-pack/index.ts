@@ -1194,7 +1194,10 @@ Deno.serve(async (req) => {
       chunk_index: c.chunk_index,
       similarity: c.similarity,
       rank: idx + 1,
-      metadata: { query_indices: c.query_indices },
+      metadata: {
+        query_indices: c.query_indices,
+        evidence_usefulness: c.evidence_usefulness,
+      },
     }));
 
     const BATCH_SIZE = 50;
