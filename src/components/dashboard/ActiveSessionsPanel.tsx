@@ -31,6 +31,8 @@ interface ActiveSession {
   interactionType: string;
   lastAccessed: Date;
   createdAt: Date;
+  guidanceCompleted: boolean;
+  reviewerCompleted: boolean;
 }
 
 function formatRelativeTime(date: Date): string {
