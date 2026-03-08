@@ -311,9 +311,9 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                       </p>
                       <Badge 
                         variant="secondary"
-                        className={cn("text-xs shrink-0", getToolsUsedColor(usage.toolCount))}
+                        className={cn("text-xs shrink-0", getToolsUsedColor(toolCount))}
                       >
-                        Tools: {usage.toolCount}/2
+                        Tools: {toolCount}/2
                       </Badge>
                     </div>
                     <div className="flex items-center gap-2 mt-1">
