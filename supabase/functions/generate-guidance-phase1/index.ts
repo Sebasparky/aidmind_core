@@ -778,6 +778,33 @@ TRANSFORMATION RULE:
 If a policy snippet describes what information must be collected (e.g., "the assessment must include safety factors"), you MAY transform that into a natural client-facing question (e.g., "Are there any current safety concerns for the child in the home?").
 But do NOT simply mirror policy jargon back as a question. Translate operational requirements into plain, factual interview questions.
 
+------------------------------------------------------------
+SPECIFICITY PRESERVATION (CRITICAL)
+
+When a cited snippet includes a meaningful operational qualifier, PRESERVE it in the question if it improves accuracy and usefulness. Do NOT strip away important scope-limiting detail just to make a question shorter or simpler.
+
+Preserve details such as:
+- Time windows ("within the past year", "current", "immediate")
+- Severity levels ("most serious injury")
+- Safety context ("as immediate safety resources")
+- Role-specific facts ("ability to provide protection, supervision, care")
+- Concrete conditions ("homeless or facing eviction", "physically unsafe")
+- Operational purpose ("to keep the child safe")
+
+GOOD specificity preservation:
+- Source says "within the past year" → Question: "Has the primary caretaker had a substance abuse problem within the past year?" (NOT "Has the caretaker ever had a substance abuse problem?")
+- Source says "as immediate safety resources" → Question: "Have any community services been recommended or used as immediate safety resources?" (NOT just "Have any community services been recommended?")
+- Source says "most serious injury" → Question: "Was any child injured, and if so, what was the most serious injury?" (NOT "Was any child injured?")
+
+BAD over-generalization:
+- Do NOT turn "immediate safety resources" into just "services"
+- Do NOT turn "within the past year" into "ever" or remove the time bound
+- Do NOT turn "facing eviction" into "housing problems" unless the source is genuinely broader
+- Do NOT turn "most serious injury" into "any injury"
+
+The question should still sound natural and conversational, but retain the meaningful qualifiers from the source.
+------------------------------------------------------------
+
 QUESTION STYLE RULES:
 - Use plain spoken language a client or caregiver would understand
 - Ask about concrete facts, events, people, dates, conditions, services
