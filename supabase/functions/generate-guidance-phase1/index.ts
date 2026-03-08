@@ -1087,6 +1087,7 @@ No text outside JSON.
     }
 
     // ── 8. Check if we have enough grounded questions ──────────
+    // Both "pass" and "warning" questions count as usable
     if (validatedQuestions.length < MIN_GROUNDED_QUESTIONS) {
       const reasonCode: GroundingCode = validatedQuestions.length === 0
         ? (lowInfoCount > snippets.length * 0.5 ? "LOW_INFORMATION_POLICY_PACK" : "INSUFFICIENT_GROUNDED_SUPPORT")
@@ -1096,20 +1097,22 @@ No text outside JSON.
         `[generate-guidance-phase1] Insufficient grounded questions: ${validatedQuestions.length}/${parsed.questions.length}. Reason: ${reasonCode}`
       );
 
-      // Save the insufficient-grounding result to session metadata so UI can display it
       const insufficientPayload = {
         generated_at: new Date().toISOString(),
         model,
         template_id: templateId,
         guidance_scope: guidanceScope,
         ...(guidanceScope === "other" && guidanceScopeOther ? { guidance_scope_other: guidanceScopeOther } : {}),
-        questions: validatedQuestions, // may be 0-2 questions
+        questions: validatedQuestions,
         grounding_status: "insufficient" as const,
         grounding_reason: reasonCode,
         total_generated: parsed.questions.length,
         total_grounded: validatedQuestions.length,
+        total_grounded_strong: strongCount,
+        total_grounded_warning: warningCount,
         total_dropped: droppedQuestions.length,
-        drop_reason_distribution: dropReasonCounts,
+        hard_fail_distribution: dropReasonCounts,
+        soft_fail_distribution: softFailCounts,
       };
 
       await supabase.rpc("update_session_guidance_phase1", {
@@ -1117,7 +1120,6 @@ No text outside JSON.
         guidance_json: insufficientPayload,
       });
 
-      // ── Eye: tool.run.completed (with insufficient grounding) ──
       await logEyeEvent(supabase, {
         session_id: sessionIdResult.value,
         event_type: "tool.run.completed",
@@ -1150,8 +1152,11 @@ No text outside JSON.
       grounding_status: "sufficient" as const,
       total_generated: parsed.questions.length,
       total_grounded: validatedQuestions.length,
+      total_grounded_strong: strongCount,
+      total_grounded_warning: warningCount,
       total_dropped: droppedQuestions.length,
-      drop_reason_distribution: dropReasonCounts,
+      hard_fail_distribution: dropReasonCounts,
+      soft_fail_distribution: softFailCounts,
     };
 
     // ── 10. Save to session ────────────────────────────────────
