@@ -9,7 +9,7 @@ import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import {
   Search, FileText, Quote, Scale, ShieldCheck, ArrowRight,
   BookOpen, FileSearch, ChevronDown, ChevronUp, ExternalLink,
-  AlertCircle, Loader2, HelpCircle,
+  AlertCircle, Loader2, HelpCircle, Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -86,8 +86,8 @@ function EvidenceCard({ item, rank }: { item: EvidenceItem; rank: number }) {
           {item.page_or_location && ` · ${item.page_or_location}`}
         </p>
 
-        {/* Expand context */}
-        <div className="mt-3 flex items-center gap-3">
+        {/* Actions row: expand context + source access */}
+        <div className="mt-3 flex items-center gap-3 flex-wrap">
           <button
             onClick={() => setExpanded(!expanded)}
             className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -95,6 +95,30 @@ function EvidenceCard({ item, rank }: { item: EvidenceItem; rank: number }) {
             {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
             {expanded ? "Hide full context" : "Show full context"}
           </button>
+
+          {/* Source access actions — only shown when URLs are available */}
+          {item.source_url && (
+            <a
+              href={item.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <ExternalLink className="h-3 w-3" />
+              View source
+            </a>
+          )}
+          {item.download_url && (
+            <a
+              href={item.download_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <Download className="h-3 w-3" />
+              Download
+            </a>
+          )}
         </div>
 
         {expanded && (

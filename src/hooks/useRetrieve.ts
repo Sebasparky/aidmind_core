@@ -22,6 +22,10 @@ export interface EvidenceItem {
   document_id: string;
   similarity: number;
   composite_score: number;
+  /** URL to view the original source document, if available */
+  source_url: string | null;
+  /** URL to download the original source document, if available */
+  download_url: string | null;
 }
 
 export type RetrieveStatus = "idle" | "loading" | "success" | "no_results" | "clarification_needed" | "error";
