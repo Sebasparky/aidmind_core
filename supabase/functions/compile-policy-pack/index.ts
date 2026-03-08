@@ -27,10 +27,13 @@ const HARD_MAX_TOTAL_CHUNKS = 100;
 
 /* ── Helpers ── */
 
+// Dynamic CORS headers — set per-request
+let _corsHeaders: Record<string, string> = {};
+
 function json(status: number, body: Record<string, unknown>) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { ..._corsHeaders, "Content-Type": "application/json" },
   });
 }
 
