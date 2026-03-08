@@ -262,7 +262,7 @@ export function useSessionMachine({
     } else {
       setState("READY_FOR_INPUT");
     }
-  }, [state, generateRequestId, resumeBundle, sessionApi, caseId, caseLabel, clientLabel, interactionType]);
+  }, [state, generateRequestId, resumeBundle, sessionApi, caseId, caseLabel, clientLabel, interactionType, tenantId, userId]);
 
   // V1: PASTE_TEXT_NOTES: READY_FOR_INPUT → TEXT_PROVIDED
   // In v1, this is the primary input method (no audio upload/transcription)
