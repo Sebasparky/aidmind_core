@@ -21,6 +21,7 @@ interface MergedChunk {
   content: string;
   metadata: Record<string, unknown>;
   query_indices: number[];
+  evidence_usefulness: number; // 0..1 score for operational usefulness
 }
 
 /* ── Hard limits ── */
@@ -28,11 +29,12 @@ const HARD_MAX_TOTAL_CHUNKS = 80;
 
 /* ── Greedy selector tuning constants ── */
 
-// Weights for the dynamic scoring function
-const W_SIMILARITY = 0.35;
-const W_NOVELTY = 0.30;
-const W_COVERAGE = 0.25;
-const W_DIVERSITY = 0.10;
+// Weights for the dynamic scoring function (must sum to 1.0)
+const W_SIMILARITY = 0.28;
+const W_NOVELTY = 0.25;
+const W_COVERAGE = 0.20;
+const W_DIVERSITY = 0.07;
+const W_USEFULNESS = 0.20; // evidence usefulness weight
 
 // Jaccard threshold: chunks above this vs ANY selected chunk get a heavy novelty penalty
 const JACCARD_HARD_SKIP = 0.80;
@@ -120,6 +122,180 @@ function computeInfoQuality(content: string): number {
 const INFO_QUALITY_EXCLUDE = 0.2;
 // Chunks between EXCLUDE and this threshold get a similarity penalty
 const INFO_QUALITY_PENALTY_THRESHOLD = 0.5;
+
+/* ── Evidence usefulness scoring ── */
+
+/**
+ * Scope-specific operational terms that indicate high-value assessment/intake content.
+ * These augment the generic positive signals when a scope is active.
+ */
+const SCOPE_OPERATIONAL_TERMS: Record<string, string[]> = {
+  child_welfare: [
+    "safety assessment", "risk factors", "family assessment", "caregiver",
+    "household", "home visit", "maltreatment", "child safety", "placement",
+    "prior reports", "protective services", "family supports", "parenting",
+    "living arrangement", "supervision", "abuse", "neglect", "permanency",
+    "family functioning", "child wellbeing", "kinship", "reunification",
+    "case plan", "safety plan", "family risk", "child risk",
+  ],
+  mental_health: [
+    "symptoms", "functioning", "treatment history", "medications",
+    "safety concerns", "crisis", "psychiatric", "diagnosis", "providers",
+    "prior care", "suicidal", "self-harm", "behavioral health",
+    "mental status", "clinical assessment", "therapy", "counseling",
+    "psychosocial", "trauma", "anxiety", "depression",
+  ],
+  substance_use: [
+    "use patterns", "substances used", "treatment history", "withdrawal",
+    "medication-assisted", "recovery", "relapse", "co-occurring",
+    "prior services", "sobriety", "dosage", "frequency", "route of use",
+    "overdose", "detox", "harm reduction", "screening", "CAGE", "AUDIT",
+  ],
+  domestic_violence: [
+    "safety planning", "lethality", "protective order", "power and control",
+    "survivor", "perpetrator", "incident", "escalation", "children exposed",
+    "shelter", "danger assessment", "coercive control",
+  ],
+  housing_homelessness: [
+    "housing history", "eviction", "shelter", "barriers to housing",
+    "housing stability", "chronic homelessness", "rapid re-housing",
+    "lease", "landlord", "utility", "housing assessment",
+  ],
+};
+
+/**
+ * Generic positive signals indicating assessment/intake/interview utility.
+ */
+const USEFULNESS_POSITIVE_PHRASES: string[] = [
+  "assessment", "screening", "intake", "interview", "evaluate", "determine",
+  "document", "documentation", "required information", "data collection",
+  "risk factors", "safety factors", "indicators", "criteria", "checklist",
+  "responsibilities", "required reporting", "must assess", "shall document",
+  "caseworker", "case worker", "worker must", "worker shall", "worker should",
+  "information gathering", "questions to ask", "areas to explore",
+  "factors to consider", "elements to assess", "items to document",
+  "referral", "service coordination", "agency involvement", "provider",
+  "records", "case plan", "service plan", "treatment plan",
+  "household composition", "family members", "caregiver", "parent",
+  "child", "children", "placement", "living arrangement",
+  "safety", "risk", "protective factors", "strengths",
+  "prior history", "prior services", "prior contact", "prior involvement",
+  "visit", "home visit", "observation",
+];
+
+/**
+ * Concrete case-fact nouns that indicate operational content.
+ */
+const USEFULNESS_FACT_NOUNS: string[] = [
+  "child", "parent", "caregiver", "household", "family", "placement",
+  "safety", "risk", "services", "referral", "treatment", "records",
+  "case plan", "assessment", "screening", "documentation", "visit",
+  "agency", "provider", "medication", "diagnosis", "symptoms",
+  "income", "housing", "employment", "education", "transportation",
+];
+
+/**
+ * Negative signals indicating non-operational content.
+ */
+const USEFULNESS_NEGATIVE_PHRASES: string[] = [
+  "references", "bibliography", "legal and related references",
+  "source/date", "works cited", "further reading",
+  "purpose of this document", "vision", "mission statement",
+  "strategic plan", "overview of the program", "background",
+  "history of the program", "legislative history", "certification",
+  "administrative rule", "funding", "appropriation", "budget",
+  "title iv-e", "federal match", "reimbursement rate",
+  "advocacy", "public awareness", "community education campaign",
+  "preamble", "whereas", "be it enacted", "be it resolved",
+  "table of contents", "list of figures", "appendix index",
+];
+
+/**
+ * Compute evidence usefulness: how likely is this chunk to support
+ * generating concrete, factual, client-facing intake/assessment questions?
+ *
+ * Returns 0..1 where:
+ *   0   = not useful for question generation (abstract/admin/reference)
+ *   0.5 = neutral / uncertain
+ *   1   = highly useful (assessment guidance, risk factors, documentation requirements)
+ *
+ * Tuning constants:
+ *   POSITIVE_PHRASE_WEIGHT = 0.04  — per positive phrase hit
+ *   NEGATIVE_PHRASE_WEIGHT = 0.08  — per negative phrase hit (penalty)
+ *   FACT_NOUN_WEIGHT       = 0.025 — per fact noun hit
+ *   SCOPE_TERM_WEIGHT      = 0.035 — per scope-specific operational term hit
+ *   MAX_RAW_SCORE          = 1.0   — cap before normalization
+ */
+const POSITIVE_PHRASE_WEIGHT = 0.04;
+const NEGATIVE_PHRASE_WEIGHT = 0.08;
+const FACT_NOUN_WEIGHT = 0.025;
+const SCOPE_TERM_WEIGHT = 0.035;
+
+function computeEvidenceUsefulness(content: string, scope?: string | null): number {
+  if (!content || content.trim().length < 50) return 0.1;
+
+  const lower = content.toLowerCase();
+
+  // Count positive phrase hits
+  let positiveHits = 0;
+  for (const phrase of USEFULNESS_POSITIVE_PHRASES) {
+    if (lower.includes(phrase)) positiveHits++;
+  }
+
+  // Count fact noun hits (deduplicated by checking word boundaries)
+  let factHits = 0;
+  for (const noun of USEFULNESS_FACT_NOUNS) {
+    // Use simple includes for multi-word, regex for single words
+    if (noun.includes(" ")) {
+      if (lower.includes(noun)) factHits++;
+    } else {
+      if (new RegExp(`\\b${noun}\\b`).test(lower)) factHits++;
+    }
+  }
+
+  // Count negative phrase hits
+  let negativeHits = 0;
+  for (const phrase of USEFULNESS_NEGATIVE_PHRASES) {
+    if (lower.includes(phrase)) negativeHits++;
+  }
+
+  // Count scope-specific operational term hits
+  let scopeHits = 0;
+  if (scope && SCOPE_OPERATIONAL_TERMS[scope]) {
+    for (const term of SCOPE_OPERATIONAL_TERMS[scope]) {
+      if (lower.includes(term)) scopeHits++;
+    }
+  }
+
+  // Detect instructional / imperative language (strong positive signal)
+  const imperativePatterns = [
+    /\b(must|shall|should|required to|need to)\s+(assess|document|evaluate|screen|determine|collect|gather|record|report|verify|obtain)\b/,
+    /\b(assess|evaluate|screen|document|determine|identify|review|examine|investigate)\s+(the|each|all|any|whether)\b/,
+  ];
+  let imperativeBonus = 0;
+  for (const p of imperativePatterns) {
+    if (p.test(lower)) imperativeBonus += 0.08;
+  }
+
+  // Detect enumerated lists of factors/criteria (strong positive signal)
+  const lines = content.split("\n").filter(l => l.trim().length > 0);
+  const numberedOrBulletedLines = lines.filter(l => /^\s*(\d+[\.\)]\s|[-•●]\s)/.test(l));
+  const enumerationBonus = numberedOrBulletedLines.length >= 3 ? 0.06 : 0;
+
+  // Compute raw score
+  const rawScore = (
+    positiveHits * POSITIVE_PHRASE_WEIGHT +
+    factHits * FACT_NOUN_WEIGHT +
+    scopeHits * SCOPE_TERM_WEIGHT +
+    imperativeBonus +
+    enumerationBonus -
+    negativeHits * NEGATIVE_PHRASE_WEIGHT
+  );
+
+  // Normalize to 0..1 with a baseline of 0.3 (neutral content gets ~0.3)
+  const normalized = Math.max(0, Math.min(1, 0.3 + rawScore));
+  return parseFloat(normalized.toFixed(3));
+}
 
 /* ── Helpers ── */
 
@@ -273,25 +449,62 @@ function buildRetrievalQuery(
   const scopeTerms = scope ? SCOPE_RETRIEVAL_TERMS[scope] : null;
   const specificity = computeSectionSpecificity(section);
 
+  // Operational intent phrases that steer retrieval toward assessment-useful content
+  const OPERATIONAL_INTENTS = [
+    "intake assessment guidance",
+    "caseworker interview questions",
+    "required information to collect",
+    "risk and safety factors to assess",
+    "documentation requirements",
+  ];
+
+  // Scope-specific operational steering phrases
+  const SCOPE_OPERATIONAL_INTENTS: Record<string, string> = {
+    child_welfare:
+      "child safety assessment, caregiver/family assessment, household information collection, risk factors, maltreatment indicators, service involvement, documentation requirements, case planning",
+    mental_health:
+      "mental health screening, symptoms assessment, treatment history, medication review, safety/crisis assessment, clinical intake, provider coordination",
+    substance_use:
+      "substance use screening, use patterns assessment, treatment history, withdrawal risk, recovery supports, prior services, medication-assisted treatment documentation",
+    domestic_violence:
+      "danger/lethality assessment, safety planning, incident documentation, children's exposure, protective factors, service coordination",
+    housing_homelessness:
+      "housing assessment, barriers documentation, housing history, stability factors, service needs, resource coordination",
+  };
+
+  const scopeOpsIntent = scope ? SCOPE_OPERATIONAL_INTENTS[scope] : null;
+
   if (scopeTerms) {
     if (specificity <= 0.3) {
-      // Very broad/generic section → strong scope steering
+      // Very broad/generic section → strong scope + operational steering
       parts.push(
-        `Find policy text relevant to the following intake/assessment section, specifically in the context of ${scopeTerms}.`,
+        `Find practical assessment guidance, screening criteria, risk factors, documentation requirements, and caseworker interview guidance relevant to the following intake section, specifically in the context of ${scopeTerms}.`,
+      );
+      if (scopeOpsIntent) {
+        parts.push(`Prioritize content about: ${scopeOpsIntent}.`);
+      }
+      parts.push(
+        `Focus on content that helps a caseworker determine what facts to collect, what risks to assess, and what to document during a client interaction.`,
       );
     } else if (specificity <= 0.6) {
-      // Moderately broad → moderate scope steering
+      // Moderately broad → moderate scope + operational steering
       parts.push(
-        `Find policy text relevant to this template section. Domain context: ${scopeTerms}.`,
+        `Find policy text with practical assessment guidance relevant to this template section. Domain context: ${scopeTerms}.`,
+      );
+      parts.push(
+        `Prefer content about: ${OPERATIONAL_INTENTS.slice(0, 3).join(", ")}.`,
       );
     } else {
-      // Already specific → light scope hint
+      // Already specific → light scope hint + light operational hint
       parts.push(
-        `Find policy text relevant to this template section (domain: ${scope?.replace(/_/g, " ")}).`,
+        `Find policy text relevant to this template section (domain: ${scope?.replace(/_/g, " ")}). Prefer practical assessment and documentation guidance.`,
       );
     }
   } else {
-    parts.push("Find policy text relevant to completing this section of the template.");
+    // No scope → still add operational intent
+    parts.push(
+      `Find policy text relevant to completing this section of the template. Prefer practical intake, assessment, or documentation guidance over general program background.`,
+    );
   }
 
   parts.push(section);
@@ -449,6 +662,7 @@ function computeRegionDiversity(
 
 /**
  * Compute the dynamic composite score for a candidate chunk.
+ * Now includes evidence usefulness as a weighted signal.
  */
 function scoreCandidate(
   chunk: MergedChunk,
@@ -462,12 +676,14 @@ function scoreCandidate(
   const novelty = computeNovelty(candidateTokens, state);
   const coverage = computeCoverageGain(chunk.query_indices, state);
   const diversity = computeRegionDiversity(chunk.document_id, chunk.chunk_index, state);
+  const usefulness = chunk.evidence_usefulness;
 
   return (
     W_SIMILARITY * simNorm +
     W_NOVELTY * novelty +
     W_COVERAGE * coverage +
-    W_DIVERSITY * diversity
+    W_DIVERSITY * diversity +
+    W_USEFULNESS * usefulness
   );
 }
 
@@ -512,6 +728,7 @@ function greedySelect(
   candidates: MergedChunk[],
   maxTotal: number,
   totalQueries: number,
+  scope?: string | null,
 ): { selected: MergedChunk[]; diagnostics: SelectionDiagnostics } {
   // --- Low-information chunk filtering ---
   let filteredLowInfo = 0;
@@ -522,11 +739,15 @@ function greedySelect(
       filteredLowInfo++;
       continue;
     }
-    // Apply a similarity penalty for borderline chunks
+    // Compute evidence usefulness for each candidate
+    const usefulness = computeEvidenceUsefulness(c.content, scope);
+    const enriched = { ...c, evidence_usefulness: usefulness };
+
+    // Apply a similarity penalty for borderline info-quality chunks
     if (iq < INFO_QUALITY_PENALTY_THRESHOLD) {
-      qualityCandidates.push({ ...c, similarity: c.similarity * iq });
+      qualityCandidates.push({ ...enriched, similarity: enriched.similarity * iq });
     } else {
-      qualityCandidates.push(c);
+      qualityCandidates.push(enriched);
     }
   }
   if (filteredLowInfo > 0) {
@@ -551,6 +772,8 @@ function greedySelect(
     queries_covered: 0,
     queries_total: totalQueries,
     avg_similarity: 0,
+    avg_evidence_usefulness: 0,
+    usefulness_distribution: { high: 0, medium: 0, low: 0 },
   };
 
   // Pre-tokenize all candidates (one-time cost)
@@ -617,7 +840,7 @@ function greedySelect(
         continue;
       }
 
-      // Compute dynamic score
+      // Compute dynamic score (now includes evidence usefulness)
       const score = scoreCandidate(chunk, tokens, state, maxSimilarity);
       if (score > bestScore) {
         bestScore = score;
@@ -655,9 +878,30 @@ function greedySelect(
 
   if (state.selected.length > 0) {
     let simSum = 0;
-    for (const c of state.selected) simSum += c.similarity;
+    let usefulnessSum = 0;
+    for (const c of state.selected) {
+      simSum += c.similarity;
+      usefulnessSum += c.evidence_usefulness;
+      // Classify usefulness tier
+      if (c.evidence_usefulness >= 0.6) (diag as any).usefulness_distribution.high++;
+      else if (c.evidence_usefulness >= 0.4) (diag as any).usefulness_distribution.medium++;
+      else (diag as any).usefulness_distribution.low++;
+    }
     diag.avg_similarity = parseFloat((simSum / state.selected.length).toFixed(4));
+    (diag as any).avg_evidence_usefulness = parseFloat((usefulnessSum / state.selected.length).toFixed(4));
   }
+
+  // Log per-chunk diagnostics for the selected set
+  const chunkDiagnostics = state.selected.map((c, idx) => ({
+    rank: idx + 1,
+    chunk_id: c.chunk_id.slice(0, 8),
+    doc_id: c.document_id.slice(0, 8),
+    chunk_index: c.chunk_index,
+    similarity: parseFloat(c.similarity.toFixed(4)),
+    usefulness: c.evidence_usefulness,
+    content_preview: c.content.slice(0, 120).replace(/\n/g, " "),
+  }));
+  console.log("[compile-policy-pack] Selected chunks detail:", JSON.stringify(chunkDiagnostics));
 
   console.log("[compile-policy-pack] Greedy selection diagnostics:", JSON.stringify(diag));
 
@@ -880,16 +1124,18 @@ Deno.serve(async (req) => {
             content: m.content ?? "",
             metadata: m.metadata ?? {},
             query_indices: [qi],
+            evidence_usefulness: 0, // computed later in greedySelect
           });
         }
       }
     }
 
-    // 7. Greedy diversity-aware chunk selection
+    // 7. Greedy diversity-aware chunk selection (now scope-aware for usefulness scoring)
     const { selected: merged, diagnostics } = greedySelect(
       [...chunkMap.values()],
       max_total_chunks,
       queries.length,
+      sessionScope,
     );
     diagnostics.total_raw_matches = totalRawMatches;
     console.log("[compile-policy-pack] Final diagnostics (with raw count):", JSON.stringify(diagnostics));
@@ -920,6 +1166,14 @@ Deno.serve(async (req) => {
           total_queries: queries.length,
           selected_chunk_count: merged.length,
           selection_diagnostics: diagnostics,
+          scope_used: sessionScope,
+          per_chunk_usefulness: merged.map((c, i) => ({
+            rank: i + 1,
+            doc_id: c.document_id.slice(0, 8),
+            chunk_index: c.chunk_index,
+            similarity: parseFloat(c.similarity.toFixed(4)),
+            usefulness: c.evidence_usefulness,
+          })),
         },
       })
       .select("id")
@@ -949,7 +1203,10 @@ Deno.serve(async (req) => {
       chunk_index: c.chunk_index,
       similarity: c.similarity,
       rank: idx + 1,
-      metadata: { query_indices: c.query_indices },
+      metadata: {
+        query_indices: c.query_indices,
+        evidence_usefulness: c.evidence_usefulness,
+      },
     }));
 
     const BATCH_SIZE = 50;
