@@ -68,7 +68,7 @@ export function StartNoteModal({ open, onOpenChange, onSessionCreated }: StartNo
     guidanceScope !== "other" || guidanceScopeOther.trim().length >= 3;
 
   const isValid =
-    caseLabel.trim().length > 0 && guidanceScope.length > 0 && scopeOtherValid;
+    caseLabel.trim().length > 0 && guidanceScope.length > 0 && scopeOtherValid && !!tenant?.tenantId;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
