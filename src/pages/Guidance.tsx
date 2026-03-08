@@ -591,7 +591,7 @@ export default function Guidance() {
           </Button>
           <div className="flex items-center gap-2">
             {isSuccess ? (
-              <Button onClick={handleBack}>
+              <Button onClick={handleDone}>
                 <Check className="h-4 w-4 mr-2" />
                 Done
               </Button>
