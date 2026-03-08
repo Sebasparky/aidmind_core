@@ -135,10 +135,9 @@ export default function Guidance() {
     }
   }
 
-  // Grounding badge helper
+  // Grounding badge helper — only show warnings, not on every question
   const getGroundingBadge = (q: GuidanceQuestion) => {
-    const status = q.validation_status;
-    if (status === "warning") {
+    if (q.validation_status === "warning") {
       return (
         <TooltipProvider>
           <Tooltip>
@@ -155,15 +154,7 @@ export default function Guidance() {
         </TooltipProvider>
       );
     }
-    // "pass" or unset — show strong grounding
-    if (q.citations.length > 0) {
-      return (
-        <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 border-primary/20 text-primary">
-          <ShieldCheck className="h-2.5 w-2.5" />
-          Strong grounding
-        </Badge>
-      );
-    }
+    // Pass / unset — no badge needed, citations provide traceability
     return null;
   };
 
