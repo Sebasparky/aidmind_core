@@ -70,6 +70,13 @@ export default function Guidance() {
 
   const { logEvent } = useEyeLogger();
 
+  // Auto-redirect to template selection if no template attached (skip intermediate screen)
+  useEffect(() => {
+    if (!loading && session && !session.templateId && !cameFromTemplate) {
+      navigate(`/guidance/${sessionId}/template`, { replace: true });
+    }
+  }, [loading, session, cameFromTemplate, sessionId, navigate]);
+
   // ── Helpers ────────────────────────────────────────────────────
   const handleBack = () => navigate("/dashboard");
   const handleChangeTemplate = () => navigate(`/guidance/${sessionId}/template`);
