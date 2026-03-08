@@ -388,7 +388,6 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                         </>
                       )}
                     </Button>
-                    </Button>
                     
                     <div className="ml-auto">
                       <TooltipProvider>
