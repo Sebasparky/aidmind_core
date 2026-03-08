@@ -623,18 +623,21 @@ export default function Guidance() {
 
       {/* ── Bottom Action Bar ── */}
       <div className="border-t border-border bg-card shrink-0">
-        <div className="container mx-auto px-6 py-3 max-w-5xl flex items-center justify-between">
-          <Button variant="outline" onClick={handleBack}>
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Button>
-          <div className="flex items-center gap-2">
-            {isSuccess ? (
-              <Button onClick={handleDone}>
-                <Check className="h-4 w-4 mr-2" />
-                Done
+        <div className="container mx-auto px-6 py-3 max-w-5xl flex items-center justify-end">
+          {isSuccess ? (
+            <Button onClick={handleDone} disabled={markingDone}>
+              {markingDone ? (
+                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving…</>
+              ) : (
+                <><Check className="h-4 w-4 mr-2" /> Done</>
+              )}
+            </Button>
+          ) : (
+            <div className="flex items-center gap-2 w-full justify-between">
+              <Button variant="outline" onClick={handleBack}>
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back to Dashboard
               </Button>
-            ) : (
               <Button
                 onClick={runGuidance}
                 disabled={runState === "running" || runState === "compiling" || runState === "generating" || !hasTemplate}
@@ -645,8 +648,8 @@ export default function Guidance() {
                   <><Sparkles className="h-4 w-4 mr-2" /> Generate Questions</>
                 )}
               </Button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
 
