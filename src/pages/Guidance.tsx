@@ -402,6 +402,16 @@ export default function Guidance() {
               {/* Success — Questions display */}
               {runState === "success" && output && (output.grounding_status !== "insufficient" || output.questions.length > 0) && (
                 <div className="space-y-4">
+                  {/* Success completion banner */}
+                  {output.grounding_status !== "insufficient" && output.questions.length > 0 && (
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-primary/5 border border-primary/15">
+                      <Check className="h-4 w-4 text-primary shrink-0" />
+                      <p className="text-sm text-foreground">
+                        <span className="font-medium">Guidance ready</span>
+                        <span className="text-muted-foreground"> — {output.questions.length} question{output.questions.length !== 1 ? "s" : ""} generated and grounded in your policy pack.</span>
+                      </p>
+                    </div>
+                  )}
                   {/* Summary bar */}
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 flex-wrap">

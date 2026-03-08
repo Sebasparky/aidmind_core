@@ -332,13 +332,27 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                     <Button
                       variant={usage.guidanceUsed ? "secondary" : "outline"}
                       size="sm"
-                      className="gap-1.5 text-xs"
+                      className={cn(
+                        "gap-1.5 text-xs",
+                        usage.guidanceUsed && "border-primary/20 bg-primary/10 text-primary hover:bg-primary/15"
+                      )}
                       onClick={() => handleGenerateGuidance(session)}
                       data-tour="guidance-button"
                     >
-                      <Sparkles className="h-3.5 w-3.5" />
-                      Guidance
-                      {usage.guidanceUsed && <Check className="h-3 w-3 ml-0.5" />}
+                      {usage.guidanceUsed ? (
+                        <>
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          Guidance
+                          <Badge variant="outline" className="ml-1 text-[9px] px-1 py-0 h-4 border-primary/30 text-primary">
+                            Complete
+                          </Badge>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-3.5 w-3.5" />
+                          Guidance
+                        </>
+                      )}
                     </Button>
                     <Button
                       variant="outline"
