@@ -95,7 +95,7 @@ Deno.serve(async (req) => {
     if (uploadFile) {
       // ── Upload path ──────────────────────────────────────────
       if (uploadFile.type !== "application/pdf") {
-        return json(400, { success: false, error: "Only PDF files are accepted", code: "INVALID_FILE_TYPE" });
+        return json(req, 400, { success: false, error: "Only PDF files are accepted", code: "INVALID_FILE_TYPE" });
       }
       if (uploadFile.size > MAX_TEMPLATE_SIZE) {
         return json(400, { success: false, error: "File exceeds 20MB limit", code: "FILE_TOO_LARGE" });
