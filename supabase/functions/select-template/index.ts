@@ -185,7 +185,7 @@ Deno.serve(async (req) => {
       }
 
       if (template.extraction_status !== "ready") {
-        return json(409, {
+        return json(req, 409, {
           success: false,
           error: `Template extraction not ready (status: "${template.extraction_status}")`,
           code: "TEMPLATE_NOT_READY",
