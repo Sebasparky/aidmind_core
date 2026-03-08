@@ -917,6 +917,34 @@ No text outside JSON.
       }
     }
 
+    // ── 6b. Pre-validation diagnostics: log raw generated questions ──
+    const HOUSING_TERMS = /\b(homeless|homelessness|eviction|evicted|housing|unhoused|shelter|unsheltered|facing\s+eviction)\b/i;
+
+    function classifyQuestionTopic(qText: string): string {
+      const lower = qText.toLowerCase();
+      if (HOUSING_TERMS.test(lower)) return "housing";
+      if (/\b(injur|harm|wound|bruise|fracture|burn)\b/i.test(lower)) return "injury";
+      if (/\b(substance|drug|alcohol|addiction|intoxicat)\b/i.test(lower)) return "substance_use";
+      if (/\b(community\s+service|agency|resource|referral)\b/i.test(lower)) return "services";
+      if (/\b(legal\s+action|court|petition|removal)\b/i.test(lower)) return "legal_action";
+      if (/\b(safe|danger|risk|threat|concern)\b/i.test(lower)) return "safety";
+      return "other";
+    }
+
+    const rawQuestionDiagnostics = parsed.questions.map((q: any, i: number) => ({
+      index: i,
+      question: q.question.slice(0, 150),
+      category: q.category ?? "unknown",
+      topic: classifyQuestionTopic(q.question),
+      citation_count: q.citations?.length ?? 0,
+      citations: (q.citations ?? []).map((c: string) => c.slice(0, 12)),
+    }));
+
+    console.log(`[generate-guidance-phase1] RAW_QUESTIONS (${parsed.questions.length}): ${JSON.stringify(rawQuestionDiagnostics)}`);
+
+    const housingRaw = rawQuestionDiagnostics.filter((d: any) => d.topic === "housing");
+    console.log(`[generate-guidance-phase1] HOUSING_DIAGNOSTIC: generated=${housingRaw.length > 0}${housingRaw.length > 0 ? ` questions=${JSON.stringify(housingRaw.map((h: any) => h.question))}` : ""}`);
+
     // ── 7. Post-generation validation (single-pass, no rewrite) ──
     const validatedQuestions: (typeof parsed.questions[0] & {
       validation_status: QuestionOutcome;
