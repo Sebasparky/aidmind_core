@@ -1,20 +1,20 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logEyeEvent } from "../_shared/eye.ts";
-import { corsSecurityHeaders } from "../_shared/security-headers.ts";
+import { buildCorsSecurityHeaders } from "../_shared/security-headers.ts";
 import { validateUuid, validatePlainText } from "../_shared/input-validation.ts";
 
 const MAX_TEMPLATE_SIZE = 20 * 1024 * 1024; // 20 MB
 
-function json(status: number, body: Record<string, unknown>) {
+function json(req: Request, status: number, body: Record<string, unknown>) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsSecurityHeaders, "Content-Type": "application/json" },
+    headers: { ...buildCorsSecurityHeaders(req), "Content-Type": "application/json" },
   });
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: corsSecurityHeaders });
-  if (req.method !== "POST") return json(405, { success: false, error: "Method not allowed" });
+  if (req.method === "OPTIONS") return new Response(null, { headers: buildCorsSecurityHeaders(req) });
+  if (req.method !== "POST") return json(req, 405, { success: false, error: "Method not allowed" });
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
