@@ -825,6 +825,21 @@ export type Database = {
           similarity: number
         }[]
       }
+      search_document_chunks_lexical: {
+        Args: {
+          p_match_count?: number
+          p_search_query: string
+          p_tenant_id: string
+        }
+        Returns: {
+          chunk_index: number
+          content: string
+          document_id: string
+          id: string
+          metadata: Json
+          rank: number
+        }[]
+      }
       update_session_guidance_phase1: {
         Args: { guidance_json: Json; session_id_input: string }
         Returns: boolean
