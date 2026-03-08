@@ -1275,6 +1275,7 @@ Deno.serve(async (req) => {
       metadata: {
         query_indices: c.query_indices,
         evidence_usefulness: c.evidence_usefulness,
+        interviewability: computeInterviewability(c.content),
       },
     }));
 
