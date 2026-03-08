@@ -1242,6 +1242,7 @@ Deno.serve(async (req) => {
             chunk_index: c.chunk_index,
             similarity: parseFloat(c.similarity.toFixed(4)),
             usefulness: c.evidence_usefulness,
+            interviewability: computeInterviewability(c.content),
           })),
         },
       })
