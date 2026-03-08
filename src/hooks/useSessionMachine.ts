@@ -144,6 +144,8 @@ interface UseSessionMachineProps {
   caseLabel: string;
   clientLabel: string;
   interactionType: string;
+  tenantId: string;
+  userId: string;
   resumeBundle?: ResumeBundle;
 }
 
