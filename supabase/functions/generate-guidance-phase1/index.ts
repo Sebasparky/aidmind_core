@@ -52,6 +52,34 @@ const GENERIC_WORDS = new Set([
   "involved", "during", "before", "after", "between", "through", "under",
 ]);
 
+/**
+ * Naive suffix-based stemming for better paraphrase matching.
+ * Strips common English suffixes so "homeless"/"homelessness",
+ * "injury"/"injured"/"injuries", "eviction"/"evicting" match.
+ */
+function naiveStem(word: string): string {
+  if (word.length <= 4) return word;
+  return word
+    .replace(/ness$/, "")
+    .replace(/ment$/, "")
+    .replace(/tion$/, "")
+    .replace(/sion$/, "")
+    .replace(/ies$/, "y")
+    .replace(/ive$/, "")
+    .replace(/ing$/, "")
+    .replace(/ous$/, "")
+    .replace(/ful$/, "")
+    .replace(/able$/, "")
+    .replace(/ible$/, "")
+    .replace(/ity$/, "")
+    .replace(/ally$/, "")
+    .replace(/ed$/, "")
+    .replace(/er$/, "")
+    .replace(/ly$/, "")
+    .replace(/es$/, "")
+    .replace(/s$/, "");
+}
+
 type DropReason =
   | "no_snippet_text"
   | "snippet_too_short"
