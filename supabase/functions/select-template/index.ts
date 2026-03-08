@@ -70,7 +70,7 @@ Deno.serve(async (req) => {
 
   // Must provide either template_id OR upload
   if (!templateId && !uploadFile) {
-    return json(400, { success: false, error: "Provide template_id or template_upload", code: "TEMPLATE_INPUT_REQUIRED" });
+    return json(req, 400, { success: false, error: "Provide template_id or template_upload", code: "TEMPLATE_INPUT_REQUIRED" });
   }
 
   try {
