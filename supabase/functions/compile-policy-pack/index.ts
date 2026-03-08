@@ -1166,6 +1166,14 @@ Deno.serve(async (req) => {
           total_queries: queries.length,
           selected_chunk_count: merged.length,
           selection_diagnostics: diagnostics,
+          scope_used: sessionScope,
+          per_chunk_usefulness: merged.map((c, i) => ({
+            rank: i + 1,
+            doc_id: c.document_id.slice(0, 8),
+            chunk_index: c.chunk_index,
+            similarity: parseFloat(c.similarity.toFixed(4)),
+            usefulness: c.evidence_usefulness,
+          })),
         },
       })
       .select("id")
