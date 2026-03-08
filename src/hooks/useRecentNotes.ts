@@ -11,6 +11,8 @@ export interface RecentNote {
   interactionType: string;
   status: NoteStatus;
   updatedAt: Date;
+  guidanceCompleted: boolean;
+  reviewerCompleted: boolean;
 }
 
 type SessionRow = Tables<"sessions">;
