@@ -844,6 +844,7 @@ No text outside JSON.
         total_generated: parsed.questions.length,
         total_grounded: validatedQuestions.length,
         total_dropped: droppedQuestions.length,
+        drop_reason_distribution: dropReasonCounts,
       };
 
       await supabase.rpc("update_session_guidance_phase1", {
