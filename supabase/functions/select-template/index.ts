@@ -65,7 +65,7 @@ Deno.serve(async (req) => {
 
   const sessionIdResult = validateUuid("session_id", sessionId);
   if (!sessionIdResult.ok) {
-    return json(400, { success: false, error: "Invalid session_id format", code: "INVALID_SESSION_ID" });
+    return json(req, 400, { success: false, error: "Invalid session_id format", code: "INVALID_SESSION_ID" });
   }
 
   // Must provide either template_id OR upload
