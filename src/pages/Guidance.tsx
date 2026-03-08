@@ -88,6 +88,14 @@ export default function Guidance() {
 
   // ── Helpers ────────────────────────────────────────────────────
   const handleBack = () => navigate("/dashboard");
+  const handleBackArrow = () => {
+    // Guard: if guidance was generated but not yet marked done, show confirmation
+    if (isSuccessForGuard && !guidanceAlreadyDone) {
+      setShowLeaveDialog(true);
+      return;
+    }
+    navigate("/dashboard");
+  };
   const handleChangeTemplate = () => navigate(`/guidance/${sessionId}/template`);
   const handleSelectTemplate = () => navigate(`/guidance/${sessionId}/template`);
 
