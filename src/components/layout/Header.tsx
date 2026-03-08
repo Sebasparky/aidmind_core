@@ -148,6 +148,7 @@ export function Header() {
             </button>
           )}
         </div>
+        </div>
       </div>
 
       {/* Right: Activity + User */}
