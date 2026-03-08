@@ -85,12 +85,10 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         interactionType: note.interactionType || "Documentation",
         lastAccessed: note.updatedAt,
         createdAt: note.updatedAt,
+        guidanceCompleted: note.guidanceCompleted,
+        reviewerCompleted: note.reviewerCompleted,
       }));
   }, [notes]);
-
-  // Derive tool usage from eye_events
-  const sessionIds = useMemo(() => activeSessions.map((s) => s.sessionId), [activeSessions]);
-  const { usageMap } = useSessionToolUsage(sessionIds);
 
   // Register session IDs into context for cross-panel lookup
   useEffect(() => {
