@@ -287,8 +287,8 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         ) : (
           <div className="space-y-3">
             {filteredActiveSessions.map((session) => {
-              const usage = getToolUsage(usageMap, session.sessionId);
-              const allToolsUsed = usage.toolCount >= 2;
+              const toolCount = (session.guidanceCompleted ? 1 : 0) + (session.reviewerCompleted ? 1 : 0);
+              const allToolsUsed = toolCount >= 2;
 
               return (
                 <div
