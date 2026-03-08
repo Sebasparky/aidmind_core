@@ -546,7 +546,7 @@ export default function Guidance() {
               {runState === "compiling" || runState === "generating" || runState === "running" ? (
                 <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {runState === "compiling" ? "Compiling…" : "Generating…"}</>
               ) : (
-                <><Sparkles className="h-4 w-4 mr-2" /> Generate 12 Questions</>
+                <><Sparkles className="h-4 w-4 mr-2" /> Generate Questions</>
               )}
             </Button>
           </div>

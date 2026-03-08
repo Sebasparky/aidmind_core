@@ -49,6 +49,11 @@ export interface GuidanceOutput {
   generated_at: string; // ISO timestamp
   model: string;
   questions: GuidanceQuestion[];
+  grounding_status?: "sufficient" | "insufficient";
+  grounding_reason?: string;
+  total_generated?: number;
+  total_grounded?: number;
+  total_dropped?: number;
 }
 
 export interface GuidanceErrorResponse {
