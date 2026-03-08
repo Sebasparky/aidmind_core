@@ -1,4 +1,4 @@
-import { Search, Bell, ChevronDown, X, Check, Activity } from "lucide-react";
+import { Search, Bell, ChevronDown, X, Check, Activity, BookOpen } from "lucide-react";
 import { AidMindBrand } from "@/components/brand/AidMindBrand";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
