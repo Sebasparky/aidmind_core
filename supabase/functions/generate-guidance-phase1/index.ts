@@ -464,7 +464,133 @@ function validateClientFacingStyle(
   return { clientFacing: true };
 }
 
-/* ── Insufficient grounding reason codes ── */
+/* ── Specificity-preservation validator ── */
+
+/**
+ * Important qualifier patterns to detect in snippet text.
+ * Each entry has a regex to find the qualifier in the snippet,
+ * and a test to check whether the question preserved it.
+ */
+const IMPORTANT_QUALIFIER_PATTERNS: {
+  /** Regex to detect the qualifier in snippet text */
+  snippetDetector: RegExp;
+  /** What the qualifier represents (for diagnostics) */
+  label: string;
+  /** Regex or function to check if the question preserved the qualifier's intent */
+  questionCheck: RegExp;
+}[] = [
+  // Time constraints
+  {
+    snippetDetector: /within\s+the\s+past\s+(year|12\s*months|six\s*months|6\s*months)/i,
+    label: "time_window",
+    questionCheck: /past\s+(year|12\s*months|six\s*months|6\s*months)|within\s+the\s+(past|last)\s+(year|12|six|6)/i,
+  },
+  {
+    snippetDetector: /\bcurrent(ly)?\b/i,
+    label: "current_status",
+    questionCheck: /\bcurrent(ly)?\b/i,
+  },
+  {
+    snippetDetector: /\bimmediate\s+(safety|risk|danger|threat|concern)/i,
+    label: "immediate_safety",
+    questionCheck: /\bimmediate\b/i,
+  },
+  {
+    snippetDetector: /\bimminent\s+(harm|danger|risk|threat)/i,
+    label: "imminent_risk",
+    questionCheck: /\bimminent\b/i,
+  },
+  // Severity / ranking
+  {
+    snippetDetector: /\bmost\s+serious\s+(injury|harm|concern|incident)/i,
+    label: "severity_most_serious",
+    questionCheck: /\bmost\s+serious\b/i,
+  },
+  // Operational purpose qualifiers
+  {
+    snippetDetector: /as\s+immediate\s+safety\s+resource/i,
+    label: "purpose_immediate_safety_resources",
+    questionCheck: /immediate\s+safety\s+resource/i,
+  },
+  {
+    snippetDetector: /\b(ability|unable)\s+to\s+(provide\s+)?(protection|supervision|care|nurturing)/i,
+    label: "caregiver_capacity",
+    questionCheck: /(ability|able|unable)\s+to\s+(provide\s+)?(protect|supervis|care|nurtur)/i,
+  },
+  {
+    snippetDetector: /\bphysically\s+unsafe\b/i,
+    label: "physically_unsafe",
+    questionCheck: /\bphysically\s+unsafe\b|not\s+(physically\s+)?safe/i,
+  },
+  // Concrete conditions
+  {
+    snippetDetector: /\bhomeless\s+(or|and)\s+(facing\s+)?eviction/i,
+    label: "homeless_or_eviction",
+    questionCheck: /\bhomeless\b.*\beviction\b|\beviction\b.*\bhomeless\b/i,
+  },
+  {
+    snippetDetector: /\bfacing\s+eviction\b/i,
+    label: "facing_eviction",
+    questionCheck: /\beviction\b/i,
+  },
+  {
+    snippetDetector: /\bprior\s+(reports?|referrals?|involvement)\b/i,
+    label: "prior_reports",
+    questionCheck: /\bprior\b|\bprevious\b|\bpast\b/i,
+  },
+  {
+    snippetDetector: /\bmedication[\s-]assisted\s+treatment\b/i,
+    label: "medication_assisted_treatment",
+    questionCheck: /\bmedication[\s-]assisted\b|\bMAT\b/i,
+  },
+];
+
+/**
+ * Validate that a generated question preserves important specificity
+ * from its cited snippets. Returns diagnostics about lost qualifiers.
+ *
+ * This is a SOFT validator — it flags specificity loss but the caller
+ * decides whether to drop or attempt rewrite.
+ */
+function validateSpecificityPreservation(
+  question: string,
+  citedSnippetTexts: string[],
+): {
+  preserved: boolean;
+  lostQualifiers: { label: string; snippetEvidence: string }[];
+  score: number; // 0..1 where 1 = all important qualifiers preserved
+} {
+  const combinedSnippet = citedSnippetTexts.join(" ");
+  const detected: { label: string; snippetEvidence: string; preserved: boolean }[] = [];
+
+  for (const pattern of IMPORTANT_QUALIFIER_PATTERNS) {
+    const snippetMatch = combinedSnippet.match(pattern.snippetDetector);
+    if (snippetMatch) {
+      const preserved = pattern.questionCheck.test(question);
+      detected.push({
+        label: pattern.label,
+        snippetEvidence: snippetMatch[0].slice(0, 60),
+        preserved,
+      });
+    }
+  }
+
+  if (detected.length === 0) {
+    // No important qualifiers detected in snippet — nothing to preserve
+    return { preserved: true, lostQualifiers: [], score: 1.0 };
+  }
+
+  const lost = detected.filter((d) => !d.preserved);
+  const score = detected.length > 0
+    ? (detected.length - lost.length) / detected.length
+    : 1.0;
+
+  return {
+    preserved: lost.length === 0,
+    lostQualifiers: lost.map((l) => ({ label: l.label, snippetEvidence: l.snippetEvidence })),
+    score,
+  };
+}
 type GroundingCode =
   | "INSUFFICIENT_GROUNDED_SUPPORT"
   | "LOW_INFORMATION_POLICY_PACK"
