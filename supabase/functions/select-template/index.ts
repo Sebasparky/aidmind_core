@@ -243,7 +243,7 @@ Deno.serve(async (req) => {
     });
 
     // ── 5. Response ────────────────────────────────────────────
-    return json(200, {
+    return json(req, 200, {
       success: true,
       session_id: sessionIdResult.value,
       template_id: resolvedTemplateId,
