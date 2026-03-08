@@ -612,7 +612,7 @@ ${scopeLine}
 
 You are given policy excerpts that are relevant to the template being completed for this program and jurisdiction.
 
-Your task is to generate UP TO 12 targeted interview questions that the caseworker should ask the client to gather the factual information needed to complete the template accurately and in compliance with policy.
+Your task is to generate UP TO 12 targeted interview questions that the caseworker should ask the client, caregiver, or involved party to gather the factual information needed to complete the template accurately and in compliance with policy.
 
 CRITICAL GROUNDING RULES:
 
@@ -624,17 +624,54 @@ CRITICAL GROUNDING RULES:
 - Quality and grounding matter more than quantity. 4 well-grounded questions are better than 12 weakly grounded ones.
 - If the policy excerpts are too weak, too structural, or too vague to support any meaningful questions, return an empty questions array.
 
-These must be CLIENT-FACING, FACT-FIRST questions.
+------------------------------------------------------------
+CLIENT-FACING QUESTION REQUIREMENT (CRITICAL)
 
-DO NOT:
-- Summarize policy
-- Ask abstract legal or regulatory questions
-- Ask the client to interpret definitions or determine eligibility
-- Ask vague filler questions such as "Is there anything else?"
-- Generate questions that go beyond what the cited snippet actually says
-- Stretch a citation to cover a question the snippet does not support
+Every question you generate MUST be something a caseworker could realistically ask a client, caregiver, or involved party face-to-face in plain, conversational language.
 
-The goal is to generate structured investigative questions that help capture concrete facts, grounded in real policy text.
+GOOD source types for question generation:
+- Assessment criteria that identify what facts to collect from a client
+- Required factual fields (injuries, household members, dates, services)
+- Concrete risk/safety indicators that can be asked about directly
+- Household, caregiver, or child condition factors
+- Service involvement details the client can confirm or describe
+- Housing, substance use, safety indicators the client can report on
+
+BAD source types — DO NOT generate questions directly from these unless you can cleanly transform them into a natural client-facing question:
+- Internal worker narrative instructions ("the worker must document why...")
+- Case classification or coding rules
+- Legal justification requirements ("explain why legal action was initiated instead of...")
+- "If X, document Y" instructions meant for the worker's record
+- Instructions about what the case manager must explain in the case record
+- Supervisory review or approval requirements
+- Response-option selection guidance ("select response 1-7")
+- Administrative compliance or audit requirements
+
+TRANSFORMATION RULE:
+If a policy snippet describes what information must be collected (e.g., "the assessment must include safety factors"), you MAY transform that into a natural client-facing question (e.g., "Are there any current safety concerns for the child in the home?").
+But do NOT simply mirror policy jargon back as a question. Translate operational requirements into plain, factual interview questions.
+
+QUESTION STYLE RULES:
+- Use plain spoken language a client or caregiver would understand
+- Ask about concrete facts, events, people, dates, conditions, services
+- Avoid policy jargon, legal terminology, or process language
+- Do NOT ask questions that sound like internal compliance prompts
+- Do NOT ask questions about case classification, coding, or disposition
+- Do NOT ask questions that are really note-writing prompts for the worker
+- Do NOT ask "what were the reasons for not using other responses" or similar justification-style questions
+
+Examples of GOOD questions:
+- "Was any child injured, and if so, what was the most serious injury?"
+- "Is the family currently homeless or facing eviction?"
+- "Have any community services been recommended or used?"
+- "Who currently lives in the home with the child?"
+- "Has the primary caretaker had a substance abuse problem in the past year?"
+
+Examples of BAD questions (do not generate these):
+- "Has legal action been initiated, and if so, what were the reasons for not using other responses?"
+- "What category must the case be classified as?"
+- "What narrative is required in the case record?"
+- "Are there any safety factors present that require protective interventions?" (too jargon-heavy; rephrase as a natural question)
 
 ------------------------------------------------------------
 CATEGORY GUIDANCE (up to 2 per category, as evidence supports)
@@ -655,6 +692,7 @@ QUESTION QUALITY RULES
 
 Each question must:
 
+- Be something a caseworker could ask a client or caregiver directly
 - Seek specific factual information (who, what, when, where, how)
 - Be answerable with recordable information such as:
     - Dates or times
@@ -663,9 +701,10 @@ Each question must:
     - Actions taken
     - Current status
     - Documents or agencies involved
-- Be phrased in plain, neutral professional language
+- Be phrased in plain, neutral, conversational professional language
 - Avoid duplication or minor rewording of the same question
 - Avoid multi-part compound questions — focus on the most critical fact
+- NOT sound like an internal form, compliance check, or case manager note prompt
 
 Prefer questions that produce concise, extractable answers that can be directly mapped into structured fields.
 
