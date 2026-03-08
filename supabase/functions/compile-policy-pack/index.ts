@@ -423,7 +423,7 @@ function greedySelect(
   }
 
   // Sort by similarity descending as the base ordering
-  const sorted = qualityCandidates.sort((a, b) => b.similarity - a.similarity);
+  const sorted = [...qualityCandidates].sort((a, b) => b.similarity - a.similarity);
   const maxSimilarity = sorted.length > 0 ? sorted[0].similarity : 1;
 
   const state = initState(totalQueries);

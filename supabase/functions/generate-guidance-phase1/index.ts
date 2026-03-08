@@ -36,79 +36,182 @@ const LOW_INFO_PHRASES = [
   "contents page",
   "list of figures",
   "list of tables",
+  "list of appendices",
+  "appendix index",
   "revision history",
+  "document control",
   "page intentionally left blank",
 ];
 
+const GENERIC_WORDS = new Set([
+  "what", "when", "where", "which", "does", "have", "been", "this", "that",
+  "with", "from", "your", "about", "into", "they", "their", "there", "were",
+  "will", "would", "could", "should", "other", "first", "last", "most",
+  "more", "than", "each", "some", "also", "currently", "specific", "please",
+  "describe", "explain", "provide", "information", "details", "related",
+  "involved", "during", "before", "after", "between", "through", "under",
+]);
+
+type DropReason =
+  | "no_snippet_text"
+  | "snippet_too_short"
+  | "low_info_phrases"
+  | "weak_structural_support"
+  | "weak_topical_overlap"
+  | "unsupported_question_concepts";
+
 /**
- * Validate whether a question is genuinely supported by its cited snippets.
- * Returns { supported: boolean, reason?: string }
+ * Compute structural quality of a snippet (aligned with compile-time computeInfoQuality).
+ * Returns 0..1 where 0 = structural junk, 1 = substantive prose.
+ */
+function computeSnippetSupportQuality(text: string): number {
+  if (!text || text.trim().length === 0) return 0;
+
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
+
+  // Known low-info phrases → immediate low score
+  for (const phrase of LOW_INFO_PHRASES) {
+    if (lower.includes(phrase)) return 0.05;
+  }
+
+  const lines = trimmed.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return 0;
+
+  const headingPattern = /^(\d+[\.\d]*\s|[-•]\s|[A-Z][A-Z\s]{2,}$|#{1,6}\s|section\s+\d)/i;
+  let headingLines = 0;
+  let shortLines = 0;
+  let proseLines = 0;
+
+  for (const line of lines) {
+    if (headingPattern.test(line)) headingLines++;
+    if (line.length < 40) shortLines++;
+    if (line.length > 50 && /[.,;:?!]/.test(line)) proseLines++;
+  }
+
+  const headingRatio = headingLines / lines.length;
+  const shortRatio = shortLines / lines.length;
+  const proseRatio = proseLines / lines.length;
+
+  // Mostly headings/section labels
+  if (headingRatio > 0.5 && proseRatio < 0.15) return 0.1;
+  // Mostly short lines with no prose
+  if (shortRatio > 0.7 && proseRatio < 0.1) return 0.15;
+  // Many lines but virtually no prose sentences
+  if (lines.length > 5 && proseRatio < 0.08) return 0.2;
+  // Very short total
+  if (trimmed.length < 100) return 0.25;
+  // Low prose
+  if (proseRatio < 0.2) return 0.5;
+
+  return 1.0;
+}
+
+// Threshold: snippets below this are "structurally weak"
+const SNIPPET_QUALITY_THRESHOLD = 0.3;
+
+/**
+ * Extract meaningful (non-generic) terms from text.
+ */
+function extractMeaningfulTerms(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(/\s+/)
+    .filter((w) => w.length > 3 && !GENERIC_WORDS.has(w));
+}
+
+/**
+ * Multi-gate support-strength validator.
+ *
+ * Gate 1: empty / missing snippet text
+ * Gate 2: snippet text too short
+ * Gate 3: all snippets structurally weak (headings, outlines, low prose)
+ * Gate 4: question introduces too many unsupported concepts
+ * Gate 5: weak topical overlap (secondary signal)
  */
 function validateQuestionSupport(
   question: string,
   citedSnippetTexts: string[],
-): { supported: boolean; reason?: string } {
+): { supported: boolean; reason?: DropReason; details?: Record<string, unknown> } {
+  // Gate 1: no snippets at all
   if (citedSnippetTexts.length === 0) {
     return { supported: false, reason: "no_snippet_text" };
   }
 
-  const combinedText = citedSnippetTexts.join(" ").toLowerCase();
+  const combinedText = citedSnippetTexts.join(" ");
   const combinedLen = combinedText.replace(/\s+/g, " ").trim().length;
 
-  // 1. Check if all cited snippets are low-information
-  let allLowInfo = true;
-  for (const text of citedSnippetTexts) {
-    const lower = text.toLowerCase();
-    const isLowInfo = LOW_INFO_PHRASES.some((p) => lower.includes(p));
-    if (!isLowInfo) {
-      // Also check: is it mostly headings/short lines with no prose?
-      const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-      const proseLines = lines.filter((l) => l.length > 50 && /[.,;:?!]/.test(l));
-      if (proseLines.length > 0 || lines.length <= 2) {
-        allLowInfo = false;
-        break;
+  // Gate 2: combined text too short
+  if (combinedLen < 80) {
+    return { supported: false, reason: "snippet_too_short", details: { combinedLen } };
+  }
+
+  // Gate 3: structural quality check (aligned with compile-time computeInfoQuality)
+  const qualities = citedSnippetTexts.map(computeSnippetSupportQuality);
+  const avgQuality = qualities.reduce((a, b) => a + b, 0) / qualities.length;
+  const maxQuality = Math.max(...qualities);
+
+  // If even the best snippet is structurally weak, reject
+  if (maxQuality < SNIPPET_QUALITY_THRESHOLD) {
+    return {
+      supported: false,
+      reason: "weak_structural_support",
+      details: { avgQuality: +avgQuality.toFixed(2), maxQuality: +maxQuality.toFixed(2) },
+    };
+  }
+
+  // Gate 4: concept coverage — does the question introduce too many unsupported concepts?
+  const questionTerms = extractMeaningfulTerms(question);
+  const snippetTermSet = new Set(extractMeaningfulTerms(combinedText));
+
+  if (questionTerms.length >= 3) {
+    let matched = 0;
+    const unmatched: string[] = [];
+    for (const term of questionTerms) {
+      if (snippetTermSet.has(term)) {
+        matched++;
+      } else {
+        unmatched.push(term);
       }
     }
-  }
-  if (allLowInfo) {
-    return { supported: false, reason: "low_info_snippets" };
-  }
+    const coverageRatio = matched / questionTerms.length;
 
-  // 2. Check if combined snippet text is too short to be meaningful evidence
-  if (combinedLen < 80) {
-    return { supported: false, reason: "snippet_too_short" };
-  }
-
-  // 3. Check for topical overlap: do key terms from the question appear in the snippets?
-  const questionWords = new Set(
-    question
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, "")
-      .split(/\s+/)
-      .filter((w) => w.length > 3) // skip small words
-  );
-
-  // Remove common interview/generic words that don't indicate topical relevance
-  const genericWords = new Set([
-    "what", "when", "where", "which", "does", "have", "been", "this", "that",
-    "with", "from", "your", "about", "into", "they", "their", "there", "were",
-    "will", "would", "could", "should", "other", "first", "last", "most",
-    "more", "than", "each", "some", "also", "currently", "specific", "please",
-    "describe", "explain", "provide", "information", "details",
-  ]);
-
-  const meaningfulQuestionWords = [...questionWords].filter((w) => !genericWords.has(w));
-
-  if (meaningfulQuestionWords.length > 0) {
-    let matched = 0;
-    for (const w of meaningfulQuestionWords) {
-      if (combinedText.includes(w)) matched++;
+    // If the question introduces >70% unsupported concepts, reject
+    if (coverageRatio < 0.25) {
+      return {
+        supported: false,
+        reason: "unsupported_question_concepts",
+        details: {
+          coverageRatio: +coverageRatio.toFixed(2),
+          questionTermCount: questionTerms.length,
+          matchedCount: matched,
+          sampleUnmatched: unmatched.slice(0, 5),
+        },
+      };
     }
-    const overlapRatio = matched / meaningfulQuestionWords.length;
+  }
 
-    // If less than 20% of meaningful question terms appear in snippet text → weak support
-    if (overlapRatio < 0.15 && meaningfulQuestionWords.length >= 3) {
-      return { supported: false, reason: "weak_topical_overlap" };
+  // Gate 5: topical overlap — secondary signal, only if snippets are structurally okay
+  // Weight this gate less if structural quality is high
+  if (questionTerms.length >= 3) {
+    let matched = 0;
+    for (const term of questionTerms) {
+      if (snippetTermSet.has(term)) matched++;
+    }
+    const overlapRatio = matched / questionTerms.length;
+
+    // Only reject for weak overlap if structural quality is also mediocre
+    const overlapThreshold = avgQuality > 0.7 ? 0.12 : 0.18;
+    if (overlapRatio < overlapThreshold) {
+      return {
+        supported: false,
+        reason: "weak_topical_overlap",
+        details: {
+          overlapRatio: +overlapRatio.toFixed(2),
+          avgSnippetQuality: +avgQuality.toFixed(2),
+        },
+      };
     }
   }
 
