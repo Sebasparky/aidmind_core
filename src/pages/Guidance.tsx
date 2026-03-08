@@ -29,6 +29,7 @@ import {
 import { useGuidanceSession } from "@/hooks/useGuidanceSession";
 import { useEyeLogger } from "@/hooks/useEyeLogger";
 import { CitationsModal } from "@/components/session/CitationsModal";
+import { supabase } from "@/integrations/supabase/client";
 
 export default function Guidance() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -82,9 +83,38 @@ export default function Guidance() {
   const handleChangeTemplate = () => navigate(`/guidance/${sessionId}/template`);
   const handleSelectTemplate = () => navigate(`/guidance/${sessionId}/template`);
 
-  // Done: completion is already persisted in session metadata by the backend.
-  // Just navigate back — the dashboard reads metadata.guidance_phase1 directly.
-  const handleDone = () => {
+  // Done: write explicit completion signal to session metadata, then navigate
+  const [markingDone, setMarkingDone] = useState(false);
+  const handleDone = async () => {
+    if (!session) return;
+    setMarkingDone(true);
+    try {
+      // Read current metadata, merge guidance_completed_at
+      const { data: current } = await supabase
+        .from("sessions")
+        .select("metadata")
+        .eq("id", session.id)
+        .maybeSingle();
+      
+      const existingMeta = (current?.metadata as Record<string, unknown>) ?? {};
+      await supabase
+        .from("sessions")
+        .update({
+          metadata: { ...existingMeta, guidance_completed_at: new Date().toISOString() },
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", session.id);
+
+      await logEvent({
+        eventType: "guidance.step.completed",
+        sessionId: session.sessionId,
+        result: "success",
+      });
+    } catch (err) {
+      console.error("[Guidance] Failed to mark completion:", err);
+    } finally {
+      setMarkingDone(false);
+    }
     navigate("/dashboard");
   };
 
@@ -593,18 +623,21 @@ export default function Guidance() {
 
       {/* ── Bottom Action Bar ── */}
       <div className="border-t border-border bg-card shrink-0">
-        <div className="container mx-auto px-6 py-3 max-w-5xl flex items-center justify-between">
-          <Button variant="outline" onClick={handleBack}>
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Dashboard
-          </Button>
-          <div className="flex items-center gap-2">
-            {isSuccess ? (
-              <Button onClick={handleDone}>
-                <Check className="h-4 w-4 mr-2" />
-                Done
+        <div className="container mx-auto px-6 py-3 max-w-5xl flex items-center justify-end">
+          {isSuccess ? (
+            <Button onClick={handleDone} disabled={markingDone}>
+              {markingDone ? (
+                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving…</>
+              ) : (
+                <><Check className="h-4 w-4 mr-2" /> Done</>
+              )}
+            </Button>
+          ) : (
+            <div className="flex items-center gap-2 w-full justify-between">
+              <Button variant="outline" onClick={handleBack}>
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back to Dashboard
               </Button>
-            ) : (
               <Button
                 onClick={runGuidance}
                 disabled={runState === "running" || runState === "compiling" || runState === "generating" || !hasTemplate}
@@ -615,8 +648,8 @@ export default function Guidance() {
                   <><Sparkles className="h-4 w-4 mr-2" /> Generate Questions</>
                 )}
               </Button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
 
