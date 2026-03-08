@@ -684,13 +684,13 @@ export default function GuidanceTemplateSelection() {
             Cancel
           </Button>
           <Button
-            onClick={handleUploadTemplate}
+            onClick={handleUploadClick}
             disabled={isConfirmDisabled}
           >
             {isUploading ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                {selectedTemplate?.source === "upload" ? "Uploading…" : "Selecting…"}
+                {selectedTemplate?.source === "upload" ? "Saving…" : "Selecting…"}
               </>
             ) : extracting ? (
               <>
@@ -700,7 +700,7 @@ export default function GuidanceTemplateSelection() {
             ) : selectedTemplate?.source === "upload" ? (
               <>
                 <Upload className="h-4 w-4 mr-2" />
-                Upload Template
+                Save Template
               </>
             ) : (
               <>
@@ -711,6 +711,17 @@ export default function GuidanceTemplateSelection() {
           </Button>
         </div>
       </div>
+
+      {/* Save Template Confirmation Modal */}
+      {selectedTemplate?.source === "upload" && (
+        <SaveTemplateModal
+          open={showSaveModal}
+          onOpenChange={setShowSaveModal}
+          defaultName={selectedTemplate.name}
+          onConfirm={(name) => doUploadTemplate(name)}
+          saving={isUploading}
+        />
+      )}
     </div>
   );
 }
