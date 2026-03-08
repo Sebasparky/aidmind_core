@@ -102,6 +102,7 @@ export function useGuidanceSession(sessionId: string | undefined) {
         guidanceScopeOther: data.guidance_scope_other,
         hasPolicyPack: !!data.policy_pack_id,
         guidanceOutput,
+        metadata: meta,
       });
 
       // If guidance already exists, mark as success
