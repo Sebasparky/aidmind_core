@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { corsHeaders } from "../_shared/cors.ts";
+import { buildCorsSecurityHeaders } from "../_shared/security-headers.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
 
 /* ── Types ── */
