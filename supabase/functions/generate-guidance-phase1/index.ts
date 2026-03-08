@@ -1055,8 +1055,14 @@ No text outside JSON.
         softFailCounts[r] = (softFailCounts[r] ?? 0) + 1;
       }
 
-      // Question survives — determine status
-      const validationStatus = softFails.length > 0 ? ("warning" as const) : ("pass" as const);
+      // Question survives — determine status.
+      // A single minor soft fail (e.g. partial_qualifier_loss) should NOT
+      // escalate to warning. Only escalate when there are multiple soft
+      // fails, or a single genuinely concerning one (specificity < 0.5).
+      const hasSignificantSoftFail = softFails.length >= 2 ||
+        reviewFlags.includes("specificity_soft_fail") ||
+        reviewFlags.includes("weak_support_soft_fail");
+      const validationStatus = hasSignificantSoftFail ? ("warning" as const) : ("pass" as const);
       const enrichedQ = {
         ...q,
         validation_status: validationStatus,
