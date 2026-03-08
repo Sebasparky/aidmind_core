@@ -960,6 +960,32 @@ No text outside JSON.
         continue;
       }
 
+      // Gate C: Specificity preservation check
+      const specResult = validateSpecificityPreservation(q.question, citedTexts);
+      if (!specResult.preserved && specResult.score < 0.5) {
+        // Significant specificity loss — drop with diagnostics
+        const reason: DropReason = "specificity_lost";
+        dropReasonCounts[reason] = (dropReasonCounts[reason] ?? 0) + 1;
+        droppedQuestions.push({
+          question: q.question.slice(0, 120),
+          reason,
+          citationCount: q.citations.length,
+          details: {
+            specificity_score: +specResult.score.toFixed(2),
+            lost_qualifiers: specResult.lostQualifiers.map((lq) => lq.label),
+            lost_evidence: specResult.lostQualifiers.map((lq) => lq.snippetEvidence),
+          },
+        });
+        continue;
+      }
+
+      // Log soft specificity warnings for questions that pass but lost minor qualifiers
+      if (!specResult.preserved) {
+        console.log(
+          `[generate-guidance-phase1] SPECIFICITY_WARNING: score=${specResult.score.toFixed(2)} lost=[${specResult.lostQualifiers.map((l) => l.label).join(",")}] q="${q.question.slice(0, 100)}"`
+        );
+      }
+
       validatedQuestions.push(q);
     }
 
