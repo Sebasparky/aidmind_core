@@ -279,6 +279,190 @@ function validateQuestionSupport(
   return { supported: true };
 }
 
+/* ── Client-facing question style validator ── */
+
+/**
+ * Patterns that indicate a question is really an internal worker/compliance prompt,
+ * not a natural client-facing interview question.
+ */
+const INTERNAL_WORKER_PATTERNS: RegExp[] = [
+  /what\s+(were|are)\s+the\s+reasons?\s+for\s+(not\s+)?using/i,
+  /why\s+(were|was|are|is)\s+responses?\s+\d/i,
+  /what\s+narrative\s+is\s+required/i,
+  /what\s+should\s+(the\s+)?(case\s*)?worker\s+(explain|document|record|note)/i,
+  /what\s+must\s+(be\s+)?documented/i,
+  /what\s+category\s+must\s+(the\s+)?case\s+be\s+classified/i,
+  /does\s+the\s+record\s+indicate/i,
+  /what\s+(case\s+)?coding\s+is\s+required/i,
+  /what\s+justification\s+must\s+(be\s+)?provided/i,
+  /how\s+should\s+(the\s+)?(case\s*)?manager\s+(explain|justify|document)/i,
+  /what\s+(internal\s+)?review\s+is\s+required/i,
+  /what\s+supervisory\s+approval\s+is\s+needed/i,
+  /what\s+compliance\s+(steps?|requirements?)\s+(are|must)/i,
+  /which\s+response\s+option\s+(was|should\s+be)\s+selected/i,
+  /what\s+(legal\s+)?basis\s+(was|is)\s+used\s+for/i,
+];
+
+/**
+ * Phrases in a question that strongly suggest internal/process language
+ * rather than client-facing interview language.
+ */
+const INTERNAL_LANGUAGE_PHRASES: string[] = [
+  "must be documented",
+  "case record",
+  "narrative requirement",
+  "case classification",
+  "response option",
+  "supervisory review",
+  "case manager must",
+  "worker must explain",
+  "coding",
+  "legal basis for",
+  "compliance requirement",
+  "approval is needed",
+  "override reason",
+  "disposition",
+  "substantiation",
+  "case finding",
+  "administrative review",
+];
+
+/**
+ * Phrases in cited snippets that indicate the source is mainly an
+ * internal documentation/workflow instruction rather than interviewable content.
+ */
+const DOCUMENTATION_ONLY_SNIPPET_PHRASES: string[] = [
+  "the case manager must document",
+  "the worker shall explain in the narrative",
+  "must be recorded in the case record",
+  "document the reasons for",
+  "provide justification for",
+  "case must be classified as",
+  "the record must reflect",
+  "narrative must include",
+  "the worker must explain why",
+  "document why responses 1 through",
+  "override must be approved",
+  "supervisory approval is required",
+  "complete the following form",
+  "enter the appropriate code",
+  "select the response that",
+];
+
+/**
+ * Validate whether a generated question is truly client/caregiver-facing
+ * rather than an internal worker instruction, documentation prompt, or
+ * classification/justification prompt.
+ *
+ * Returns { clientFacing: true } or { clientFacing: false, reason, details }.
+ */
+function validateClientFacingStyle(
+  question: string,
+  citedSnippetTexts: string[],
+): { clientFacing: boolean; reason?: DropReason; details?: Record<string, unknown> } {
+  const qLower = question.toLowerCase();
+  const combinedSnippets = citedSnippetTexts.join(" ").toLowerCase();
+
+  // ── Check 1: Question matches internal worker patterns ──
+  for (const pattern of INTERNAL_WORKER_PATTERNS) {
+    if (pattern.test(qLower)) {
+      return {
+        clientFacing: false,
+        reason: "internal_worker_prompt",
+        details: { matched_pattern: pattern.source.slice(0, 60) },
+      };
+    }
+  }
+
+  // ── Check 2: Question contains multiple internal language phrases ──
+  let internalPhraseHits = 0;
+  const matchedPhrases: string[] = [];
+  for (const phrase of INTERNAL_LANGUAGE_PHRASES) {
+    if (qLower.includes(phrase)) {
+      internalPhraseHits++;
+      matchedPhrases.push(phrase);
+    }
+  }
+  if (internalPhraseHits >= 2) {
+    return {
+      clientFacing: false,
+      reason: "internal_worker_prompt",
+      details: { internal_phrase_hits: internalPhraseHits, matched: matchedPhrases },
+    };
+  }
+
+  // ── Check 3: Cited snippets are predominantly documentation-only ──
+  let docOnlyHits = 0;
+  for (const phrase of DOCUMENTATION_ONLY_SNIPPET_PHRASES) {
+    if (combinedSnippets.includes(phrase)) docOnlyHits++;
+  }
+  // If most of the snippet evidence is documentation instructions and the
+  // question also has at least one internal phrase, reject
+  if (docOnlyHits >= 2 && internalPhraseHits >= 1) {
+    return {
+      clientFacing: false,
+      reason: "documentation_only_source",
+      details: { doc_only_hits: docOnlyHits, internal_phrase_hits: internalPhraseHits },
+    };
+  }
+  // Strong documentation-only signal even without question phrases
+  if (docOnlyHits >= 3) {
+    return {
+      clientFacing: false,
+      reason: "documentation_only_source",
+      details: { doc_only_hits: docOnlyHits },
+    };
+  }
+
+  // ── Check 4: Policy jargon not transformed ──
+  // Question uses highly technical/process language that wouldn't be natural
+  // in a client conversation
+  const JARGON_PATTERNS: RegExp[] = [
+    /\brequire\s+protective\s+interventions?\b/i,
+    /\bdisposition\s+(category|finding|determination)\b/i,
+    /\bcase\s+(classification|coding|finding)\b/i,
+    /\bstatutory\s+(requirements?|authority|basis)\b/i,
+    /\bpursuant\s+to\s+(section|chapter|statute|rule)\b/i,
+    /\badjudication\b/i,
+    /\bsubstantiat(e|ion|ed)\b/i,
+  ];
+  let jargonHits = 0;
+  for (const p of JARGON_PATTERNS) {
+    if (p.test(qLower)) jargonHits++;
+  }
+  if (jargonHits >= 2) {
+    return {
+      clientFacing: false,
+      reason: "policy_jargon_not_transformed",
+      details: { jargon_hits: jargonHits },
+    };
+  }
+
+  // ── Check 5: Classification/justification prompt ──
+  const CLASSIFICATION_PATTERNS: RegExp[] = [
+    /what\s+(type|level|category|tier)\s+of\s+(response|intervention|action)\s+(was|is|should)\b/i,
+    /what\s+were\s+the\s+reasons\s+for\s+not\b/i,
+    /why\s+(was|were)\s+(legal\s+action|court\s+intervention|removal)/i,
+    /what\s+(alternative|other)\s+responses?\s+(were|was)\s+(considered|explored|attempted)\b/i,
+  ];
+  for (const p of CLASSIFICATION_PATTERNS) {
+    if (p.test(qLower)) {
+      // Only reject if the snippet is also mainly classification/justification
+      if (docOnlyHits >= 1 || combinedSnippets.includes("reasons for not using") ||
+          combinedSnippets.includes("must explain why") ||
+          combinedSnippets.includes("justify")) {
+        return {
+          clientFacing: false,
+          reason: "classification_or_justification_prompt",
+          details: { matched_classification: true, doc_only_hits: docOnlyHits },
+        };
+      }
+    }
+  }
+
+  return { clientFacing: true };
+}
+
 /* ── Insufficient grounding reason codes ── */
 type GroundingCode =
   | "INSUFFICIENT_GROUNDED_SUPPORT"
