@@ -222,6 +222,8 @@ export function useSessionMachine({
         case_label: caseLabel,
         client_label: clientLabel,
         interaction_type: interactionType,
+        tenant_id: tenantId,
+        user_id: userId,
         request_id: requestId,
       });
       
