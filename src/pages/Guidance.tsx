@@ -199,6 +199,8 @@ export default function Guidance() {
   const output = session.guidanceOutput;
   const scopeLabel = formatScope(session.guidanceScope, session.guidanceScopeOther);
   const isSuccess = runState === "success" && output && output.questions.length > 0;
+  const guidanceAlreadyDone = !!(session.metadata as Record<string, unknown>)?.guidance_completed_at;
+  const isSuccessForGuard = !!(output && output.questions.length > 0);
 
   // Determine if we should show a specific error banner
   const isTemplateRequired = runError?.code === "TEMPLATE_REQUIRED";
