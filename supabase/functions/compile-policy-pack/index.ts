@@ -1129,11 +1129,12 @@ Deno.serve(async (req) => {
       }
     }
 
-    // 7. Greedy diversity-aware chunk selection
+    // 7. Greedy diversity-aware chunk selection (now scope-aware for usefulness scoring)
     const { selected: merged, diagnostics } = greedySelect(
       [...chunkMap.values()],
       max_total_chunks,
       queries.length,
+      sessionScope,
     );
     diagnostics.total_raw_matches = totalRawMatches;
     console.log("[compile-policy-pack] Final diagnostics (with raw count):", JSON.stringify(diagnostics));
