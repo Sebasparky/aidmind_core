@@ -21,6 +21,7 @@ interface MergedChunk {
   content: string;
   metadata: Record<string, unknown>;
   query_indices: number[];
+  evidence_usefulness: number; // 0..1 score for operational usefulness
 }
 
 /* ── Hard limits ── */
