@@ -297,10 +297,11 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Sort by similarity desc and cap
-    const merged = [...chunkMap.values()]
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, max_total_chunks);
+    // Smart diversity-aware chunk selection
+    const merged = selectDiverseChunks(
+      [...chunkMap.values()],
+      max_total_chunks,
+    );
 
     // 7. Update retrieval_runs with results
     const { error: runUpdateErr } = await supabase
