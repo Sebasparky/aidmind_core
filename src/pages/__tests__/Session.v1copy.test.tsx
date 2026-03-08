@@ -5,6 +5,19 @@ import Session from "../Session";
 import { DashboardProvider } from "@/contexts/DashboardContext";
 import { NavigationGuardProvider } from "@/contexts/NavigationGuardContext";
 
+// Mock auth hook used by Session
+vi.mock("@/contexts/AuthContext", () => ({
+  useAuth: () => ({
+    user: { id: "test-user-id", email: "test@example.com" },
+    session: null,
+    loading: false,
+    signIn: vi.fn(),
+    signUp: vi.fn(),
+    signOut: vi.fn(),
+  }),
+  AuthProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 // Mock the hooks that make network calls
 vi.mock("@/hooks/useSessionApi", () => ({
   useSessionApi: () => ({
