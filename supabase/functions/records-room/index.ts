@@ -7,9 +7,9 @@
  * 
  * Pipeline:
  *   1. Intake analysis (classify query, extract signals)
- *   2. Candidate recall (semantic via match_document_chunks)
- *   3. Records Room reranking (composite scoring)
- *   4. Excerpt assembly (best spans + citations)
+ *   2. Hybrid candidate recall (semantic + lexical, merged & deduped)
+ *   3. Records Room reranking (composite scoring with real metadata)
+ *   4. Excerpt assembly (best spans + citations + source access)
  *   5. Response packaging (evidence-first payload)
  * 
  * SAFETY CAPS:
@@ -28,60 +28,40 @@ import { logEyeEvent } from "../_shared/eye.ts";
 
 const LIMITS = {
   // ── Stage 0: Input caps ──
-  /** Hard reject: request body bytes (512 KB) */
   MAX_REQUEST_BODY_BYTES: 512_000,
-  /** Hard reject: raw query string length */
   MAX_QUERY_INPUT_CHARS: 10_000,
-  /** For pasted notice text: truncate to this before intake analysis */
   MAX_PASTED_TEXT_CHARS: 8_000,
-  /** Characters sent to embedding model (text-embedding-3-small context ~8191 tokens ≈ 32K chars; stay safe) */
   MAX_EMBEDDING_INPUT_CHARS: 12_000,
-  /** Future: max extracted text from uploaded document used for retrieval query */
   MAX_UPLOADED_DOC_CHARS: 6_000,
 
   // ── Stage 2: Recall caps ──
-  /** Max candidates requested from semantic vector search */
   MAX_SEMANTIC_RECALL: 40,
-  /** Future: max candidates from lexical/BM25 recall */
   MAX_LEXICAL_RECALL: 40,
-  /** Hard cap on merged candidate pool before reranking */
   MAX_MERGED_CANDIDATES: 60,
 
   // ── Stage 3: Reranking caps ──
-  /** Max candidates that survive info-quality filter and enter scoring */
   MAX_SCORED_CANDIDATES: 50,
-  /** Jaccard threshold for near-duplicate suppression */
   JACCARD_DEDUP_THRESHOLD: 0.75,
-  /** Max candidates that move into excerpt assembly */
-  MAX_ADMITTED_CANDIDATES: 9, // 5 strong + 4 supporting
+  MAX_ADMITTED_CANDIDATES: 9,
 
   // ── Stage 4: Result assembly caps ──
-  /** Max strong evidence items returned */
   MAX_STRONG_EVIDENCE: 5,
-  /** Max supporting material items returned */
   MAX_SUPPORTING_MATERIALS: 4,
-  /** Max excerpt_text length per result (chars) */
   MAX_EXCERPT_CHARS: 600,
-  /** Max expandable_context length per result (chars) */
   MAX_CONTEXT_CHARS: 3_000,
-  /** Max citation_label length */
   MAX_CITATION_LABEL_CHARS: 200,
 
   // ── Stage 5: Response payload cap ──
-  /** Max total JSON response payload (bytes). Fallback to trimmed response if exceeded. */
-  MAX_RESPONSE_PAYLOAD_BYTES: 256_000, // 256 KB
+  MAX_RESPONSE_PAYLOAD_BYTES: 256_000,
 
-  // ── Future: Model-call safeguards (for optional summarize/explain) ──
-  /** Max excerpts passed into a frontier model context window */
+  // ── Future: Model-call safeguards ──
   MAX_MODEL_EXCERPTS: 5,
-  /** Max total cited text window sent to model (chars) */
   MAX_MODEL_CONTEXT_CHARS: 12_000,
-  /** If evidence context exceeds this, refuse model call rather than silently truncating */
   MODEL_CONTEXT_REFUSE_CHARS: 20_000,
 } as const;
 
 /* ═══════════════════════════════════════════════════════════════
- *  DIAGNOSTICS TRACKER — records every cap enforcement event.
+ *  DIAGNOSTICS TRACKER
  * ═══════════════════════════════════════════════════════════════ */
 
 interface CapEvent {
@@ -102,6 +82,66 @@ class CapDiagnostics {
   get hitCount() { return this.events.length; }
   get all() { return this.events; }
   toJSON() { return this.events; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ *  EMBEDDING PROVIDER — TEMPORARY HOSTED BRIDGE
+ * 
+ *  ⚠️  LOCAL-FIRST TARGET ARCHITECTURE NOTE:
+ *  This is a temporary hosted embedding bridge. The target
+ *  architecture calls for local embeddings (e.g. a local
+ *  embedding model or self-hosted service) to minimize
+ *  frontier-model dependency in the retrieval path.
+ * 
+ *  TO SWAP TO LOCAL EMBEDDINGS:
+ *  1. Replace the body of `embedQuery()` below with a call
+ *     to your local embedding service/model.
+ *  2. Ensure the output dimension matches what's stored in
+ *     document_chunks.embedding (currently 1536 for
+ *     text-embedding-3-small).
+ *  3. If changing dimension, re-embed all chunks and update
+ *     match_document_chunks accordingly.
+ *  4. Remove OPENAI_API_KEY dependency from this function.
+ * 
+ *  The rest of the pipeline is embedding-provider-agnostic.
+ * ═══════════════════════════════════════════════════════════════ */
+
+interface EmbeddingProvider {
+  embedQuery(text: string): Promise<number[]>;
+}
+
+/**
+ * TEMPORARY HOSTED BRIDGE — Replace with local embedding provider.
+ * See architecture note above.
+ */
+function createHostedEmbeddingProvider(apiKey: string, model: string): EmbeddingProvider {
+  return {
+    async embedQuery(text: string): Promise<number[]> {
+      // TEMPORARY: Using OpenAI hosted embeddings as a bridge.
+      // Replace with local embedding model when available.
+      const input = text.slice(0, LIMITS.MAX_EMBEDDING_INPUT_CHARS);
+      const res = await fetch("https://api.openai.com/v1/embeddings", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ model, input }),
+      });
+
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`Embedding provider error ${res.status}: ${t}`);
+      }
+
+      const j = await res.json();
+      const vec: number[] = j.data?.[0]?.embedding;
+      if (!vec || vec.length !== 1536) {
+        throw new Error(`Expected 1536-dim embedding, got ${vec?.length ?? "null"}`);
+      }
+      return vec;
+    },
+  };
 }
 
 /* ── Types ── */
@@ -129,6 +169,9 @@ interface IntakeSignals {
   clarification_question: string | null;
 }
 
+/** Tracks which recall branch(es) found this candidate */
+type RecallOrigin = "semantic" | "lexical" | "both";
+
 interface ScoredChunk {
   chunk_id: string;
   document_id: string;
@@ -141,6 +184,9 @@ interface ScoredChunk {
   lexical_score: number;
   authority_score: number;
   excerpt_density: number;
+  metadata_match: number;
+  freshness_score: number;
+  recall_origin: RecallOrigin;
   bucket: "strong_evidence" | "supporting_material" | "excluded";
 }
 
@@ -157,6 +203,10 @@ interface EvidenceItem {
   document_id: string;
   similarity: number;
   composite_score: number;
+  /** URL to view the original source document, if available */
+  source_url: string | null;
+  /** URL to download the original source document, if available */
+  download_url: string | null;
 }
 
 type FailureState =
@@ -309,7 +359,7 @@ function analyzeIntake(query: string): IntakeSignals {
   };
 }
 
-/* ── Lexical scoring ── */
+/* ── Lexical scoring (post-recall, for composite formula) ── */
 
 function computeLexicalScore(query: string, content: string): number {
   const queryTokens = new Set(
@@ -367,6 +417,101 @@ function computeExcerptDensity(content: string): number {
   return Math.min(1, proseLines.length / Math.max(lines.length, 1));
 }
 
+/* ═══════════════════════════════════════════════════════════════
+ *  METADATA MATCH SCORING — Real, not placeholder
+ * 
+ *  Computes how well a chunk's metadata aligns with the query
+ *  using title overlap, heading overlap, and domain alignment.
+ * ═══════════════════════════════════════════════════════════════ */
+
+function computeMetadataMatch(
+  query: string,
+  metadata: Record<string, unknown>,
+  intake: IntakeSignals,
+): number {
+  let score = 0;
+  const queryTokens = new Set(
+    query.toLowerCase().split(/\s+/).filter(t => t.length > 3)
+  );
+  if (queryTokens.size === 0) return 0.3; // neutral default
+
+  // Title overlap: how many query tokens appear in the document title
+  const title = String(metadata.title ?? "").toLowerCase();
+  if (title) {
+    let titleHits = 0;
+    for (const t of queryTokens) { if (title.includes(t)) titleHits++; }
+    score += (titleHits / queryTokens.size) * 0.4;
+  }
+
+  // Section heading overlap
+  const heading = String(
+    metadata.heading_path ?? metadata.section_heading ?? ""
+  ).toLowerCase();
+  if (heading) {
+    let headingHits = 0;
+    for (const t of queryTokens) { if (heading.includes(t)) headingHits++; }
+    score += (headingHits / queryTokens.size) * 0.25;
+  }
+
+  // Domain alignment: does the chunk's metadata domain match intake signals?
+  if (intake.likely_domain) {
+    const source = String(metadata.source_type ?? metadata.source ?? "").toLowerCase();
+    const allMeta = `${title} ${source} ${heading}`.toLowerCase();
+    const domainIndicators = DOMAIN_INDICATORS[intake.likely_domain] ?? [];
+    const domainHits = domainIndicators.filter(ind => allMeta.includes(ind)).length;
+    if (domainHits > 0) score += Math.min(0.2, domainHits * 0.1);
+  }
+
+  // Agency match
+  if (intake.agency_references.length > 0) {
+    const allMeta = `${title} ${heading}`.toLowerCase();
+    for (const agency of intake.agency_references) {
+      if (allMeta.includes(agency.toLowerCase())) {
+        score += 0.15;
+        break;
+      }
+    }
+  }
+
+  return Math.min(1, score);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ *  FRESHNESS SCORING — Real, not placeholder
+ * 
+ *  Uses effective_date / publication_date / updated_at from
+ *  document metadata when available. Gracefully returns neutral
+ *  0.5 when no date info exists.
+ * ═══════════════════════════════════════════════════════════════ */
+
+function computeFreshnessScore(metadata: Record<string, unknown>): number {
+  // Try to extract a meaningful date from metadata
+  const dateStr = String(
+    metadata.effective_date ??
+    metadata.publication_date ??
+    metadata.updated_at ??
+    metadata.created_at ??
+    ""
+  );
+
+  if (!dateStr) return 0.5; // neutral when no date available
+
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return 0.5; // unparseable date → neutral
+
+  const now = Date.now();
+  const ageMs = now - date.getTime();
+  const ageDays = ageMs / (1000 * 60 * 60 * 24);
+
+  // Scoring: recent documents score higher
+  // < 90 days → 1.0, < 1 year → 0.8, < 3 years → 0.6, < 5 years → 0.4, older → 0.2
+  if (ageDays < 90) return 1.0;
+  if (ageDays < 365) return 0.8;
+  if (ageDays < 1095) return 0.6;
+  if (ageDays < 1825) return 0.4;
+  return 0.2;
+}
+
 /* ── Duplication detection ── */
 
 function tokenize(text: string): Set<string> {
@@ -383,17 +528,11 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
 
 /* ── Bounded text truncation ── */
 
-/**
- * Truncate text to a char limit with sentence-boundary preference.
- * Returns { text, wasTruncated }.
- */
 function boundedTruncate(
   text: string,
   maxChars: number,
 ): { text: string; wasTruncated: boolean } {
   if (text.length <= maxChars) return { text, wasTruncated: false };
-
-  // Try to cut at last sentence boundary before limit
   const slice = text.slice(0, maxChars);
   const lastSentenceEnd = Math.max(
     slice.lastIndexOf(". "),
@@ -456,13 +595,21 @@ function buildCitationLabel(
 function scoreCandidate(
   chunk: { similarity: number; content: string; metadata: Record<string, unknown> },
   query: string,
-): { composite_score: number; lexical_score: number; authority_score: number; excerpt_density: number } {
+  intake: IntakeSignals,
+): {
+  composite_score: number;
+  lexical_score: number;
+  authority_score: number;
+  excerpt_density: number;
+  metadata_match: number;
+  freshness_score: number;
+} {
   const lexical_score = computeLexicalScore(query, chunk.content);
   const authority_score = computeAuthorityScore(chunk.metadata);
   const procedural = computeProceduralScore(chunk.content);
   const excerpt_density = computeExcerptDensity(chunk.content);
-  const metadata_match = 0.5;
-  const freshness = 0.5;
+  const metadata_match = computeMetadataMatch(query, chunk.metadata, intake);
+  const freshness_score = computeFreshnessScore(chunk.metadata);
   const context_quality = computeInfoQuality(chunk.content);
 
   const composite_score =
@@ -472,10 +619,47 @@ function scoreCandidate(
     W_PROCEDURAL * procedural +
     W_EXCERPT_DENSITY * excerpt_density +
     W_METADATA * metadata_match +
-    W_FRESHNESS * freshness +
+    W_FRESHNESS * freshness_score +
     W_CONTEXT * context_quality;
 
-  return { composite_score, lexical_score, authority_score, excerpt_density };
+  return { composite_score, lexical_score, authority_score, excerpt_density, metadata_match, freshness_score };
+}
+
+/* ── Source access URL builders ── */
+
+function buildSourceUrl(
+  supabaseUrl: string,
+  doc: { file_path: string | null; metadata: Record<string, unknown> } | undefined,
+): string | null {
+  if (!doc) return null;
+
+  // Check for explicit URL in metadata
+  const metaUrl = doc.metadata?.source_url ?? doc.metadata?.file_url ?? doc.metadata?.url;
+  if (typeof metaUrl === "string" && metaUrl.startsWith("http")) return metaUrl;
+
+  // Build signed URL from storage path if file_path exists
+  if (doc.file_path) {
+    // The file_path is a storage object key in the kb-documents bucket
+    return `${supabaseUrl}/storage/v1/object/public/kb-documents/${doc.file_path}`;
+  }
+
+  return null;
+}
+
+function buildDownloadUrl(
+  supabaseUrl: string,
+  doc: { file_path: string | null; metadata: Record<string, unknown> } | undefined,
+): string | null {
+  if (!doc) return null;
+
+  const metaDownload = doc.metadata?.download_url;
+  if (typeof metaDownload === "string" && metaDownload.startsWith("http")) return metaDownload;
+
+  if (doc.file_path) {
+    return `${supabaseUrl}/storage/v1/object/public/kb-documents/${doc.file_path}?download=true`;
+  }
+
+  return null;
 }
 
 /* ── Response helpers ── */
@@ -495,31 +679,6 @@ const FAILURE_MESSAGES: Record<string, string> = {
   no_direct_excerpt: "Relevant documents were found, but no excerpt directly addresses this question.",
   clarification_needed: "",
 };
-
-/* ── Embedding helper ── */
-
-async function embed(text: string, apiKey: string, model: string): Promise<number[]> {
-  const res = await fetch("https://api.openai.com/v1/embeddings", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ model, input: text.slice(0, LIMITS.MAX_EMBEDDING_INPUT_CHARS) }),
-  });
-
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`OpenAI embeddings error ${res.status}: ${t}`);
-  }
-
-  const j = await res.json();
-  const vec: number[] = j.data?.[0]?.embedding;
-  if (!vec || vec.length !== 1536) {
-    throw new Error(`Expected 1536-dim embedding, got ${vec?.length ?? "null"}`);
-  }
-  return vec;
-}
 
 /* ── Document title lookup ── */
 
@@ -554,14 +713,6 @@ async function lookupDocumentTitles(
 
 /* ── Payload size enforcement ── */
 
-/**
- * If payload exceeds MAX_RESPONSE_PAYLOAD_BYTES, progressively trim:
- *   1. Remove diagnostics
- *   2. Trim expandable_context on all items
- *   3. Trim excerpt_text on all items
- *   4. Remove supporting_materials
- * Returns the trimmed response and whether trimming occurred.
- */
 function enforcePayloadSize(
   response: RetrieveResponse,
   caps: CapDiagnostics,
@@ -572,17 +723,14 @@ function enforcePayloadSize(
 
   if (bytes <= LIMITS.MAX_RESPONSE_PAYLOAD_BYTES) return response;
 
-  // Clone to avoid mutation
   const r = JSON.parse(payload) as RetrieveResponse;
   caps.record("MAX_RESPONSE_PAYLOAD_BYTES", LIMITS.MAX_RESPONSE_PAYLOAD_BYTES, bytes, "trimmed");
 
-  // Step 1: Strip diagnostics
   r.diagnostics = { trimmed: true, original_bytes: bytes };
   payload = JSON.stringify(r);
   bytes = encoder.encode(payload).length;
   if (bytes <= LIMITS.MAX_RESPONSE_PAYLOAD_BYTES) return r;
 
-  // Step 2: Trim expandable_context to 500 chars
   const trimContext = (items: EvidenceItem[]) => {
     for (const item of items) {
       if (item.expandable_context.length > 500) {
@@ -596,7 +744,6 @@ function enforcePayloadSize(
   bytes = encoder.encode(payload).length;
   if (bytes <= LIMITS.MAX_RESPONSE_PAYLOAD_BYTES) return r;
 
-  // Step 3: Trim excerpt_text to 300 chars
   const trimExcerpts = (items: EvidenceItem[]) => {
     for (const item of items) {
       if (item.excerpt_text.length > 300) {
@@ -610,7 +757,6 @@ function enforcePayloadSize(
   bytes = encoder.encode(payload).length;
   if (bytes <= LIMITS.MAX_RESPONSE_PAYLOAD_BYTES) return r;
 
-  // Step 4: Drop supporting materials
   caps.record("supporting_materials_dropped", LIMITS.MAX_RESPONSE_PAYLOAD_BYTES, bytes, "trimmed");
   r.supporting_materials = [];
 
@@ -626,20 +772,27 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: _corsHeaders });
   if (req.method !== "POST") return jsonResponse(405, { error: "Method not allowed" });
 
-  /* ── Request body size check ── */
   const contentLength = req.headers.get("content-length");
   if (contentLength && parseInt(contentLength, 10) > LIMITS.MAX_REQUEST_BODY_BYTES) {
     return jsonResponse(413, { error: `Request too large (max ${LIMITS.MAX_REQUEST_BODY_BYTES} bytes)` });
   }
 
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const supabase = createClient(
-    Deno.env.get("SUPABASE_URL")!,
+    supabaseUrl,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
   const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
   if (!OPENAI_API_KEY) return jsonResponse(500, { error: "OPENAI_API_KEY not configured" });
   const EMBEDDING_MODEL = Deno.env.get("OPENAI_EMBEDDING_MODEL") ?? "text-embedding-3-small";
+
+  /**
+   * TEMPORARY HOSTED BRIDGE — Create embedding provider.
+   * When local embeddings are available, replace this with:
+   *   const embedder = createLocalEmbeddingProvider(serviceUrl);
+   */
+  const embedder = createHostedEmbeddingProvider(OPENAI_API_KEY, EMBEDDING_MODEL);
 
   let payload: RetrieveRequest;
   try {
@@ -651,11 +804,9 @@ Deno.serve(async (req) => {
   const {
     query: rawQuery,
     tenant_id,
-    max_results: requestedMaxResults,
     min_similarity = DEFAULT_MIN_SIMILARITY,
   } = payload;
 
-  /* ── Input validation ── */
   if (!rawQuery || typeof rawQuery !== "string" || rawQuery.trim().length === 0) {
     return jsonResponse(400, { error: "query is required" });
   }
@@ -666,21 +817,14 @@ Deno.serve(async (req) => {
     return jsonResponse(400, { error: `Query too long (max ${LIMITS.MAX_QUERY_INPUT_CHARS} characters)` });
   }
 
-  /* ── Cap enforcement: recall count ── */
-  const max_results = Math.min(
-    Math.max(1, requestedMaxResults ?? LIMITS.MAX_SEMANTIC_RECALL),
-    LIMITS.MAX_SEMANTIC_RECALL,
-  );
-
   const startTime = Date.now();
   const caps = new CapDiagnostics();
 
   try {
     /* ══════════════════════════════════════════════════════════
-     *  Stage 1: Intake analysis (with input truncation)
+     *  Stage 1: Intake analysis
      * ══════════════════════════════════════════════════════════ */
 
-    // Truncate pasted text for intake analysis
     let query = rawQuery.trim();
     if (query.length > LIMITS.MAX_PASTED_TEXT_CHARS) {
       caps.record("MAX_PASTED_TEXT_CHARS", LIMITS.MAX_PASTED_TEXT_CHARS, query.length, "truncated");
@@ -705,7 +849,13 @@ Deno.serve(async (req) => {
     }
 
     /* ══════════════════════════════════════════════════════════
-     *  Stage 2: Candidate recall (bounded)
+     *  Stage 2: HYBRID Candidate Recall
+     *  
+     *  Two independent recall branches:
+     *    A. Semantic — vector similarity via match_document_chunks
+     *    B. Lexical  — Postgres full-text search via search_document_chunks_lexical
+     *  
+     *  Then merge & dedupe by chunk ID.
      * ══════════════════════════════════════════════════════════ */
 
     // Truncate for embedding
@@ -715,28 +865,92 @@ Deno.serve(async (req) => {
       embeddingInput = embeddingInput.slice(0, LIMITS.MAX_EMBEDDING_INPUT_CHARS);
     }
 
-    const queryVec = await embed(embeddingInput, OPENAI_API_KEY, EMBEDDING_MODEL);
+    // Run both recall branches in parallel
+    const queryVec = await embedder.embedQuery(embeddingInput);
 
-    const { data: matches, error: rpcErr } = await supabase.rpc(
-      "match_document_chunks",
-      {
+    const [semanticResult, lexicalResult] = await Promise.all([
+      supabase.rpc("match_document_chunks", {
         p_tenant_id: tenant_id,
         p_query_embedding: JSON.stringify(queryVec),
-        p_match_count: max_results,
+        p_match_count: LIMITS.MAX_SEMANTIC_RECALL,
         p_min_similarity: min_similarity,
-      },
-    );
+      }),
+      supabase.rpc("search_document_chunks_lexical", {
+        p_tenant_id: tenant_id,
+        p_search_query: query.slice(0, 500), // keep lexical query reasonable
+        p_match_count: LIMITS.MAX_LEXICAL_RECALL,
+      }),
+    ]);
 
-    if (rpcErr) throw new Error(`RPC match_document_chunks failed: ${rpcErr.message}`);
+    if (semanticResult.error) throw new Error(`Semantic recall failed: ${semanticResult.error.message}`);
 
-    let candidates = matches ?? [];
-    console.log(`[records-room] Recall: ${candidates.length} semantic candidates`);
+    const semanticCandidates = semanticResult.data ?? [];
+    const lexicalCandidates = lexicalResult.error ? [] : (lexicalResult.data ?? []);
 
-    // Cap merged candidate pool
+    if (lexicalResult.error) {
+      console.warn("[records-room] Lexical recall failed (non-fatal):", lexicalResult.error.message);
+    }
+
+    console.log(`[records-room] Recall — semantic: ${semanticCandidates.length}, lexical: ${lexicalCandidates.length}`);
+
+    // Merge & dedupe: track which branch each candidate came from
+    const candidateMap = new Map<string, {
+      chunk: typeof semanticCandidates[0];
+      origin: RecallOrigin;
+      similarity: number;
+      lexical_rank: number;
+    }>();
+
+    for (const c of semanticCandidates) {
+      candidateMap.set(c.id, {
+        chunk: c,
+        origin: "semantic",
+        similarity: c.similarity,
+        lexical_rank: 0,
+      });
+    }
+
+    for (const c of lexicalCandidates) {
+      const existing = candidateMap.get(c.id);
+      if (existing) {
+        // Found in both branches — boost
+        existing.origin = "both";
+        existing.lexical_rank = c.rank ?? 0;
+      } else {
+        // Lexical-only candidate: assign a baseline similarity
+        candidateMap.set(c.id, {
+          chunk: { ...c, similarity: 0.15 }, // low semantic baseline for lexical-only
+          origin: "lexical",
+          similarity: 0.15,
+          lexical_rank: c.rank ?? 0,
+        });
+      }
+    }
+
+    const mergedCount = candidateMap.size;
+    let candidates = Array.from(candidateMap.values());
+
+    // Cap merged pool
     if (candidates.length > LIMITS.MAX_MERGED_CANDIDATES) {
       caps.record("MAX_MERGED_CANDIDATES", LIMITS.MAX_MERGED_CANDIDATES, candidates.length, "capped");
+      // Sort by a quick heuristic: semantic similarity + lexical rank presence
+      candidates.sort((a, b) => {
+        const scoreA = a.similarity + (a.origin === "both" ? 0.1 : 0);
+        const scoreB = b.similarity + (b.origin === "both" ? 0.1 : 0);
+        return scoreB - scoreA;
+      });
       candidates = candidates.slice(0, LIMITS.MAX_MERGED_CANDIDATES);
     }
+
+    // Count origins for diagnostics
+    let originSemantic = 0, originLexical = 0, originBoth = 0;
+    for (const c of candidates) {
+      if (c.origin === "semantic") originSemantic++;
+      else if (c.origin === "lexical") originLexical++;
+      else originBoth++;
+    }
+
+    console.log(`[records-room] Merged pool: ${mergedCount} → ${candidates.length} (semantic-only: ${originSemantic}, lexical-only: ${originLexical}, both: ${originBoth})`);
 
     // No results at all
     if (candidates.length === 0) {
@@ -748,7 +962,11 @@ Deno.serve(async (req) => {
         supporting_materials: [],
         failure_state: "no_matching_materials",
         failure_message: FAILURE_MESSAGES.no_matching_materials,
-        diagnostics: { intake, candidate_count: 0, caps_hit: caps.all, duration_ms: Date.now() - startTime },
+        diagnostics: {
+          intake, semantic_count: semanticCandidates.length,
+          lexical_count: lexicalCandidates.length, merged_count: 0,
+          caps_hit: caps.all, duration_ms: Date.now() - startTime,
+        },
       };
 
       try {
@@ -756,13 +974,7 @@ Deno.serve(async (req) => {
           session_id: null,
           event_type: "RETRIEVE_SEARCH",
           serviceName: "records-room",
-          payload: {
-            tenant_id,
-            query_type: intake.query_type,
-            candidate_count: 0,
-            result: "failure",
-            reason_code: "no_matching_materials",
-          },
+          payload: { tenant_id, query_type: intake.query_type, candidate_count: 0, result: "failure", reason_code: "no_matching_materials" },
         });
       } catch { /* non-critical */ }
 
@@ -770,33 +982,42 @@ Deno.serve(async (req) => {
     }
 
     /* ══════════════════════════════════════════════════════════
-     *  Stage 3: Records Room reranking (bounded)
+     *  Stage 3: Records Room reranking
      * ══════════════════════════════════════════════════════════ */
 
     let scored: ScoredChunk[] = [];
     let filteredLowInfo = 0;
 
-    for (const c of candidates) {
-      const infoQ = computeInfoQuality(c.content ?? "");
+    for (const entry of candidates) {
+      const c = entry.chunk;
+      const content = c.content ?? "";
+      const meta = (c.metadata as Record<string, unknown>) ?? {};
+
+      const infoQ = computeInfoQuality(content);
       if (infoQ < 0.2) { filteredLowInfo++; continue; }
 
+      // Enrich metadata with document title from chunk metadata for scoring
       const scores = scoreCandidate(
-        { similarity: c.similarity, content: c.content ?? "", metadata: (c.metadata as Record<string, unknown>) ?? {} },
+        { similarity: entry.similarity, content, metadata: meta },
         query,
+        intake,
       );
 
       scored.push({
         chunk_id: c.id,
         document_id: c.document_id,
         chunk_index: c.chunk_index,
-        content: c.content ?? "",
-        metadata: (c.metadata as Record<string, unknown>) ?? {},
-        similarity: c.similarity,
+        content,
+        metadata: meta,
+        similarity: entry.similarity,
         composite_score: scores.composite_score,
         info_quality: infoQ,
         lexical_score: scores.lexical_score,
         authority_score: scores.authority_score,
         excerpt_density: scores.excerpt_density,
+        metadata_match: scores.metadata_match,
+        freshness_score: scores.freshness_score,
+        recall_origin: entry.origin,
         bucket: "excluded",
       });
     }
@@ -804,18 +1025,18 @@ Deno.serve(async (req) => {
     // Cap scored candidates
     if (scored.length > LIMITS.MAX_SCORED_CANDIDATES) {
       caps.record("MAX_SCORED_CANDIDATES", LIMITS.MAX_SCORED_CANDIDATES, scored.length, "capped");
-      // Sort first so we keep the best
       scored.sort((a, b) => b.composite_score - a.composite_score);
       scored = scored.slice(0, LIMITS.MAX_SCORED_CANDIDATES);
     } else {
       scored.sort((a, b) => b.composite_score - a.composite_score);
     }
 
-    // Deduplicate + bucket assignment (bounded by MAX_ADMITTED_CANDIDATES)
+    // Deduplicate + bucket assignment
     const admitted: ScoredChunk[] = [];
     const admittedTokenSets: Set<string>[] = [];
     let strongCount = 0;
     let supportingCount = 0;
+    let dupeSuppressed = 0;
 
     for (const chunk of scored) {
       if (admitted.length >= LIMITS.MAX_ADMITTED_CANDIDATES) break;
@@ -825,6 +1046,7 @@ Deno.serve(async (req) => {
       for (const existing of admittedTokenSets) {
         if (jaccardSimilarity(tokens, existing) >= LIMITS.JACCARD_DEDUP_THRESHOLD) {
           isDupe = true;
+          dupeSuppressed++;
           break;
         }
       }
@@ -844,10 +1066,19 @@ Deno.serve(async (req) => {
       admittedTokenSets.push(tokens);
     }
 
-    console.log(`[records-room] Admitted: ${admitted.length} (strong: ${strongCount}, supporting: ${supportingCount}, filtered_low_info: ${filteredLowInfo})`);
+    // Track admitted origins
+    let admittedFromSemantic = 0, admittedFromLexical = 0, admittedFromBoth = 0;
+    for (const a of admitted) {
+      if (a.recall_origin === "semantic") admittedFromSemantic++;
+      else if (a.recall_origin === "lexical") admittedFromLexical++;
+      else admittedFromBoth++;
+    }
+
+    console.log(`[records-room] Admitted: ${admitted.length} (strong: ${strongCount}, supporting: ${supportingCount}, filtered_low_info: ${filteredLowInfo}, dupe_suppressed: ${dupeSuppressed})`);
+    console.log(`[records-room] Admitted origins — semantic: ${admittedFromSemantic}, lexical: ${admittedFromLexical}, both: ${admittedFromBoth}`);
 
     /* ══════════════════════════════════════════════════════════
-     *  Stage 4: Excerpt assembly (bounded per-item)
+     *  Stage 4: Excerpt assembly
      * ══════════════════════════════════════════════════════════ */
 
     const documentIds = admitted.map(c => c.document_id);
@@ -858,10 +1089,8 @@ Deno.serve(async (req) => {
       const docTitle = doc?.title ?? "Unknown Document";
       const sectionHeading = (chunk.metadata.heading_path as string) ?? (chunk.metadata.section_heading as string) ?? null;
 
-      // Bounded excerpt
       const excerpt_text = extractBestExcerpt(chunk.content, query, LIMITS.MAX_EXCERPT_CHARS);
 
-      // Bounded context
       let expandable_context = chunk.content;
       if (expandable_context.length > LIMITS.MAX_CONTEXT_CHARS) {
         caps.record("MAX_CONTEXT_CHARS", LIMITS.MAX_CONTEXT_CHARS, expandable_context.length, "truncated");
@@ -869,7 +1098,6 @@ Deno.serve(async (req) => {
         expandable_context = truncated.text + (truncated.wasTruncated ? "\n\n[Context truncated]" : "");
       }
 
-      // Bounded citation label
       const citation_label = buildCitationLabel(docTitle, sectionHeading, chunk.chunk_index, LIMITS.MAX_CITATION_LABEL_CHARS);
 
       return {
@@ -885,6 +1113,8 @@ Deno.serve(async (req) => {
         document_id: chunk.document_id,
         similarity: parseFloat(chunk.similarity.toFixed(4)),
         composite_score: parseFloat(chunk.composite_score.toFixed(4)),
+        source_url: buildSourceUrl(supabaseUrl, doc),
+        download_url: buildDownloadUrl(supabaseUrl, doc),
       };
     }
 
@@ -920,30 +1150,47 @@ Deno.serve(async (req) => {
     }
 
     /* ══════════════════════════════════════════════════════════
-     *  Stage 6: Diagnostics + response packaging (bounded)
+     *  Stage 6: Diagnostics + response packaging
      * ══════════════════════════════════════════════════════════ */
 
     const diagnostics: Record<string, unknown> = {
       intake,
-      candidate_count: (matches ?? []).length,
-      merged_pool_size: candidates.length,
+      // Recall diagnostics
+      semantic_recall_count: semanticCandidates.length,
+      lexical_recall_count: lexicalCandidates.length,
+      merged_pool_count: mergedCount,
+      deduped_merged_count: candidates.length,
+      // Origin breakdown in merged pool
+      pool_origin_semantic: originSemantic,
+      pool_origin_lexical: originLexical,
+      pool_origin_both: originBoth,
+      // Reranking diagnostics
       filtered_low_info: filteredLowInfo,
       scored_count: scored.length,
+      dupe_suppressed: dupeSuppressed,
       admitted_count: admitted.length,
       strong_count: strong_evidence.length,
       supporting_count: supporting_materials.length,
-      top_similarity: candidates.length > 0 ? parseFloat(candidates[0].similarity.toFixed(4)) : 0,
+      // Admitted origin breakdown
+      admitted_from_semantic: admittedFromSemantic,
+      admitted_from_lexical: admittedFromLexical,
+      admitted_from_both: admittedFromBoth,
+      // Quality metrics
+      top_similarity: candidates.length > 0 ? parseFloat(Math.max(...candidates.map(c => c.similarity)).toFixed(4)) : 0,
       avg_composite: admitted.length > 0
         ? parseFloat((admitted.reduce((s, c) => s + c.composite_score, 0) / admitted.length).toFixed(4))
         : 0,
+      // Safety
       caps_hit: caps.all,
       caps_hit_count: caps.hitCount,
+      failure_state,
       duration_ms: Date.now() - startTime,
+      // Architecture note
+      embedding_provider: "openai_hosted_bridge", // TEMPORARY — will change to "local" when local embeddings available
     };
 
     console.log("[records-room] Diagnostics:", JSON.stringify(diagnostics));
 
-    // Eye event
     try {
       await logEyeEvent(supabase, {
         session_id: null,
@@ -952,9 +1199,12 @@ Deno.serve(async (req) => {
         payload: {
           tenant_id,
           query_type: intake.query_type,
-          candidate_count: (matches ?? []).length,
+          semantic_recall: semanticCandidates.length,
+          lexical_recall: lexicalCandidates.length,
+          merged_pool: mergedCount,
           strong_count: strong_evidence.length,
           supporting_count: supporting_materials.length,
+          admitted_origins: { semantic: admittedFromSemantic, lexical: admittedFromLexical, both: admittedFromBoth },
           caps_hit_count: caps.hitCount,
           duration_ms: Date.now() - startTime,
           result: strong_evidence.length > 0 ? "success" : supporting_materials.length > 0 ? "partial" : "failure",
@@ -973,7 +1223,6 @@ Deno.serve(async (req) => {
       diagnostics,
     };
 
-    // Final payload size enforcement
     response = enforcePayloadSize(response, caps);
 
     return jsonResponse(200, response);
