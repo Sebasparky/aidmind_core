@@ -297,6 +297,75 @@ function computeEvidenceUsefulness(content: string, scope?: string | null): numb
   return parseFloat(normalized.toFixed(3));
 }
 
+/* ── Interviewability scoring ── */
+
+/**
+ * Compute how likely a chunk's content can be transformed into a natural
+ * client-facing interview question (vs being internal-only worker instructions).
+ *
+ * Returns 0..1 where:
+ *   0   = internal-only (documentation instructions, case coding, justification requirements)
+ *   0.5 = neutral / mixed
+ *   1   = highly interviewable (assessment factors, risk indicators, factual fields)
+ *
+ * This score is stored in chunk metadata for downstream use by the generation validator.
+ */
+const INTERVIEWABLE_POSITIVE: string[] = [
+  "injury", "injuries", "injured", "household", "who lives",
+  "substance abuse", "substance use", "housing", "homeless", "eviction",
+  "safety concern", "safety factor", "risk factor", "protective factor",
+  "caregiver", "parent", "child", "children", "family member",
+  "prior services", "community services", "agency involved",
+  "referral", "treatment", "medication", "diagnosis",
+  "employment", "income", "education", "transportation",
+  "living arrangement", "placement", "supervision",
+  "mental health", "behavioral health", "symptoms",
+  "domestic violence", "intimate partner",
+  "dates", "when did", "how long", "how often",
+];
+
+const INTERVIEWABLE_NEGATIVE: string[] = [
+  "the worker must document",
+  "case manager must explain",
+  "narrative must include",
+  "must be recorded in the case record",
+  "document the reasons for",
+  "provide justification",
+  "case must be classified",
+  "select the response",
+  "enter the appropriate code",
+  "supervisory approval",
+  "override must be approved",
+  "complete the following form",
+  "case finding",
+  "case coding",
+  "disposition category",
+  "substantiation determination",
+  "response option",
+  "responses 1 through",
+  "administrative review",
+  "record must reflect",
+];
+
+function computeInterviewability(content: string): number {
+  if (!content || content.trim().length < 50) return 0.3;
+
+  const lower = content.toLowerCase();
+
+  let posHits = 0;
+  for (const phrase of INTERVIEWABLE_POSITIVE) {
+    if (lower.includes(phrase)) posHits++;
+  }
+
+  let negHits = 0;
+  for (const phrase of INTERVIEWABLE_NEGATIVE) {
+    if (lower.includes(phrase)) negHits++;
+  }
+
+  const raw = posHits * 0.04 - negHits * 0.10;
+  return parseFloat(Math.max(0, Math.min(1, 0.5 + raw)).toFixed(3));
+}
+
 /* ── Helpers ── */
 
 let _corsHeaders: Record<string, string> = {};
@@ -1173,6 +1242,7 @@ Deno.serve(async (req) => {
             chunk_index: c.chunk_index,
             similarity: parseFloat(c.similarity.toFixed(4)),
             usefulness: c.evidence_usefulness,
+            interviewability: computeInterviewability(c.content),
           })),
         },
       })
@@ -1206,6 +1276,7 @@ Deno.serve(async (req) => {
       metadata: {
         query_indices: c.query_indices,
         evidence_usefulness: c.evidence_usefulness,
+        interviewability: computeInterviewability(c.content),
       },
     }));
 

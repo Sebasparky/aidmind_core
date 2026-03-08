@@ -58,7 +58,11 @@ type DropReason =
   | "low_info_phrases"
   | "weak_structural_support"
   | "weak_topical_overlap"
-  | "unsupported_question_concepts";
+  | "unsupported_question_concepts"
+  | "internal_worker_prompt"
+  | "documentation_only_source"
+  | "policy_jargon_not_transformed"
+  | "classification_or_justification_prompt";
 
 /**
  * Compute structural quality of a snippet (aligned with compile-time computeInfoQuality).
@@ -275,6 +279,190 @@ function validateQuestionSupport(
   return { supported: true };
 }
 
+/* ── Client-facing question style validator ── */
+
+/**
+ * Patterns that indicate a question is really an internal worker/compliance prompt,
+ * not a natural client-facing interview question.
+ */
+const INTERNAL_WORKER_PATTERNS: RegExp[] = [
+  /what\s+(were|are)\s+the\s+reasons?\s+for\s+(not\s+)?using/i,
+  /why\s+(were|was|are|is)\s+responses?\s+\d/i,
+  /what\s+narrative\s+is\s+required/i,
+  /what\s+should\s+(the\s+)?(case\s*)?worker\s+(explain|document|record|note)/i,
+  /what\s+must\s+(be\s+)?documented/i,
+  /what\s+category\s+must\s+(the\s+)?case\s+be\s+classified/i,
+  /does\s+the\s+record\s+indicate/i,
+  /what\s+(case\s+)?coding\s+is\s+required/i,
+  /what\s+justification\s+must\s+(be\s+)?provided/i,
+  /how\s+should\s+(the\s+)?(case\s*)?manager\s+(explain|justify|document)/i,
+  /what\s+(internal\s+)?review\s+is\s+required/i,
+  /what\s+supervisory\s+approval\s+is\s+needed/i,
+  /what\s+compliance\s+(steps?|requirements?)\s+(are|must)/i,
+  /which\s+response\s+option\s+(was|should\s+be)\s+selected/i,
+  /what\s+(legal\s+)?basis\s+(was|is)\s+used\s+for/i,
+];
+
+/**
+ * Phrases in a question that strongly suggest internal/process language
+ * rather than client-facing interview language.
+ */
+const INTERNAL_LANGUAGE_PHRASES: string[] = [
+  "must be documented",
+  "case record",
+  "narrative requirement",
+  "case classification",
+  "response option",
+  "supervisory review",
+  "case manager must",
+  "worker must explain",
+  "coding",
+  "legal basis for",
+  "compliance requirement",
+  "approval is needed",
+  "override reason",
+  "disposition",
+  "substantiation",
+  "case finding",
+  "administrative review",
+];
+
+/**
+ * Phrases in cited snippets that indicate the source is mainly an
+ * internal documentation/workflow instruction rather than interviewable content.
+ */
+const DOCUMENTATION_ONLY_SNIPPET_PHRASES: string[] = [
+  "the case manager must document",
+  "the worker shall explain in the narrative",
+  "must be recorded in the case record",
+  "document the reasons for",
+  "provide justification for",
+  "case must be classified as",
+  "the record must reflect",
+  "narrative must include",
+  "the worker must explain why",
+  "document why responses 1 through",
+  "override must be approved",
+  "supervisory approval is required",
+  "complete the following form",
+  "enter the appropriate code",
+  "select the response that",
+];
+
+/**
+ * Validate whether a generated question is truly client/caregiver-facing
+ * rather than an internal worker instruction, documentation prompt, or
+ * classification/justification prompt.
+ *
+ * Returns { clientFacing: true } or { clientFacing: false, reason, details }.
+ */
+function validateClientFacingStyle(
+  question: string,
+  citedSnippetTexts: string[],
+): { clientFacing: boolean; reason?: DropReason; details?: Record<string, unknown> } {
+  const qLower = question.toLowerCase();
+  const combinedSnippets = citedSnippetTexts.join(" ").toLowerCase();
+
+  // ── Check 1: Question matches internal worker patterns ──
+  for (const pattern of INTERNAL_WORKER_PATTERNS) {
+    if (pattern.test(qLower)) {
+      return {
+        clientFacing: false,
+        reason: "internal_worker_prompt",
+        details: { matched_pattern: pattern.source.slice(0, 60) },
+      };
+    }
+  }
+
+  // ── Check 2: Question contains multiple internal language phrases ──
+  let internalPhraseHits = 0;
+  const matchedPhrases: string[] = [];
+  for (const phrase of INTERNAL_LANGUAGE_PHRASES) {
+    if (qLower.includes(phrase)) {
+      internalPhraseHits++;
+      matchedPhrases.push(phrase);
+    }
+  }
+  if (internalPhraseHits >= 2) {
+    return {
+      clientFacing: false,
+      reason: "internal_worker_prompt",
+      details: { internal_phrase_hits: internalPhraseHits, matched: matchedPhrases },
+    };
+  }
+
+  // ── Check 3: Cited snippets are predominantly documentation-only ──
+  let docOnlyHits = 0;
+  for (const phrase of DOCUMENTATION_ONLY_SNIPPET_PHRASES) {
+    if (combinedSnippets.includes(phrase)) docOnlyHits++;
+  }
+  // If most of the snippet evidence is documentation instructions and the
+  // question also has at least one internal phrase, reject
+  if (docOnlyHits >= 2 && internalPhraseHits >= 1) {
+    return {
+      clientFacing: false,
+      reason: "documentation_only_source",
+      details: { doc_only_hits: docOnlyHits, internal_phrase_hits: internalPhraseHits },
+    };
+  }
+  // Strong documentation-only signal even without question phrases
+  if (docOnlyHits >= 3) {
+    return {
+      clientFacing: false,
+      reason: "documentation_only_source",
+      details: { doc_only_hits: docOnlyHits },
+    };
+  }
+
+  // ── Check 4: Policy jargon not transformed ──
+  // Question uses highly technical/process language that wouldn't be natural
+  // in a client conversation
+  const JARGON_PATTERNS: RegExp[] = [
+    /\brequire\s+protective\s+interventions?\b/i,
+    /\bdisposition\s+(category|finding|determination)\b/i,
+    /\bcase\s+(classification|coding|finding)\b/i,
+    /\bstatutory\s+(requirements?|authority|basis)\b/i,
+    /\bpursuant\s+to\s+(section|chapter|statute|rule)\b/i,
+    /\badjudication\b/i,
+    /\bsubstantiat(e|ion|ed)\b/i,
+  ];
+  let jargonHits = 0;
+  for (const p of JARGON_PATTERNS) {
+    if (p.test(qLower)) jargonHits++;
+  }
+  if (jargonHits >= 2) {
+    return {
+      clientFacing: false,
+      reason: "policy_jargon_not_transformed",
+      details: { jargon_hits: jargonHits },
+    };
+  }
+
+  // ── Check 5: Classification/justification prompt ──
+  const CLASSIFICATION_PATTERNS: RegExp[] = [
+    /what\s+(type|level|category|tier)\s+of\s+(response|intervention|action)\s+(was|is|should)\b/i,
+    /what\s+were\s+the\s+reasons\s+for\s+not\b/i,
+    /why\s+(was|were)\s+(legal\s+action|court\s+intervention|removal)/i,
+    /what\s+(alternative|other)\s+responses?\s+(were|was)\s+(considered|explored|attempted)\b/i,
+  ];
+  for (const p of CLASSIFICATION_PATTERNS) {
+    if (p.test(qLower)) {
+      // Only reject if the snippet is also mainly classification/justification
+      if (docOnlyHits >= 1 || combinedSnippets.includes("reasons for not using") ||
+          combinedSnippets.includes("must explain why") ||
+          combinedSnippets.includes("justify")) {
+        return {
+          clientFacing: false,
+          reason: "classification_or_justification_prompt",
+          details: { matched_classification: true, doc_only_hits: docOnlyHits },
+        };
+      }
+    }
+  }
+
+  return { clientFacing: true };
+}
+
 /* ── Insufficient grounding reason codes ── */
 type GroundingCode =
   | "INSUFFICIENT_GROUNDED_SUPPORT"
@@ -424,7 +612,7 @@ ${scopeLine}
 
 You are given policy excerpts that are relevant to the template being completed for this program and jurisdiction.
 
-Your task is to generate UP TO 12 targeted interview questions that the caseworker should ask the client to gather the factual information needed to complete the template accurately and in compliance with policy.
+Your task is to generate UP TO 12 targeted interview questions that the caseworker should ask the client, caregiver, or involved party to gather the factual information needed to complete the template accurately and in compliance with policy.
 
 CRITICAL GROUNDING RULES:
 
@@ -436,17 +624,54 @@ CRITICAL GROUNDING RULES:
 - Quality and grounding matter more than quantity. 4 well-grounded questions are better than 12 weakly grounded ones.
 - If the policy excerpts are too weak, too structural, or too vague to support any meaningful questions, return an empty questions array.
 
-These must be CLIENT-FACING, FACT-FIRST questions.
+------------------------------------------------------------
+CLIENT-FACING QUESTION REQUIREMENT (CRITICAL)
 
-DO NOT:
-- Summarize policy
-- Ask abstract legal or regulatory questions
-- Ask the client to interpret definitions or determine eligibility
-- Ask vague filler questions such as "Is there anything else?"
-- Generate questions that go beyond what the cited snippet actually says
-- Stretch a citation to cover a question the snippet does not support
+Every question you generate MUST be something a caseworker could realistically ask a client, caregiver, or involved party face-to-face in plain, conversational language.
 
-The goal is to generate structured investigative questions that help capture concrete facts, grounded in real policy text.
+GOOD source types for question generation:
+- Assessment criteria that identify what facts to collect from a client
+- Required factual fields (injuries, household members, dates, services)
+- Concrete risk/safety indicators that can be asked about directly
+- Household, caregiver, or child condition factors
+- Service involvement details the client can confirm or describe
+- Housing, substance use, safety indicators the client can report on
+
+BAD source types — DO NOT generate questions directly from these unless you can cleanly transform them into a natural client-facing question:
+- Internal worker narrative instructions ("the worker must document why...")
+- Case classification or coding rules
+- Legal justification requirements ("explain why legal action was initiated instead of...")
+- "If X, document Y" instructions meant for the worker's record
+- Instructions about what the case manager must explain in the case record
+- Supervisory review or approval requirements
+- Response-option selection guidance ("select response 1-7")
+- Administrative compliance or audit requirements
+
+TRANSFORMATION RULE:
+If a policy snippet describes what information must be collected (e.g., "the assessment must include safety factors"), you MAY transform that into a natural client-facing question (e.g., "Are there any current safety concerns for the child in the home?").
+But do NOT simply mirror policy jargon back as a question. Translate operational requirements into plain, factual interview questions.
+
+QUESTION STYLE RULES:
+- Use plain spoken language a client or caregiver would understand
+- Ask about concrete facts, events, people, dates, conditions, services
+- Avoid policy jargon, legal terminology, or process language
+- Do NOT ask questions that sound like internal compliance prompts
+- Do NOT ask questions about case classification, coding, or disposition
+- Do NOT ask questions that are really note-writing prompts for the worker
+- Do NOT ask "what were the reasons for not using other responses" or similar justification-style questions
+
+Examples of GOOD questions:
+- "Was any child injured, and if so, what was the most serious injury?"
+- "Is the family currently homeless or facing eviction?"
+- "Have any community services been recommended or used?"
+- "Who currently lives in the home with the child?"
+- "Has the primary caretaker had a substance abuse problem in the past year?"
+
+Examples of BAD questions (do not generate these):
+- "Has legal action been initiated, and if so, what were the reasons for not using other responses?"
+- "What category must the case be classified as?"
+- "What narrative is required in the case record?"
+- "Are there any safety factors present that require protective interventions?" (too jargon-heavy; rephrase as a natural question)
 
 ------------------------------------------------------------
 CATEGORY GUIDANCE (up to 2 per category, as evidence supports)
@@ -467,6 +692,7 @@ QUESTION QUALITY RULES
 
 Each question must:
 
+- Be something a caseworker could ask a client or caregiver directly
 - Seek specific factual information (who, what, when, where, how)
 - Be answerable with recordable information such as:
     - Dates or times
@@ -475,9 +701,10 @@ Each question must:
     - Actions taken
     - Current status
     - Documents or agencies involved
-- Be phrased in plain, neutral professional language
+- Be phrased in plain, neutral, conversational professional language
 - Avoid duplication or minor rewording of the same question
 - Avoid multi-part compound questions — focus on the most critical fact
+- NOT sound like an internal form, compliance check, or case manager note prompt
 
 Prefer questions that produce concise, extractable answers that can be directly mapped into structured fields.
 
@@ -541,32 +768,53 @@ No text outside JSON.
       }
     }
 
-    // ── 7. Post-generation support-strength validation ─────────
+    // ── 7. Post-generation validation: support-strength + client-facing style ──
     const validatedQuestions: typeof parsed.questions = [];
     const droppedQuestions: { question: string; reason: string; citationCount: number; details?: Record<string, unknown> }[] = [];
+    const dropReasonCounts: Record<string, number> = {};
 
     for (const q of parsed.questions) {
       const citedTexts = q.citations
         .map((cid: string) => snippetMap.get(cid))
         .filter(Boolean) as string[];
 
-      const result = validateQuestionSupport(q.question, citedTexts);
-
-      if (result.supported) {
-        validatedQuestions.push(q);
-      } else {
+      // Gate A: Support-strength validation (hard/soft gates)
+      const supportResult = validateQuestionSupport(q.question, citedTexts);
+      if (!supportResult.supported) {
+        const reason = supportResult.reason ?? "unknown";
+        dropReasonCounts[reason] = (dropReasonCounts[reason] ?? 0) + 1;
         droppedQuestions.push({
-          question: q.question.slice(0, 100),
-          reason: result.reason ?? "unknown",
+          question: q.question.slice(0, 120),
+          reason,
           citationCount: q.citations.length,
-          ...(result.details ? { details: result.details } : {}),
+          ...(supportResult.details ? { details: supportResult.details } : {}),
         });
+        continue;
       }
+
+      // Gate B: Client-facing style validation
+      const styleResult = validateClientFacingStyle(q.question, citedTexts);
+      if (!styleResult.clientFacing) {
+        const reason = styleResult.reason ?? "internal_worker_prompt";
+        dropReasonCounts[reason] = (dropReasonCounts[reason] ?? 0) + 1;
+        droppedQuestions.push({
+          question: q.question.slice(0, 120),
+          reason,
+          citationCount: q.citations.length,
+          ...(styleResult.details ? { details: styleResult.details } : {}),
+        });
+        continue;
+      }
+
+      validatedQuestions.push(q);
     }
 
     console.log(
-      `[generate-guidance-phase1] Validation: ${parsed.questions.length} generated → ${validatedQuestions.length} grounded, ${droppedQuestions.length} dropped`
+      `[generate-guidance-phase1] Validation: ${parsed.questions.length} generated → ${validatedQuestions.length} grounded+client-facing, ${droppedQuestions.length} dropped`
     );
+    if (Object.keys(dropReasonCounts).length > 0) {
+      console.log(`[generate-guidance-phase1] Drop reason distribution: ${JSON.stringify(dropReasonCounts)}`);
+    }
     if (droppedQuestions.length > 0) {
       for (const dq of droppedQuestions) {
         console.log(`[generate-guidance-phase1] DROPPED: reason=${dq.reason} citations=${dq.citationCount} q="${dq.question}"${dq.details ? " details=" + JSON.stringify(dq.details) : ""}`);
@@ -596,6 +844,7 @@ No text outside JSON.
         total_generated: parsed.questions.length,
         total_grounded: validatedQuestions.length,
         total_dropped: droppedQuestions.length,
+        drop_reason_distribution: dropReasonCounts,
       };
 
       await supabase.rpc("update_session_guidance_phase1", {
@@ -637,6 +886,7 @@ No text outside JSON.
       total_generated: parsed.questions.length,
       total_grounded: validatedQuestions.length,
       total_dropped: droppedQuestions.length,
+      drop_reason_distribution: dropReasonCounts,
     };
 
     // ── 10. Save to session ────────────────────────────────────
