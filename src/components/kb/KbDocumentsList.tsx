@@ -49,9 +49,11 @@ function isProcessing(status: IngestionStatus): boolean {
 
 export default function KbDocumentsList() {
   const { documents, loading, error, refresh } = useKbDocuments();
+  const { tenant } = useTenant();
   const [retrying, setRetrying] = useState<string | null>(null);
 
-  const handleRetry = async (docId: string, tenantId: string) => {
+  const handleRetry = async (docId: string) => {
+    if (!tenant?.tenantId) return;
     setRetrying(docId);
     try {
       // Reset ingestion status
