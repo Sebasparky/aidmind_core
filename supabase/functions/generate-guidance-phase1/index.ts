@@ -65,6 +65,21 @@ type DropReason =
   | "classification_or_justification_prompt"
   | "specificity_lost";
 
+type ValidationSeverity = "pass" | "soft_fail" | "hard_fail";
+
+interface ValidationSignal {
+  severity: ValidationSeverity;
+  reason?: DropReason;
+  details?: Record<string, unknown>;
+}
+
+type ReviewFlag =
+  | "specificity_soft_fail"
+  | "weak_support_soft_fail"
+  | "broad_paraphrase"
+  | "partial_qualifier_loss"
+  | "low_overlap_but_high_quality_source";
+
 /**
  * Compute structural quality of a snippet (aligned with compile-time computeInfoQuality).
  * Returns 0..1 where 0 = structural junk, 1 = substantive prose.
@@ -922,78 +937,148 @@ No text outside JSON.
       }
     }
 
-    // ── 7. Post-generation validation: support-strength + client-facing style ──
-    const validatedQuestions: typeof parsed.questions = [];
+    // ── 7. Post-generation validation: tiered hard/soft/pass hierarchy ──
+    const validatedQuestions: (typeof parsed.questions[0] & {
+      validation_status: "pass" | "warning";
+      review_flags?: ReviewFlag[];
+    })[] = [];
     const droppedQuestions: { question: string; reason: string; citationCount: number; details?: Record<string, unknown> }[] = [];
     const dropReasonCounts: Record<string, number> = {};
+    const softFailCounts: Record<string, number> = {};
 
     for (const q of parsed.questions) {
       const citedTexts = q.citations
         .map((cid: string) => snippetMap.get(cid))
         .filter(Boolean) as string[];
 
-      // Gate A: Support-strength validation (hard/soft gates)
+      const signals: ValidationSignal[] = [];
+      const reviewFlags: ReviewFlag[] = [];
+
+      // ── Gate A: Support-strength ──
+      // Hard gates: no_snippet_text, snippet_too_short, weak_structural_support
+      // Soft gates: weak_topical_overlap, unsupported_question_concepts
       const supportResult = validateQuestionSupport(q.question, citedTexts);
       if (!supportResult.supported) {
-        const reason = supportResult.reason ?? "unknown";
-        dropReasonCounts[reason] = (dropReasonCounts[reason] ?? 0) + 1;
-        droppedQuestions.push({
-          question: q.question.slice(0, 120),
-          reason,
-          citationCount: q.citations.length,
-          ...(supportResult.details ? { details: supportResult.details } : {}),
-        });
-        continue;
+        const reason = supportResult.reason ?? ("unknown" as DropReason);
+        const isHardSupport = ["no_snippet_text", "snippet_too_short", "weak_structural_support"].includes(reason);
+        if (isHardSupport) {
+          signals.push({ severity: "hard_fail", reason, details: supportResult.details });
+        } else {
+          signals.push({ severity: "soft_fail", reason, details: supportResult.details });
+          if (reason === "weak_topical_overlap") reviewFlags.push("low_overlap_but_high_quality_source");
+          else reviewFlags.push("weak_support_soft_fail");
+        }
       }
 
-      // Gate B: Client-facing style validation
+      // ── Gate B: Client-facing style (always hard fail) ──
       const styleResult = validateClientFacingStyle(q.question, citedTexts);
       if (!styleResult.clientFacing) {
-        const reason = styleResult.reason ?? "internal_worker_prompt";
-        dropReasonCounts[reason] = (dropReasonCounts[reason] ?? 0) + 1;
-        droppedQuestions.push({
-          question: q.question.slice(0, 120),
-          reason,
-          citationCount: q.citations.length,
-          ...(styleResult.details ? { details: styleResult.details } : {}),
+        signals.push({
+          severity: "hard_fail",
+          reason: styleResult.reason ?? "internal_worker_prompt",
+          details: styleResult.details,
         });
-        continue;
       }
 
-      // Gate C: Specificity preservation check
+      // ── Gate C: Specificity preservation (soft fail unless extreme) ──
       const specResult = validateSpecificityPreservation(q.question, citedTexts);
-      if (!specResult.preserved && specResult.score < 0.5) {
-        // Significant specificity loss — drop with diagnostics
-        const reason: DropReason = "specificity_lost";
+      if (!specResult.preserved) {
+        if (specResult.score < 0.25) {
+          // Extreme specificity loss → hard fail
+          signals.push({
+            severity: "hard_fail",
+            reason: "specificity_lost",
+            details: {
+              specificity_score: +specResult.score.toFixed(2),
+              lost_qualifiers: specResult.lostQualifiers.map((lq) => lq.label),
+            },
+          });
+        } else {
+          // Partial qualifier loss → soft fail
+          signals.push({
+            severity: "soft_fail",
+            reason: "specificity_lost",
+            details: {
+              specificity_score: +specResult.score.toFixed(2),
+              lost_qualifiers: specResult.lostQualifiers.map((lq) => lq.label),
+            },
+          });
+          if (specResult.score < 0.5) reviewFlags.push("specificity_soft_fail");
+          else reviewFlags.push("partial_qualifier_loss");
+        }
+      }
+
+      // ── Stage D: Aggregation — decide final outcome ──
+      const hardFails = signals.filter((s) => s.severity === "hard_fail");
+      const softFails = signals.filter((s) => s.severity === "soft_fail");
+
+      if (hardFails.length > 0) {
+        const primary = hardFails[0];
+        const reason = primary.reason ?? "unknown";
         dropReasonCounts[reason] = (dropReasonCounts[reason] ?? 0) + 1;
         droppedQuestions.push({
           question: q.question.slice(0, 120),
           reason,
           citationCount: q.citations.length,
-          details: {
-            specificity_score: +specResult.score.toFixed(2),
-            lost_qualifiers: specResult.lostQualifiers.map((lq) => lq.label),
-            lost_evidence: specResult.lostQualifiers.map((lq) => lq.snippetEvidence),
-          },
+          ...(primary.details ? { details: primary.details } : {}),
         });
         continue;
       }
 
-      // Log soft specificity warnings for questions that pass but lost minor qualifiers
-      if (!specResult.preserved) {
+      if (softFails.length >= 2) {
+        // Multiple soft fails — check snippet quality for tolerance
+        const qualities = citedTexts.map(computeSnippetSupportQuality);
+        const maxQuality = qualities.length > 0 ? Math.max(...qualities) : 0;
+
+        if (maxQuality < 0.6) {
+          // Mediocre source + multiple soft fails → drop
+          const reasons = softFails.map((s) => s.reason).join("+");
+          dropReasonCounts[`stacked_soft_fail`] = (dropReasonCounts[`stacked_soft_fail`] ?? 0) + 1;
+          droppedQuestions.push({
+            question: q.question.slice(0, 120),
+            reason: `stacked_soft_fail:${reasons}`,
+            citationCount: q.citations.length,
+            details: { soft_fail_count: softFails.length, max_snippet_quality: +maxQuality.toFixed(2) },
+          });
+          continue;
+        }
+        // High-quality source → keep with warning even with 2+ soft fails
+      }
+
+      // Track soft fail reasons for diagnostics
+      for (const sf of softFails) {
+        const r = sf.reason ?? "unknown";
+        softFailCounts[r] = (softFailCounts[r] ?? 0) + 1;
+      }
+
+      // Question survives — determine status
+      const validationStatus = softFails.length > 0 ? ("warning" as const) : ("pass" as const);
+      const enrichedQ = {
+        ...q,
+        validation_status: validationStatus,
+        ...(reviewFlags.length > 0 ? { review_flags: reviewFlags } : {}),
+      };
+
+      if (validationStatus === "warning") {
         console.log(
-          `[generate-guidance-phase1] SPECIFICITY_WARNING: score=${specResult.score.toFixed(2)} lost=[${specResult.lostQualifiers.map((l) => l.label).join(",")}] q="${q.question.slice(0, 100)}"`
+          `[generate-guidance-phase1] WARNING_KEPT: flags=[${reviewFlags.join(",")}] soft_fails=${softFails.length} q="${q.question.slice(0, 100)}"`
         );
       }
 
-      validatedQuestions.push(q);
+      validatedQuestions.push(enrichedQ);
     }
 
+    const strongCount = validatedQuestions.filter((q) => q.validation_status === "pass").length;
+    const warningCount = validatedQuestions.filter((q) => q.validation_status === "warning").length;
+
     console.log(
-      `[generate-guidance-phase1] Validation: ${parsed.questions.length} generated → ${validatedQuestions.length} grounded+client-facing, ${droppedQuestions.length} dropped`
+      `[generate-guidance-phase1] Validation: ${parsed.questions.length} generated → ${strongCount} strong, ${warningCount} warning, ${droppedQuestions.length} dropped`
     );
     if (Object.keys(dropReasonCounts).length > 0) {
-      console.log(`[generate-guidance-phase1] Drop reason distribution: ${JSON.stringify(dropReasonCounts)}`);
+      console.log(`[generate-guidance-phase1] Hard/drop reason distribution: ${JSON.stringify(dropReasonCounts)}`);
+    }
+    if (Object.keys(softFailCounts).length > 0) {
+      console.log(`[generate-guidance-phase1] Soft fail distribution (kept): ${JSON.stringify(softFailCounts)}`);
     }
     if (droppedQuestions.length > 0) {
       for (const dq of droppedQuestions) {
@@ -1002,6 +1087,7 @@ No text outside JSON.
     }
 
     // ── 8. Check if we have enough grounded questions ──────────
+    // Both "pass" and "warning" questions count as usable
     if (validatedQuestions.length < MIN_GROUNDED_QUESTIONS) {
       const reasonCode: GroundingCode = validatedQuestions.length === 0
         ? (lowInfoCount > snippets.length * 0.5 ? "LOW_INFORMATION_POLICY_PACK" : "INSUFFICIENT_GROUNDED_SUPPORT")
@@ -1011,20 +1097,22 @@ No text outside JSON.
         `[generate-guidance-phase1] Insufficient grounded questions: ${validatedQuestions.length}/${parsed.questions.length}. Reason: ${reasonCode}`
       );
 
-      // Save the insufficient-grounding result to session metadata so UI can display it
       const insufficientPayload = {
         generated_at: new Date().toISOString(),
         model,
         template_id: templateId,
         guidance_scope: guidanceScope,
         ...(guidanceScope === "other" && guidanceScopeOther ? { guidance_scope_other: guidanceScopeOther } : {}),
-        questions: validatedQuestions, // may be 0-2 questions
+        questions: validatedQuestions,
         grounding_status: "insufficient" as const,
         grounding_reason: reasonCode,
         total_generated: parsed.questions.length,
         total_grounded: validatedQuestions.length,
+        total_grounded_strong: strongCount,
+        total_grounded_warning: warningCount,
         total_dropped: droppedQuestions.length,
-        drop_reason_distribution: dropReasonCounts,
+        hard_fail_distribution: dropReasonCounts,
+        soft_fail_distribution: softFailCounts,
       };
 
       await supabase.rpc("update_session_guidance_phase1", {
@@ -1032,7 +1120,6 @@ No text outside JSON.
         guidance_json: insufficientPayload,
       });
 
-      // ── Eye: tool.run.completed (with insufficient grounding) ──
       await logEyeEvent(supabase, {
         session_id: sessionIdResult.value,
         event_type: "tool.run.completed",
@@ -1065,8 +1152,11 @@ No text outside JSON.
       grounding_status: "sufficient" as const,
       total_generated: parsed.questions.length,
       total_grounded: validatedQuestions.length,
+      total_grounded_strong: strongCount,
+      total_grounded_warning: warningCount,
       total_dropped: droppedQuestions.length,
-      drop_reason_distribution: dropReasonCounts,
+      hard_fail_distribution: dropReasonCounts,
+      soft_fail_distribution: softFailCounts,
     };
 
     // ── 10. Save to session ────────────────────────────────────
