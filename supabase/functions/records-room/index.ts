@@ -11,11 +11,98 @@
  *   3. Records Room reranking (composite scoring)
  *   4. Excerpt assembly (best spans + citations)
  *   5. Response packaging (evidence-first payload)
+ * 
+ * SAFETY CAPS:
+ *   All pipeline stages enforce explicit bounded limits for stability,
+ *   performance, UI clarity, and quality. See LIMITS block below.
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { buildCorsSecurityHeaders } from "../_shared/security-headers.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
+
+/* ═══════════════════════════════════════════════════════════════
+ *  LIMITS — Single source of truth for all safety caps.
+ *  Grouped by pipeline stage. Easy to tune.
+ * ═══════════════════════════════════════════════════════════════ */
+
+const LIMITS = {
+  // ── Stage 0: Input caps ──
+  /** Hard reject: request body bytes (512 KB) */
+  MAX_REQUEST_BODY_BYTES: 512_000,
+  /** Hard reject: raw query string length */
+  MAX_QUERY_INPUT_CHARS: 10_000,
+  /** For pasted notice text: truncate to this before intake analysis */
+  MAX_PASTED_TEXT_CHARS: 8_000,
+  /** Characters sent to embedding model (text-embedding-3-small context ~8191 tokens ≈ 32K chars; stay safe) */
+  MAX_EMBEDDING_INPUT_CHARS: 12_000,
+  /** Future: max extracted text from uploaded document used for retrieval query */
+  MAX_UPLOADED_DOC_CHARS: 6_000,
+
+  // ── Stage 2: Recall caps ──
+  /** Max candidates requested from semantic vector search */
+  MAX_SEMANTIC_RECALL: 40,
+  /** Future: max candidates from lexical/BM25 recall */
+  MAX_LEXICAL_RECALL: 40,
+  /** Hard cap on merged candidate pool before reranking */
+  MAX_MERGED_CANDIDATES: 60,
+
+  // ── Stage 3: Reranking caps ──
+  /** Max candidates that survive info-quality filter and enter scoring */
+  MAX_SCORED_CANDIDATES: 50,
+  /** Jaccard threshold for near-duplicate suppression */
+  JACCARD_DEDUP_THRESHOLD: 0.75,
+  /** Max candidates that move into excerpt assembly */
+  MAX_ADMITTED_CANDIDATES: 9, // 5 strong + 4 supporting
+
+  // ── Stage 4: Result assembly caps ──
+  /** Max strong evidence items returned */
+  MAX_STRONG_EVIDENCE: 5,
+  /** Max supporting material items returned */
+  MAX_SUPPORTING_MATERIALS: 4,
+  /** Max excerpt_text length per result (chars) */
+  MAX_EXCERPT_CHARS: 600,
+  /** Max expandable_context length per result (chars) */
+  MAX_CONTEXT_CHARS: 3_000,
+  /** Max citation_label length */
+  MAX_CITATION_LABEL_CHARS: 200,
+
+  // ── Stage 5: Response payload cap ──
+  /** Max total JSON response payload (bytes). Fallback to trimmed response if exceeded. */
+  MAX_RESPONSE_PAYLOAD_BYTES: 256_000, // 256 KB
+
+  // ── Future: Model-call safeguards (for optional summarize/explain) ──
+  /** Max excerpts passed into a frontier model context window */
+  MAX_MODEL_EXCERPTS: 5,
+  /** Max total cited text window sent to model (chars) */
+  MAX_MODEL_CONTEXT_CHARS: 12_000,
+  /** If evidence context exceeds this, refuse model call rather than silently truncating */
+  MODEL_CONTEXT_REFUSE_CHARS: 20_000,
+} as const;
+
+/* ═══════════════════════════════════════════════════════════════
+ *  DIAGNOSTICS TRACKER — records every cap enforcement event.
+ * ═══════════════════════════════════════════════════════════════ */
+
+interface CapEvent {
+  cap: string;
+  limit: number;
+  actual: number;
+  action: "truncated" | "trimmed" | "capped" | "refused";
+}
+
+class CapDiagnostics {
+  private events: CapEvent[] = [];
+
+  record(cap: string, limit: number, actual: number, action: CapEvent["action"]) {
+    this.events.push({ cap, limit, actual, action });
+    console.log(`[records-room][CAP] ${action}: ${cap} (limit=${limit}, actual=${actual})`);
+  }
+
+  get hitCount() { return this.events.length; }
+  get all() { return this.events; }
+  toJSON() { return this.events; }
+}
 
 /* ── Types ── */
 
@@ -90,10 +177,8 @@ interface RetrieveResponse {
   diagnostics: Record<string, unknown>;
 }
 
-/* ── Constants ── */
+/* ── Scoring constants ── */
 
-const MAX_QUERY_CHARS = 8000;
-const DEFAULT_MAX_RESULTS = 30;
 const DEFAULT_MIN_SIMILARITY = 0.25;
 const STRONG_EVIDENCE_THRESHOLD = 0.55;
 const SUPPORTING_THRESHOLD = 0.35;
@@ -108,7 +193,7 @@ const W_METADATA = 0.05;
 const W_FRESHNESS = 0.05;
 const W_CONTEXT = 0.05;
 
-/* ── Low-info detection (reused from compile-policy-pack) ── */
+/* ── Low-info detection ── */
 
 const LOW_INFO_PHRASES = [
   "table of contents", "contents page", "list of figures",
@@ -177,7 +262,6 @@ function analyzeIntake(query: string): IntakeSignals {
   const lower = query.toLowerCase();
   const wordCount = query.split(/\s+/).length;
 
-  // Classify query type
   let query_type: QueryType;
   if (wordCount < 5) {
     query_type = "ambiguous_short_query";
@@ -189,12 +273,10 @@ function analyzeIntake(query: string): IntakeSignals {
     query_type = "broad_topic_query";
   }
 
-  // Extract key phrases (simple: longest capitalized sequences and quoted phrases)
   const key_phrases: string[] = [];
   const quotedMatches = query.match(/"([^"]+)"/g);
   if (quotedMatches) key_phrases.push(...quotedMatches.map(m => m.replace(/"/g, "")));
-  
-  // Likely domain
+
   let likely_domain: string | null = null;
   let maxDomainHits = 0;
   for (const [domain, indicators] of Object.entries(DOMAIN_INDICATORS)) {
@@ -205,17 +287,14 @@ function analyzeIntake(query: string): IntakeSignals {
     }
   }
 
-  // Agency references
   const agency_references: string[] = [];
   for (const pattern of AGENCY_PATTERNS) {
     const match = query.match(pattern);
     if (match) agency_references.push(match[0]);
   }
 
-  // Document type signals
   const document_type_signals = DOCUMENT_TYPE_SIGNALS.filter(s => lower.includes(s));
 
-  // Clarification logic
   let needs_clarification = false;
   let clarification_question: string | null = null;
 
@@ -225,13 +304,8 @@ function analyzeIntake(query: string): IntakeSignals {
   }
 
   return {
-    query_type,
-    key_phrases,
-    likely_domain,
-    agency_references,
-    document_type_signals,
-    needs_clarification,
-    clarification_question,
+    query_type, key_phrases, likely_domain, agency_references,
+    document_type_signals, needs_clarification, clarification_question,
   };
 }
 
@@ -254,17 +328,14 @@ function computeLexicalScore(query: string, content: string): number {
 /* ── Authority scoring ── */
 
 function computeAuthorityScore(metadata: Record<string, unknown>): number {
-  let score = 0.5; // baseline
+  let score = 0.5;
   const source = String(metadata.source_type ?? metadata.source ?? "").toLowerCase();
   const title = String(metadata.title ?? "").toLowerCase();
 
-  // Official sources
   if (source.includes("statute") || source.includes("regulation") || source.includes("law")) score += 0.3;
   if (source.includes("handbook") || source.includes("manual") || source.includes("policy")) score += 0.2;
   if (source.includes("guidance") || source.includes("directive")) score += 0.15;
   if (metadata.is_official === true) score += 0.2;
-
-  // Title signals
   if (/\b(code|statute|regulation|rule|act)\b/.test(title)) score += 0.1;
   if (/\b(handbook|manual|guide|policy)\b/.test(title)) score += 0.05;
 
@@ -287,12 +358,11 @@ function computeProceduralScore(content: string): number {
   return Math.min(1, hits * 0.07);
 }
 
-/* ── Excerpt density (answer-bearing substance) ── */
+/* ── Excerpt density ── */
 
 function computeExcerptDensity(content: string): number {
   const lines = content.split("\n").filter(l => l.trim().length > 0);
   if (lines.length === 0) return 0;
-
   const proseLines = lines.filter(l => l.trim().length > 60 && /[.,;:?!]/.test(l));
   return Math.min(1, proseLines.length / Math.max(lines.length, 1));
 }
@@ -311,18 +381,43 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
   return union === 0 ? 1 : intersection / union;
 }
 
-/* ── Excerpt extraction ── */
+/* ── Bounded text truncation ── */
 
-function extractBestExcerpt(content: string, query: string, maxLen = 600): string {
+/**
+ * Truncate text to a char limit with sentence-boundary preference.
+ * Returns { text, wasTruncated }.
+ */
+function boundedTruncate(
+  text: string,
+  maxChars: number,
+): { text: string; wasTruncated: boolean } {
+  if (text.length <= maxChars) return { text, wasTruncated: false };
+
+  // Try to cut at last sentence boundary before limit
+  const slice = text.slice(0, maxChars);
+  const lastSentenceEnd = Math.max(
+    slice.lastIndexOf(". "),
+    slice.lastIndexOf(".\n"),
+    slice.lastIndexOf("? "),
+    slice.lastIndexOf("! "),
+  );
+  const cutPoint = lastSentenceEnd > maxChars * 0.5 ? lastSentenceEnd + 1 : maxChars;
+  return { text: text.slice(0, cutPoint), wasTruncated: true };
+}
+
+/* ── Excerpt extraction (bounded) ── */
+
+function extractBestExcerpt(content: string, query: string, maxLen: number): string {
   const queryTokens = new Set(query.toLowerCase().split(/\s+/).filter(t => t.length > 3));
   const sentences = content.split(/(?<=[.!?])\s+/);
-  
-  if (sentences.length <= 3) return content.slice(0, maxLen);
 
-  // Score each sentence by query overlap
+  if (sentences.length <= 3) {
+    return content.length > maxLen ? content.slice(0, maxLen) + "…" : content;
+  }
+
   let bestStart = 0;
   let bestScore = -1;
-  
+
   for (let i = 0; i < sentences.length; i++) {
     const windowSentences = sentences.slice(i, i + 3);
     const windowText = windowSentences.join(" ").toLowerCase();
@@ -347,29 +442,27 @@ function buildCitationLabel(
   docTitle: string,
   sectionHeading: string | null,
   chunkIndex: number,
+  maxLen: number,
 ): string {
   const parts = [docTitle];
   if (sectionHeading) parts.push(`§ ${sectionHeading}`);
   parts.push(`chunk ${chunkIndex}`);
-  return parts.join(" — ");
+  const label = parts.join(" — ");
+  return label.length > maxLen ? label.slice(0, maxLen - 1) + "…" : label;
 }
 
 /* ── Records Room composite scoring ── */
 
 function scoreCandidate(
-  chunk: {
-    similarity: number;
-    content: string;
-    metadata: Record<string, unknown>;
-  },
+  chunk: { similarity: number; content: string; metadata: Record<string, unknown> },
   query: string,
 ): { composite_score: number; lexical_score: number; authority_score: number; excerpt_density: number } {
   const lexical_score = computeLexicalScore(query, chunk.content);
   const authority_score = computeAuthorityScore(chunk.metadata);
   const procedural = computeProceduralScore(chunk.content);
   const excerpt_density = computeExcerptDensity(chunk.content);
-  const metadata_match = 0.5; // TODO: match domain/jurisdiction from intake signals
-  const freshness = 0.5; // TODO: use effective_date when available
+  const metadata_match = 0.5;
+  const freshness = 0.5;
   const context_quality = computeInfoQuality(chunk.content);
 
   const composite_score =
@@ -389,7 +482,7 @@ function scoreCandidate(
 
 let _corsHeaders: Record<string, string> = {};
 
-function json(status: number, body: unknown) {
+function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ..._corsHeaders, "Content-Type": "application/json" },
@@ -400,7 +493,7 @@ const FAILURE_MESSAGES: Record<string, string> = {
   no_matching_materials: "No matching materials were found in the current knowledge base.",
   weak_match: "Relevant documents may exist, but no source in the current knowledge base closely matches this request.",
   no_direct_excerpt: "Relevant documents were found, but no excerpt directly addresses this question.",
-  clarification_needed: "", // dynamic
+  clarification_needed: "",
 };
 
 /* ── Embedding helper ── */
@@ -412,7 +505,7 @@ async function embed(text: string, apiKey: string, model: string): Promise<numbe
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ model, input: text.slice(0, MAX_QUERY_CHARS) }),
+    body: JSON.stringify({ model, input: text.slice(0, LIMITS.MAX_EMBEDDING_INPUT_CHARS) }),
   });
 
   if (!res.ok) {
@@ -459,12 +552,85 @@ async function lookupDocumentTitles(
   return map;
 }
 
-/* ── Main handler ── */
+/* ── Payload size enforcement ── */
+
+/**
+ * If payload exceeds MAX_RESPONSE_PAYLOAD_BYTES, progressively trim:
+ *   1. Remove diagnostics
+ *   2. Trim expandable_context on all items
+ *   3. Trim excerpt_text on all items
+ *   4. Remove supporting_materials
+ * Returns the trimmed response and whether trimming occurred.
+ */
+function enforcePayloadSize(
+  response: RetrieveResponse,
+  caps: CapDiagnostics,
+): RetrieveResponse {
+  const encoder = new TextEncoder();
+  let payload = JSON.stringify(response);
+  let bytes = encoder.encode(payload).length;
+
+  if (bytes <= LIMITS.MAX_RESPONSE_PAYLOAD_BYTES) return response;
+
+  // Clone to avoid mutation
+  const r = JSON.parse(payload) as RetrieveResponse;
+  caps.record("MAX_RESPONSE_PAYLOAD_BYTES", LIMITS.MAX_RESPONSE_PAYLOAD_BYTES, bytes, "trimmed");
+
+  // Step 1: Strip diagnostics
+  r.diagnostics = { trimmed: true, original_bytes: bytes };
+  payload = JSON.stringify(r);
+  bytes = encoder.encode(payload).length;
+  if (bytes <= LIMITS.MAX_RESPONSE_PAYLOAD_BYTES) return r;
+
+  // Step 2: Trim expandable_context to 500 chars
+  const trimContext = (items: EvidenceItem[]) => {
+    for (const item of items) {
+      if (item.expandable_context.length > 500) {
+        item.expandable_context = item.expandable_context.slice(0, 500) + "…";
+      }
+    }
+  };
+  trimContext(r.strong_evidence);
+  trimContext(r.supporting_materials);
+  payload = JSON.stringify(r);
+  bytes = encoder.encode(payload).length;
+  if (bytes <= LIMITS.MAX_RESPONSE_PAYLOAD_BYTES) return r;
+
+  // Step 3: Trim excerpt_text to 300 chars
+  const trimExcerpts = (items: EvidenceItem[]) => {
+    for (const item of items) {
+      if (item.excerpt_text.length > 300) {
+        item.excerpt_text = item.excerpt_text.slice(0, 300) + "…";
+      }
+    }
+  };
+  trimExcerpts(r.strong_evidence);
+  trimExcerpts(r.supporting_materials);
+  payload = JSON.stringify(r);
+  bytes = encoder.encode(payload).length;
+  if (bytes <= LIMITS.MAX_RESPONSE_PAYLOAD_BYTES) return r;
+
+  // Step 4: Drop supporting materials
+  caps.record("supporting_materials_dropped", LIMITS.MAX_RESPONSE_PAYLOAD_BYTES, bytes, "trimmed");
+  r.supporting_materials = [];
+
+  return r;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ *  MAIN HANDLER
+ * ═══════════════════════════════════════════════════════════════ */
 
 Deno.serve(async (req) => {
   _corsHeaders = buildCorsSecurityHeaders(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: _corsHeaders });
-  if (req.method !== "POST") return json(405, { error: "Method not allowed" });
+  if (req.method !== "POST") return jsonResponse(405, { error: "Method not allowed" });
+
+  /* ── Request body size check ── */
+  const contentLength = req.headers.get("content-length");
+  if (contentLength && parseInt(contentLength, 10) > LIMITS.MAX_REQUEST_BODY_BYTES) {
+    return jsonResponse(413, { error: `Request too large (max ${LIMITS.MAX_REQUEST_BODY_BYTES} bytes)` });
+  }
 
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
@@ -472,41 +638,58 @@ Deno.serve(async (req) => {
   );
 
   const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
-  if (!OPENAI_API_KEY) return json(500, { error: "OPENAI_API_KEY not configured" });
+  if (!OPENAI_API_KEY) return jsonResponse(500, { error: "OPENAI_API_KEY not configured" });
   const EMBEDDING_MODEL = Deno.env.get("OPENAI_EMBEDDING_MODEL") ?? "text-embedding-3-small";
 
   let payload: RetrieveRequest;
   try {
     payload = await req.json();
   } catch {
-    return json(400, { error: "Invalid JSON body" });
+    return jsonResponse(400, { error: "Invalid JSON body" });
   }
 
   const {
-    query,
+    query: rawQuery,
     tenant_id,
-    max_results = DEFAULT_MAX_RESULTS,
+    max_results: requestedMaxResults,
     min_similarity = DEFAULT_MIN_SIMILARITY,
   } = payload;
 
-  if (!query || typeof query !== "string" || query.trim().length === 0) {
-    return json(400, { error: "query is required" });
+  /* ── Input validation ── */
+  if (!rawQuery || typeof rawQuery !== "string" || rawQuery.trim().length === 0) {
+    return jsonResponse(400, { error: "query is required" });
   }
   if (!tenant_id || typeof tenant_id !== "string") {
-    return json(400, { error: "tenant_id is required" });
+    return jsonResponse(400, { error: "tenant_id is required" });
   }
-  if (query.length > 10000) {
-    return json(400, { error: "Query too long (max 10000 characters)" });
+  if (rawQuery.length > LIMITS.MAX_QUERY_INPUT_CHARS) {
+    return jsonResponse(400, { error: `Query too long (max ${LIMITS.MAX_QUERY_INPUT_CHARS} characters)` });
   }
+
+  /* ── Cap enforcement: recall count ── */
+  const max_results = Math.min(
+    Math.max(1, requestedMaxResults ?? LIMITS.MAX_SEMANTIC_RECALL),
+    LIMITS.MAX_SEMANTIC_RECALL,
+  );
 
   const startTime = Date.now();
+  const caps = new CapDiagnostics();
 
   try {
-    // ── Stage 1: Intake analysis ──
+    /* ══════════════════════════════════════════════════════════
+     *  Stage 1: Intake analysis (with input truncation)
+     * ══════════════════════════════════════════════════════════ */
+
+    // Truncate pasted text for intake analysis
+    let query = rawQuery.trim();
+    if (query.length > LIMITS.MAX_PASTED_TEXT_CHARS) {
+      caps.record("MAX_PASTED_TEXT_CHARS", LIMITS.MAX_PASTED_TEXT_CHARS, query.length, "truncated");
+      query = query.slice(0, LIMITS.MAX_PASTED_TEXT_CHARS);
+    }
+
     const intake = analyzeIntake(query);
     console.log("[records-room] Intake:", JSON.stringify(intake));
 
-    // If clarification needed, return early
     if (intake.needs_clarification) {
       const response: RetrieveResponse = {
         status: "clarification_needed",
@@ -516,13 +699,23 @@ Deno.serve(async (req) => {
         supporting_materials: [],
         failure_state: "clarification_needed",
         failure_message: intake.clarification_question,
-        diagnostics: { intake, duration_ms: Date.now() - startTime },
+        diagnostics: { intake, caps_hit: caps.all, duration_ms: Date.now() - startTime },
       };
-      return json(200, response);
+      return jsonResponse(200, response);
     }
 
-    // ── Stage 2: Candidate recall (semantic) ──
-    const queryVec = await embed(query, OPENAI_API_KEY, EMBEDDING_MODEL);
+    /* ══════════════════════════════════════════════════════════
+     *  Stage 2: Candidate recall (bounded)
+     * ══════════════════════════════════════════════════════════ */
+
+    // Truncate for embedding
+    let embeddingInput = query;
+    if (embeddingInput.length > LIMITS.MAX_EMBEDDING_INPUT_CHARS) {
+      caps.record("MAX_EMBEDDING_INPUT_CHARS", LIMITS.MAX_EMBEDDING_INPUT_CHARS, embeddingInput.length, "truncated");
+      embeddingInput = embeddingInput.slice(0, LIMITS.MAX_EMBEDDING_INPUT_CHARS);
+    }
+
+    const queryVec = await embed(embeddingInput, OPENAI_API_KEY, EMBEDDING_MODEL);
 
     const { data: matches, error: rpcErr } = await supabase.rpc(
       "match_document_chunks",
@@ -536,8 +729,14 @@ Deno.serve(async (req) => {
 
     if (rpcErr) throw new Error(`RPC match_document_chunks failed: ${rpcErr.message}`);
 
-    const candidates = matches ?? [];
+    let candidates = matches ?? [];
     console.log(`[records-room] Recall: ${candidates.length} semantic candidates`);
+
+    // Cap merged candidate pool
+    if (candidates.length > LIMITS.MAX_MERGED_CANDIDATES) {
+      caps.record("MAX_MERGED_CANDIDATES", LIMITS.MAX_MERGED_CANDIDATES, candidates.length, "capped");
+      candidates = candidates.slice(0, LIMITS.MAX_MERGED_CANDIDATES);
+    }
 
     // No results at all
     if (candidates.length === 0) {
@@ -549,7 +748,7 @@ Deno.serve(async (req) => {
         supporting_materials: [],
         failure_state: "no_matching_materials",
         failure_message: FAILURE_MESSAGES.no_matching_materials,
-        diagnostics: { intake, candidate_count: 0, duration_ms: Date.now() - startTime },
+        diagnostics: { intake, candidate_count: 0, caps_hit: caps.all, duration_ms: Date.now() - startTime },
       };
 
       try {
@@ -567,14 +766,19 @@ Deno.serve(async (req) => {
         });
       } catch { /* non-critical */ }
 
-      return json(200, response);
+      return jsonResponse(200, response);
     }
 
-    // ── Stage 3: Records Room reranking ──
-    const scored: ScoredChunk[] = [];
+    /* ══════════════════════════════════════════════════════════
+     *  Stage 3: Records Room reranking (bounded)
+     * ══════════════════════════════════════════════════════════ */
+
+    let scored: ScoredChunk[] = [];
+    let filteredLowInfo = 0;
+
     for (const c of candidates) {
       const infoQ = computeInfoQuality(c.content ?? "");
-      if (infoQ < 0.2) continue; // filter structural junk
+      if (infoQ < 0.2) { filteredLowInfo++; continue; }
 
       const scores = scoreCandidate(
         { similarity: c.similarity, content: c.content ?? "", metadata: (c.metadata as Record<string, unknown>) ?? {} },
@@ -597,40 +801,55 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Sort by composite score descending
-    scored.sort((a, b) => b.composite_score - a.composite_score);
+    // Cap scored candidates
+    if (scored.length > LIMITS.MAX_SCORED_CANDIDATES) {
+      caps.record("MAX_SCORED_CANDIDATES", LIMITS.MAX_SCORED_CANDIDATES, scored.length, "capped");
+      // Sort first so we keep the best
+      scored.sort((a, b) => b.composite_score - a.composite_score);
+      scored = scored.slice(0, LIMITS.MAX_SCORED_CANDIDATES);
+    } else {
+      scored.sort((a, b) => b.composite_score - a.composite_score);
+    }
 
-    // Deduplicate (Jaccard > 0.75 against already-admitted)
+    // Deduplicate + bucket assignment (bounded by MAX_ADMITTED_CANDIDATES)
     const admitted: ScoredChunk[] = [];
     const admittedTokenSets: Set<string>[] = [];
+    let strongCount = 0;
+    let supportingCount = 0;
 
     for (const chunk of scored) {
+      if (admitted.length >= LIMITS.MAX_ADMITTED_CANDIDATES) break;
+
       const tokens = tokenize(chunk.content);
       let isDupe = false;
       for (const existing of admittedTokenSets) {
-        if (jaccardSimilarity(tokens, existing) >= 0.75) {
+        if (jaccardSimilarity(tokens, existing) >= LIMITS.JACCARD_DEDUP_THRESHOLD) {
           isDupe = true;
           break;
         }
       }
       if (isDupe) continue;
 
-      // Assign bucket
-      if (chunk.composite_score >= STRONG_EVIDENCE_THRESHOLD && admitted.filter(a => a.bucket === "strong_evidence").length < 5) {
+      if (chunk.composite_score >= STRONG_EVIDENCE_THRESHOLD && strongCount < LIMITS.MAX_STRONG_EVIDENCE) {
         chunk.bucket = "strong_evidence";
-      } else if (chunk.composite_score >= SUPPORTING_THRESHOLD && admitted.filter(a => a.bucket === "supporting_material").length < 4) {
+        strongCount++;
+      } else if (chunk.composite_score >= SUPPORTING_THRESHOLD && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
         chunk.bucket = "supporting_material";
+        supportingCount++;
       } else {
-        continue; // excluded
+        continue;
       }
 
       admitted.push(chunk);
       admittedTokenSets.push(tokens);
     }
 
-    console.log(`[records-room] Admitted: ${admitted.length} (strong: ${admitted.filter(a => a.bucket === "strong_evidence").length}, supporting: ${admitted.filter(a => a.bucket === "supporting_material").length})`);
+    console.log(`[records-room] Admitted: ${admitted.length} (strong: ${strongCount}, supporting: ${supportingCount}, filtered_low_info: ${filteredLowInfo})`);
 
-    // ── Stage 4: Excerpt assembly ──
+    /* ══════════════════════════════════════════════════════════
+     *  Stage 4: Excerpt assembly (bounded per-item)
+     * ══════════════════════════════════════════════════════════ */
+
     const documentIds = admitted.map(c => c.document_id);
     const docMap = await lookupDocumentTitles(supabase, documentIds);
 
@@ -639,13 +858,27 @@ Deno.serve(async (req) => {
       const docTitle = doc?.title ?? "Unknown Document";
       const sectionHeading = (chunk.metadata.heading_path as string) ?? (chunk.metadata.section_heading as string) ?? null;
 
+      // Bounded excerpt
+      const excerpt_text = extractBestExcerpt(chunk.content, query, LIMITS.MAX_EXCERPT_CHARS);
+
+      // Bounded context
+      let expandable_context = chunk.content;
+      if (expandable_context.length > LIMITS.MAX_CONTEXT_CHARS) {
+        caps.record("MAX_CONTEXT_CHARS", LIMITS.MAX_CONTEXT_CHARS, expandable_context.length, "truncated");
+        const truncated = boundedTruncate(expandable_context, LIMITS.MAX_CONTEXT_CHARS);
+        expandable_context = truncated.text + (truncated.wasTruncated ? "\n\n[Context truncated]" : "");
+      }
+
+      // Bounded citation label
+      const citation_label = buildCitationLabel(docTitle, sectionHeading, chunk.chunk_index, LIMITS.MAX_CITATION_LABEL_CHARS);
+
       return {
         document_title: docTitle,
         section_heading: sectionHeading,
-        excerpt_text: extractBestExcerpt(chunk.content, query),
-        citation_label: buildCitationLabel(docTitle, sectionHeading, chunk.chunk_index),
+        excerpt_text,
+        citation_label,
         page_or_location: chunk.metadata.page ? `Page ${chunk.metadata.page}` : `Chunk ${chunk.chunk_index}`,
-        expandable_context: chunk.content,
+        expandable_context,
         source_type: doc?.source ?? (chunk.metadata.source_type as string) ?? null,
         is_official: (chunk.metadata.is_official as boolean) ?? false,
         chunk_id: chunk.chunk_id,
@@ -663,7 +896,10 @@ Deno.serve(async (req) => {
       .filter(c => c.bucket === "supporting_material")
       .map(buildEvidenceItem);
 
-    // ── Stage 5: Determine failure state ──
+    /* ══════════════════════════════════════════════════════════
+     *  Stage 5: Determine failure state
+     * ══════════════════════════════════════════════════════════ */
+
     let failure_state: FailureState = null;
     let failure_message: string | null = null;
     let status: RetrieveResponse["status"] = "success";
@@ -678,17 +914,21 @@ Deno.serve(async (req) => {
       }
       status = "no_results";
     } else if (strong_evidence.length === 0 && supporting_materials.length > 0) {
-      // Promote: show supporting as results but note no strong evidence
       failure_state = "no_direct_excerpt";
       failure_message = FAILURE_MESSAGES.no_direct_excerpt;
-      status = "success"; // still show what we have
+      status = "success";
     }
 
-    // ── Stage 6: Diagnostics ──
-    const diagnostics = {
+    /* ══════════════════════════════════════════════════════════
+     *  Stage 6: Diagnostics + response packaging (bounded)
+     * ══════════════════════════════════════════════════════════ */
+
+    const diagnostics: Record<string, unknown> = {
       intake,
-      candidate_count: candidates.length,
-      scored_after_filter: scored.length,
+      candidate_count: (matches ?? []).length,
+      merged_pool_size: candidates.length,
+      filtered_low_info: filteredLowInfo,
+      scored_count: scored.length,
       admitted_count: admitted.length,
       strong_count: strong_evidence.length,
       supporting_count: supporting_materials.length,
@@ -696,6 +936,8 @@ Deno.serve(async (req) => {
       avg_composite: admitted.length > 0
         ? parseFloat((admitted.reduce((s, c) => s + c.composite_score, 0) / admitted.length).toFixed(4))
         : 0,
+      caps_hit: caps.all,
+      caps_hit_count: caps.hitCount,
       duration_ms: Date.now() - startTime,
     };
 
@@ -710,16 +952,17 @@ Deno.serve(async (req) => {
         payload: {
           tenant_id,
           query_type: intake.query_type,
-          candidate_count: candidates.length,
+          candidate_count: (matches ?? []).length,
           strong_count: strong_evidence.length,
           supporting_count: supporting_materials.length,
-          duration_ms: diagnostics.duration_ms,
+          caps_hit_count: caps.hitCount,
+          duration_ms: Date.now() - startTime,
           result: strong_evidence.length > 0 ? "success" : supporting_materials.length > 0 ? "partial" : "failure",
         },
       });
     } catch { /* non-critical */ }
 
-    const response: RetrieveResponse = {
+    let response: RetrieveResponse = {
       status,
       query_type: intake.query_type,
       clarification_question: null,
@@ -730,7 +973,10 @@ Deno.serve(async (req) => {
       diagnostics,
     };
 
-    return json(200, response);
+    // Final payload size enforcement
+    response = enforcePayloadSize(response, caps);
+
+    return jsonResponse(200, response);
   } catch (err) {
     console.error("[records-room] Error:", err);
 
@@ -742,11 +988,12 @@ Deno.serve(async (req) => {
         payload: {
           tenant_id,
           error_type: err instanceof Error ? err.constructor.name : "unknown",
+          caps_hit_count: caps.hitCount,
           result: "failure",
         },
       });
     } catch { /* non-critical */ }
 
-    return json(500, { error: "Internal retrieval error" });
+    return jsonResponse(500, { error: "Internal retrieval error" });
   }
 });
