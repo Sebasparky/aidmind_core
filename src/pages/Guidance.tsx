@@ -59,6 +59,7 @@ export default function Guidance() {
   } = useGuidanceSession(sessionId);
 
   const [showLeaveDialog, setShowLeaveDialog] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [citationsModal, setCitationsModal] = useState<{ citations: string[]; question: string } | null>(null);
 
   // Context-aware scroll: anchor to action panel when arriving from template selection
