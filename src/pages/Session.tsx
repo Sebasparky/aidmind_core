@@ -48,6 +48,8 @@ export default function Session() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { addTask, deleteTask } = useDashboard();
+  const { user } = useAuth();
+  const { tenant } = useTenant();
   
   const caseId = searchParams.get("caseId") || crypto.randomUUID().slice(0, 8);
   const clientLabel = searchParams.get("clientLabel") || "";
@@ -79,6 +81,8 @@ export default function Session() {
     caseLabel: effectiveCaseLabel,
     clientLabel: resumeBundle?.case_reference.clientLabel || clientLabel,
     interactionType: resumeBundle?.case_reference.interactionType || interactionType,
+    tenantId: tenant?.tenantId || "",
+    userId: user?.id || "",
     resumeBundle,
   });
 
