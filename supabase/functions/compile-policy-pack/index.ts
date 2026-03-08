@@ -739,7 +739,7 @@ Deno.serve(async (req) => {
     // 1. Load session
     const { data: session, error: sessErr } = await supabase
       .from("sessions")
-      .select("id, tenant_id, status")
+      .select("id, tenant_id, status, guidance_scope, guidance_scope_other")
       .eq("id", session_id)
       .maybeSingle();
 
@@ -747,6 +747,9 @@ Deno.serve(async (req) => {
     if (!session) return json(404, { success: false, error: "Session not found" });
 
     const { tenant_id } = session;
+    const sessionScope: string | null = session.guidance_scope ?? null;
+    console.log(`[compile-policy-pack] Session scope: ${sessionScope ?? "none"}`);
+
 
     // 2. Load template (tenant-scoped with global fallback)
     const { data: tenantTemplate, error: tmplErr1 } = await supabase
