@@ -28,6 +28,11 @@ export function SaveTemplateModal({
 }: SaveTemplateModalProps) {
   const [name, setName] = useState(defaultName);
 
+  // Sync when modal opens with new default
+  useEffect(() => {
+    if (open) setName(defaultName);
+  }, [open, defaultName]);
+
   const handleConfirm = () => {
     const trimmed = name.trim();
     if (trimmed.length === 0) return;
