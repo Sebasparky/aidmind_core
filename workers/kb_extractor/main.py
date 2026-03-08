@@ -163,38 +163,29 @@ def download_pdf(file_path: str) -> bytes:
 # Indexing — call ingest-kb-text edge function
 # ---------------------------------------------------------------------------
 
-INGEST_MAX_RETRIES = 2
-INGEST_TIMEOUT_SECONDS = 300  # 5 minutes — large docs may need time for embeddings
+INGEST_MAX_RETRIES = 3
+INGEST_TIMEOUT_SECONDS = 120  # Shorter per-batch — each invocation processes ≤20 chunks
+INGEST_MAX_BATCHES = 200  # Safety cap: max continuation loops for one document
 
 
-def trigger_ingest_kb_text(doc_id: str, extracted_text: str) -> dict:
-    """Call the ingest-kb-text edge function to chunk, embed, and index.
+def _call_ingest_once(
+    url: str,
+    headers: dict,
+    body_dict: dict,
+) -> dict:
+    """Single HTTP call to ingest-kb-text with retries on transient failures.
 
-    Uses service-role key for auth. Retries on transient failures.
-    Returns the parsed JSON response body on success.
+    Returns parsed JSON response body on 200+success.
     Raises RuntimeError on permanent failure.
     """
-    url = urljoin(SUPABASE_URL + "/", "functions/v1/ingest-kb-text")
-
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "X-AIDMIND-INGEST-SECRET": KB_INGEST_SECRET,
-    }
-
-    body = json_module.dumps({
-        "document_id": doc_id,
-        "extracted_text": extracted_text,
-        "overwrite": True,  # safe re-index: deletes old chunks first
-    })
-
+    body = json_module.dumps(body_dict)
     last_error: str | None = None
+
     for attempt in range(1, INGEST_MAX_RETRIES + 1):
         try:
             log.info(
-                "ingest-kb-text attempt=%d/%d doc=%s chars=%d",
-                attempt, INGEST_MAX_RETRIES, doc_id, len(extracted_text),
+                "ingest-kb-text attempt=%d/%d doc=%s",
+                attempt, INGEST_MAX_RETRIES, body_dict.get("document_id"),
             )
             resp = requests.post(
                 url,
@@ -209,10 +200,6 @@ def trigger_ingest_kb_text(doc_id: str, extracted_text: str) -> dict:
                 resp_body = {"raw": resp.text[:500]}
 
             if resp.status_code == 200 and resp_body.get("success"):
-                log.info(
-                    "ingest-kb-text succeeded doc=%s chunks=%s",
-                    doc_id, resp_body.get("chunk_count"),
-                )
                 return resp_body
 
             # Non-retryable client errors
@@ -241,6 +228,66 @@ def trigger_ingest_kb_text(doc_id: str, extracted_text: str) -> dict:
             time.sleep(2 * attempt)  # simple backoff
 
     raise RuntimeError(last_error or "ingest-kb-text failed after retries")
+
+
+def trigger_ingest_kb_text(doc_id: str, extracted_text: str) -> dict:
+    """Call the ingest-kb-text edge function to chunk, embed, and index.
+
+    The edge function now processes chunks in bounded batches and returns
+    more_work=true when additional invocations are needed. This function
+    loops until all batches are complete or a failure occurs.
+
+    Uses service-role key for auth.
+    Returns the final parsed JSON response body on success.
+    Raises RuntimeError on permanent failure.
+    """
+    url = urljoin(SUPABASE_URL + "/", "functions/v1/ingest-kb-text")
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "X-AIDMIND-INGEST-SECRET": KB_INGEST_SECRET,
+    }
+
+    # First call sends the full extracted_text + overwrite flag
+    body_dict: dict = {
+        "document_id": doc_id,
+        "extracted_text": extracted_text,
+        "overwrite": True,
+    }
+
+    for batch_num in range(1, INGEST_MAX_BATCHES + 1):
+        log.info(
+            "ingest-kb-text batch=%d doc=%s chars=%d",
+            batch_num, doc_id, len(extracted_text) if batch_num == 1 else 0,
+        )
+
+        result = _call_ingest_once(url, headers, body_dict)
+
+        more_work = result.get("more_work", False)
+        status = result.get("status", "unknown")
+        indexed = result.get("indexed_chunk_count", "?")
+        total = result.get("chunk_count", "?")
+
+        log.info(
+            "ingest-kb-text batch=%d doc=%s status=%s progress=%s/%s more_work=%s",
+            batch_num, doc_id, status, indexed, total, more_work,
+        )
+
+        if not more_work:
+            log.info("ingest-kb-text COMPLETE doc=%s chunks=%s", doc_id, total)
+            return result
+
+        # Subsequent calls: no need to re-send extracted_text (stored in DB).
+        # The edge function reads from kb_documents.content on resume.
+        body_dict = {
+            "document_id": doc_id,
+        }
+
+    raise RuntimeError(
+        f"ingest-kb-text exceeded max batches ({INGEST_MAX_BATCHES}) for doc={doc_id}"
+    )
 
 
 # ---------------------------------------------------------------------------

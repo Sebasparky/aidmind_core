@@ -2,11 +2,77 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
 
+// ============================================================
+// CONFIGURATION — tune these to match worker compute limits
+// ============================================================
+
+/**
+ * CHUNKS_PER_BATCH: How many chunks to embed + insert per invocation.
+ *
+ * Each chunk requires one OpenAI embedding call (~0.5–1s) plus a DB insert.
+ * 20 chunks ≈ 10–20s of embedding work, well within typical edge function
+ * time limits (usually 60–150s). This is the core lever that prevents
+ * WORKER_LIMIT failures on large documents.
+ *
+ * Increase if worker limits are generous; decrease if timeouts recur.
+ */
+const CHUNKS_PER_BATCH = 20;
+
+/**
+ * DB_INSERT_BATCH_SIZE: How many rows to insert in a single DB call.
+ * Kept smaller than CHUNKS_PER_BATCH to avoid large single inserts.
+ */
+const DB_INSERT_BATCH_SIZE = 50;
+
+/**
+ * MIN_CHUNK_CHARS: Chunks shorter than this are filtered out as noise.
+ */
+const MIN_CHUNK_CHARS = 50;
+
+// ============================================================
+// TYPES
+// ============================================================
+
 interface IngestTextRequest {
   document_id?: string;
+  /** Full extracted text — required on first invocation, optional on resume */
   extracted_text?: string;
   overwrite?: boolean;
 }
+
+/** Durable checkpoint state stored in kb_documents.metadata.ingestion */
+interface IngestionCheckpoint {
+  status: "chunking" | "embedding_in_progress" | "ready" | "failed";
+  chunk_count: number;
+  indexed_chunk_count: number;
+  /** Next chunk index to embed. 0-based. */
+  next_chunk_index: number;
+  chunking_started_at?: string;
+  embedding_started_at?: string;
+  last_batch_completed_at?: string;
+  indexing_completed_at?: string;
+  failed_at?: string;
+  error?: string | null;
+  attempt_count: number;
+}
+
+interface IngestResponse {
+  success: boolean;
+  document_id: string;
+  tenant_id: string;
+  chunk_count: number;
+  indexed_chunk_count: number;
+  next_chunk_index: number;
+  status: string;
+  /** True when more batches remain — caller should re-invoke */
+  more_work: boolean;
+  error?: string;
+  warning?: string;
+}
+
+// ============================================================
+// UTILITIES
+// ============================================================
 
 function json(status: number, body: Record<string, unknown>) {
   return new Response(JSON.stringify(body), {
@@ -15,7 +81,10 @@ function json(status: number, body: Record<string, unknown>) {
   });
 }
 
-/* ── Simple paragraph-aware chunker ── */
+/* ── Simple paragraph-aware chunker ──
+ * Preserved from the original implementation.
+ * Deterministic — same text always produces the same chunks.
+ */
 function chunkText(text: string, targetSize = 4000, overlap = 400): string[] {
   if (text.length <= targetSize) return [text];
 
@@ -49,7 +118,12 @@ function chunkText(text: string, targetSize = 4000, overlap = 400): string[] {
   return final;
 }
 
-/* ── OpenAI embedding helper ── */
+/* ── Temporary hosted embedding bridge ──
+ * TODO [LOCAL-FIRST]: Replace with local embedding provider.
+ * This is the only place a hosted model call happens during ingestion.
+ * To swap: implement an embedQuery(text) function returning number[]
+ * and replace this call site.
+ */
 async function embed(text: string, apiKey: string, model: string): Promise<number[]> {
   const res = await fetch("https://api.openai.com/v1/embeddings", {
     method: "POST",
@@ -75,7 +149,7 @@ async function embed(text: string, apiKey: string, model: string): Promise<numbe
 
 const SERVICE_NAME = "ingest-kb-text";
 
-/** Helper to safely log eye events without breaking the main flow */
+/** Safe eye-event logger — never throws */
 async function safeLogEye(
   supabase: any,
   eventType: string,
@@ -93,12 +167,61 @@ async function safeLogEye(
   }
 }
 
-/* ── Main handler ── */
+// ============================================================
+// INGESTION METADATA HELPERS
+// ============================================================
+
+/**
+ * Read the current ingestion checkpoint from kb_documents.metadata.ingestion.
+ * Returns null if no checkpoint exists.
+ */
+async function loadCheckpoint(
+  supabase: any,
+  docId: string
+): Promise<IngestionCheckpoint | null> {
+  const { data } = await supabase
+    .from("kb_documents")
+    .select("metadata")
+    .eq("id", docId)
+    .single();
+  const meta = (data?.metadata as Record<string, unknown>) ?? {};
+  const ing = meta.ingestion as IngestionCheckpoint | undefined;
+  return ing ?? null;
+}
+
+/**
+ * Merge fields into kb_documents.metadata.ingestion.
+ * This is the durable checkpoint write — called after every batch.
+ */
+async function updateIngestionMeta(
+  supabase: any,
+  docId: string,
+  fields: Record<string, unknown>
+): Promise<void> {
+  try {
+    const { data: cur } = await supabase
+      .from("kb_documents")
+      .select("metadata")
+      .eq("id", docId)
+      .single();
+    const meta = (cur?.metadata as Record<string, unknown>) ?? {};
+    const ingestion = (meta.ingestion as Record<string, unknown>) ?? {};
+    meta.ingestion = { ...ingestion, ...fields };
+    await supabase.from("kb_documents").update({ metadata: meta }).eq("id", docId);
+  } catch (err) {
+    console.error("[ingest-kb-text] updateIngestionMeta failed:", err);
+  }
+}
+
+// ============================================================
+// MAIN HANDLER
+// ============================================================
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (req.method !== "POST") return json(405, { success: false, error: "Method not allowed" });
 
-  // ── Auth: require shared secret header ──
+  // ── Auth: shared secret header ──
   const expectedSecret = Deno.env.get("KB_INGEST_SECRET");
   if (!expectedSecret) return json(500, { success: false, error: "KB_INGEST_SECRET not configured" });
 
@@ -127,111 +250,241 @@ Deno.serve(async (req) => {
   const { document_id, extracted_text, overwrite } = payload;
 
   if (!document_id) return json(400, { success: false, error: "document_id is required" });
-  if (!extracted_text || extracted_text.trim().length === 0) {
-    return json(400, { success: false, error: "extracted_text is required and must be non-empty" });
-  }
 
-  /** Helper: merge fields into metadata.ingestion on the document */
-  async function updateIngestionMeta(docId: string, fields: Record<string, unknown>) {
-    try {
-      const { data: cur } = await supabase
-        .from("kb_documents")
-        .select("metadata")
-        .eq("id", docId)
-        .single();
-      const meta = (cur?.metadata as Record<string, unknown>) ?? {};
-      const ingestion = (meta.ingestion as Record<string, unknown>) ?? {};
-      meta.ingestion = { ...ingestion, ...fields };
-      await supabase.from("kb_documents").update({ metadata: meta }).eq("id", docId);
-    } catch (err) {
-      console.error("[ingest-kb-text] updateIngestionMeta failed:", err);
-    }
-  }
+  // ============================================================
+  // 1. FETCH DOCUMENT
+  // ============================================================
 
+  let doc: any;
   try {
-    // 1. Fetch document
-    const { data: doc, error: docErr } = await supabase
+    const { data, error: docErr } = await supabase
       .from("kb_documents")
-      .select("id, tenant_id, title, metadata, source")
+      .select("id, tenant_id, title, metadata, source, content")
       .eq("id", document_id)
       .maybeSingle();
-
     if (docErr) throw new Error(`Failed to fetch document: ${docErr.message}`);
-    if (!doc) return json(404, { success: false, error: "Document not found" });
+    if (!data) return json(404, { success: false, error: "Document not found" });
+    doc = data;
+  } catch (e) {
+    return json(500, { success: false, error: (e as Error).message });
+  }
 
-    console.log(`[ingest-kb-text] Starting ingestion for doc=${document_id} title="${doc.title}" chars=${extracted_text.length}`);
-    await safeLogEye(supabase, "KB_DOCUMENT_INGEST_STARTED", { tenant_id: doc.tenant_id });
-    await safeLogEye(supabase, "KB_DOCUMENT_TEXT_RECEIVED", { char_count: extracted_text.length });
+  // ============================================================
+  // 2. DETERMINE RESUME vs FRESH INGEST
+  // ============================================================
 
-    // Mark chunking stage
-    await updateIngestionMeta(document_id, {
-      status: "chunking",
-      chunking_started_at: new Date().toISOString(),
+  const checkpoint = await loadCheckpoint(supabase, document_id);
+
+  // Determine the text source:
+  // - On first call, extracted_text is provided in the request body.
+  // - On resume calls, the text was already stored in kb_documents.content
+  //   during the first invocation's chunking phase.
+  const textSource = extracted_text || (doc.content as string) || "";
+
+  if (!textSource || textSource.trim().length === 0) {
+    return json(400, {
+      success: false,
+      error: "No text available — extracted_text required on first call, or document must have content for resume",
     });
+  }
 
-    // 2. Overwrite or duplicate check
-    if (overwrite) {
+  const isOverwrite = overwrite === true;
+  const isResume =
+    !isOverwrite &&
+    checkpoint !== null &&
+    checkpoint.status === "embedding_in_progress" &&
+    checkpoint.next_chunk_index > 0;
+
+  console.log(
+    `[ingest-kb-text] doc=${document_id} ` +
+    `path=${isResume ? "RESUME" : isOverwrite ? "OVERWRITE" : "FRESH"} ` +
+    `checkpoint_next=${checkpoint?.next_chunk_index ?? "none"} ` +
+    `text_chars=${textSource.length}`
+  );
+
+  try {
+    // ============================================================
+    // 3. OVERWRITE / CONFLICT HANDLING
+    // ============================================================
+
+    if (isOverwrite) {
+      // Clear existing chunks and reset checkpoint
       const { error: delErr } = await supabase
         .from("document_chunks")
         .delete()
         .eq("document_id", document_id)
         .eq("tenant_id", doc.tenant_id);
       if (delErr) throw new Error(`Failed to delete existing chunks: ${delErr.message}`);
-    } else {
-      const { count, error: countErr } = await supabase
-        .from("document_chunks")
-        .select("*", { count: "exact", head: true })
-        .eq("document_id", document_id)
-        .eq("tenant_id", doc.tenant_id);
-      if (countErr) throw new Error(`Failed to check existing chunks: ${countErr.message}`);
-      if (count && count > 0) {
-        return json(409, { success: false, error: "CHUNKS_ALREADY_EXIST (set overwrite=true)" });
+
+      console.log(`[ingest-kb-text] doc=${document_id} overwrite: cleared old chunks`);
+    } else if (!isResume) {
+      // Fresh ingest — check for already-completed ingestion
+      if (checkpoint?.status === "ready") {
+        return json(409, {
+          success: false,
+          error: "ALREADY_INGESTED — document is already ready (set overwrite=true to re-ingest)",
+        });
+      }
+      // Check for leftover chunks from a non-resumable state
+      if (checkpoint?.status === "failed") {
+        // Failed previously — clear stale chunks and restart
+        console.log(`[ingest-kb-text] doc=${document_id} clearing chunks from previous failed ingest`);
+        await supabase
+          .from("document_chunks")
+          .delete()
+          .eq("document_id", document_id)
+          .eq("tenant_id", doc.tenant_id);
+      } else {
+        const { count, error: countErr } = await supabase
+          .from("document_chunks")
+          .select("*", { count: "exact", head: true })
+          .eq("document_id", document_id)
+          .eq("tenant_id", doc.tenant_id);
+        if (countErr) throw new Error(`Failed to check existing chunks: ${countErr.message}`);
+        if (count && count > 0 && !checkpoint) {
+          return json(409, {
+            success: false,
+            error: "CHUNKS_ALREADY_EXIST (set overwrite=true)",
+          });
+        }
       }
     }
 
-    // 3. Chunk (filter out tiny fragments < 50 chars)
-    const chunks = chunkText(extracted_text)
-      .filter((c) => c.trim().length >= 50);
+    // ============================================================
+    // 4. CHUNKING PHASE (only on fresh / overwrite, skipped on resume)
+    // ============================================================
 
-    console.log(`[ingest-kb-text] doc=${document_id} chunked into ${chunks.length} chunks`);
-    await safeLogEye(supabase, "KB_DOCUMENT_CHUNKED", { chunk_count: chunks.length });
+    let chunks: string[];
+    let totalChunks: number;
+    let nextChunkIndex: number;
 
-    if (chunks.length === 0) {
-      const reason = "Chunking produced 0 usable chunks (all < 50 chars)";
-      console.warn(`[ingest-kb-text] doc=${document_id} ${reason}`);
+    if (isResume) {
+      // ── Resume path: re-derive chunks deterministically ──
+      // The chunker is deterministic (same text → same chunks), so we
+      // re-chunk the stored text and skip to next_chunk_index.
+      // This avoids needing to store a chunk manifest separately.
+      chunks = chunkText(textSource).filter((c) => c.trim().length >= MIN_CHUNK_CHARS);
+      totalChunks = chunks.length;
+      nextChunkIndex = checkpoint!.next_chunk_index;
+
+      // Safety: if checkpoint says more chunks than we actually have, cap it
+      if (nextChunkIndex >= totalChunks) {
+        console.log(`[ingest-kb-text] doc=${document_id} resume index ${nextChunkIndex} >= total ${totalChunks}, marking ready`);
+        await updateIngestionMeta(document_id, {
+          status: "ready",
+          indexed_chunk_count: totalChunks,
+          next_chunk_index: totalChunks,
+          indexing_completed_at: new Date().toISOString(),
+          error: null,
+          failed_at: null,
+        });
+        return json(200, {
+          success: true,
+          document_id: doc.id,
+          tenant_id: doc.tenant_id,
+          chunk_count: totalChunks,
+          indexed_chunk_count: totalChunks,
+          next_chunk_index: totalChunks,
+          status: "ready",
+          more_work: false,
+        } satisfies IngestResponse);
+      }
+
+      console.log(
+        `[ingest-kb-text] doc=${document_id} RESUME from chunk ${nextChunkIndex}/${totalChunks}`
+      );
+    } else {
+      // ── Fresh / overwrite path: chunk + initialize ──
+      await safeLogEye(supabase, "KB_DOCUMENT_INGEST_STARTED", { tenant_id: doc.tenant_id });
+
       await updateIngestionMeta(document_id, {
-        status: "failed",
-        error: reason,
-        failed_at: new Date().toISOString(),
-        indexed_chunk_count: 0,
+        status: "chunking",
+        chunking_started_at: new Date().toISOString(),
+        attempt_count: (checkpoint?.attempt_count ?? 0) + 1,
       });
-      return json(200, {
-        success: true,
-        document_id: doc.id,
-        tenant_id: doc.tenant_id,
-        chunk_count: 0,
-        char_count: extracted_text.length,
-        warning: reason,
+
+      chunks = chunkText(textSource).filter((c) => c.trim().length >= MIN_CHUNK_CHARS);
+      totalChunks = chunks.length;
+      nextChunkIndex = 0;
+
+      console.log(`[ingest-kb-text] doc=${document_id} chunked into ${totalChunks} chunks`);
+      await safeLogEye(supabase, "KB_DOCUMENT_CHUNKED", { chunk_count: totalChunks });
+
+      if (totalChunks === 0) {
+        const reason = "Chunking produced 0 usable chunks (all < 50 chars)";
+        console.warn(`[ingest-kb-text] doc=${document_id} ${reason}`);
+        await updateIngestionMeta(document_id, {
+          status: "failed",
+          error: reason,
+          failed_at: new Date().toISOString(),
+          chunk_count: 0,
+          indexed_chunk_count: 0,
+          next_chunk_index: 0,
+        });
+        return json(200, {
+          success: true,
+          document_id: doc.id,
+          tenant_id: doc.tenant_id,
+          chunk_count: 0,
+          indexed_chunk_count: 0,
+          next_chunk_index: 0,
+          status: "failed",
+          more_work: false,
+          warning: reason,
+        } satisfies IngestResponse);
+      }
+
+      // Store text in kb_documents.content so resume invocations can access it
+      // without needing extracted_text in the request body again.
+      if (extracted_text) {
+        const { error: updateErr } = await supabase
+          .from("kb_documents")
+          .update({ content: extracted_text })
+          .eq("id", document_id);
+        if (updateErr) throw new Error(`Failed to store document content: ${updateErr.message}`);
+      }
+
+      // Initialize checkpoint
+      await updateIngestionMeta(document_id, {
+        status: "embedding_in_progress",
+        chunk_count: totalChunks,
+        indexed_chunk_count: 0,
+        next_chunk_index: 0,
+        embedding_started_at: new Date().toISOString(),
+        error: null,
+        failed_at: null,
       });
     }
 
-    // Mark embedding stage
-    await updateIngestionMeta(document_id, {
-      status: "embedding",
-      embedding_started_at: new Date().toISOString(),
-      chunk_count: chunks.length,
-    });
+    // ============================================================
+    // 5. BOUNDED EMBEDDING BATCH
+    //
+    // This is the core change from the old architecture:
+    // Instead of embedding ALL chunks in one loop, we process only
+    // CHUNKS_PER_BATCH chunks per invocation. Each batch is persisted
+    // immediately, so progress is never lost.
+    // ============================================================
 
-    // 4. Embed + build rows
+    const batchEnd = Math.min(nextChunkIndex + CHUNKS_PER_BATCH, totalChunks);
+    const batchChunks = chunks.slice(nextChunkIndex, batchEnd);
+
+    console.log(
+      `[ingest-kb-text] doc=${document_id} batch: chunks ${nextChunkIndex}–${batchEnd - 1} ` +
+      `(${batchChunks.length} of ${totalChunks} total)`
+    );
+
+    // Embed this batch only — bounded work
     const rows: Record<string, unknown>[] = [];
-    for (let i = 0; i < chunks.length; i++) {
-      const vec = await embed(chunks[i], OPENAI_API_KEY, EMBEDDING_MODEL);
+    for (let i = 0; i < batchChunks.length; i++) {
+      const absoluteIndex = nextChunkIndex + i;
+      // TODO [LOCAL-FIRST]: Replace embed() with local embedding provider
+      const vec = await embed(batchChunks[i], OPENAI_API_KEY, EMBEDDING_MODEL);
       rows.push({
         tenant_id: doc.tenant_id,
         document_id: doc.id,
-        chunk_index: i,
-        content: chunks[i],
-        token_count: Math.ceil(chunks[i].length / 4),
+        chunk_index: absoluteIndex,
+        content: batchChunks[i],
+        token_count: Math.ceil(batchChunks[i].length / 4),
         metadata: {
           ...(doc.metadata ?? {}),
           source: doc.source ?? null,
@@ -241,86 +494,137 @@ Deno.serve(async (req) => {
       });
     }
 
-    console.log(`[ingest-kb-text] doc=${document_id} embedded ${rows.length} chunks`);
-    await safeLogEye(supabase, "KB_DOCUMENT_EMBEDDED", { chunk_count: rows.length });
+    // ============================================================
+    // 6. PERSIST BATCH — insert immediately, do not accumulate
+    // ============================================================
 
-    // 5. Insert chunks in batches of 50
-    const BATCH_SIZE = 50;
-    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-      const batch = rows.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < rows.length; i += DB_INSERT_BATCH_SIZE) {
+      const batch = rows.slice(i, i + DB_INSERT_BATCH_SIZE);
       const { error: insertErr } = await supabase.from("document_chunks").insert(batch);
-      if (insertErr) throw new Error(`Failed to insert chunk batch at index ${i}: ${insertErr.message}`);
+      if (insertErr) {
+        throw new Error(
+          `Failed to insert chunk batch at absolute index ${nextChunkIndex + i}: ${insertErr.message}`
+        );
+      }
     }
 
-    // 6. Update kb_documents.content
-    const { error: updateErr } = await supabase
-      .from("kb_documents")
-      .update({ content: extracted_text })
-      .eq("id", document_id);
+    console.log(
+      `[ingest-kb-text] doc=${document_id} inserted ${rows.length} chunks ` +
+      `(indices ${nextChunkIndex}–${batchEnd - 1})`
+    );
 
-    if (updateErr) throw new Error(`Failed to update document content: ${updateErr.message}`);
+    // ============================================================
+    // 7. UPDATE CHECKPOINT — durable progress marker
+    // ============================================================
 
-    // 7. Verify chunks were actually inserted (invariant check)
-    const { count: verifyCount, error: verifyErr } = await supabase
-      .from("document_chunks")
-      .select("*", { count: "exact", head: true })
-      .eq("document_id", document_id)
-      .eq("tenant_id", doc.tenant_id);
+    const newNextIndex = batchEnd;
+    const isComplete = newNextIndex >= totalChunks;
 
-    const actualChunkCount = verifyErr ? rows.length : (verifyCount ?? 0);
-    console.log(`[ingest-kb-text] doc=${document_id} verified ${actualChunkCount} chunks in DB`);
+    if (isComplete) {
+      // ── All chunks processed: verify and mark ready ──
+      const { count: verifyCount, error: verifyErr } = await supabase
+        .from("document_chunks")
+        .select("*", { count: "exact", head: true })
+        .eq("document_id", document_id)
+        .eq("tenant_id", doc.tenant_id);
 
-    if (actualChunkCount === 0) {
-      const reason = "Chunks inserted but verification found 0 rows — possible RLS or constraint issue";
-      console.error(`[ingest-kb-text] doc=${document_id} INVARIANT VIOLATION: ${reason}`);
+      const actualChunkCount = verifyErr ? totalChunks : (verifyCount ?? 0);
+      console.log(`[ingest-kb-text] doc=${document_id} COMPLETE — verified ${actualChunkCount} chunks in DB`);
+
+      if (actualChunkCount === 0) {
+        const reason = "All batches inserted but verification found 0 rows — possible RLS or constraint issue";
+        console.error(`[ingest-kb-text] doc=${document_id} INVARIANT VIOLATION: ${reason}`);
+        await updateIngestionMeta(document_id, {
+          status: "failed",
+          error: reason,
+          failed_at: new Date().toISOString(),
+          indexed_chunk_count: 0,
+          next_chunk_index: newNextIndex,
+        });
+        return json(500, { success: false, error: reason });
+      }
+
       await updateIngestionMeta(document_id, {
-        status: "failed",
-        error: reason,
-        failed_at: new Date().toISOString(),
-        indexed_chunk_count: 0,
+        status: "ready",
+        indexed_chunk_count: actualChunkCount,
+        next_chunk_index: totalChunks,
+        indexing_completed_at: new Date().toISOString(),
+        last_batch_completed_at: new Date().toISOString(),
+        error: null,
+        failed_at: null,
       });
-      return json(500, { success: false, error: reason });
+
+      await safeLogEye(supabase, "KB_DOCUMENT_INGEST_COMPLETED", {
+        chunk_count: actualChunkCount,
+      });
+
+      console.log(`[ingest-kb-text] doc=${document_id} READY with ${actualChunkCount} chunks`);
+
+      return json(200, {
+        success: true,
+        document_id: doc.id,
+        tenant_id: doc.tenant_id,
+        chunk_count: totalChunks,
+        indexed_chunk_count: actualChunkCount,
+        next_chunk_index: totalChunks,
+        status: "ready",
+        more_work: false,
+      } satisfies IngestResponse);
+    } else {
+      // ── More batches remain: update checkpoint and signal caller ──
+      const indexedSoFar = (checkpoint?.indexed_chunk_count ?? 0) + rows.length;
+
+      await updateIngestionMeta(document_id, {
+        status: "embedding_in_progress",
+        indexed_chunk_count: indexedSoFar,
+        next_chunk_index: newNextIndex,
+        last_batch_completed_at: new Date().toISOString(),
+      });
+
+      await safeLogEye(supabase, "KB_DOCUMENT_BATCH_COMPLETED", {
+        batch_start: nextChunkIndex,
+        batch_end: batchEnd - 1,
+        indexed_so_far: indexedSoFar,
+        total_chunks: totalChunks,
+      });
+
+      console.log(
+        `[ingest-kb-text] doc=${document_id} batch done. ` +
+        `Progress: ${indexedSoFar}/${totalChunks}. Next: ${newNextIndex}. ` +
+        `MORE_WORK=true — caller should re-invoke.`
+      );
+
+      return json(200, {
+        success: true,
+        document_id: doc.id,
+        tenant_id: doc.tenant_id,
+        chunk_count: totalChunks,
+        indexed_chunk_count: indexedSoFar,
+        next_chunk_index: newNextIndex,
+        status: "embedding_in_progress",
+        more_work: true,
+      } satisfies IngestResponse);
     }
-
-    // 8. Mark document as ready with final metrics
-    await updateIngestionMeta(document_id, {
-      status: "ready",
-      indexed_chunk_count: actualChunkCount,
-      indexing_completed_at: new Date().toISOString(),
-      error: null,
-      indexing_error: null,
-      failed_at: null,
-      indexing_failed_at: null,
-    });
-
-    await safeLogEye(supabase, "KB_DOCUMENT_INGEST_COMPLETED", { chunk_count: actualChunkCount });
-    console.log(`[ingest-kb-text] doc=${document_id} READY with ${actualChunkCount} chunks`);
-
-    return json(200, {
-      success: true,
-      document_id: doc.id,
-      tenant_id: doc.tenant_id,
-      chunk_count: actualChunkCount,
-      char_count: extracted_text.length,
-    });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
     console.error(`[ingest-kb-text] doc=${document_id} FAILED:`, message);
 
-    // Persist failure on the document
+    // Persist failure — but preserve progress so resume is possible after fix
     try {
-      await updateIngestionMeta(document_id!, {
+      await updateIngestionMeta(document_id, {
         status: "failed",
         error: message,
         failed_at: new Date().toISOString(),
+        // NOTE: next_chunk_index and indexed_chunk_count are intentionally
+        // NOT reset here. This allows manual resume after the failure cause
+        // is fixed, by re-calling with the same document_id.
       });
     } catch (_) { /* best effort */ }
 
     try {
       await safeLogEye(supabase, "KB_DOCUMENT_INGEST_FAILED", { reason_code: message });
-    } catch (_) {
-      // never fail due to logging
-    }
+    } catch (_) { /* never fail due to logging */ }
+
     return json(500, { success: false, error: message });
   }
 });
