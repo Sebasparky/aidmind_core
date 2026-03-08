@@ -448,25 +448,62 @@ function buildRetrievalQuery(
   const scopeTerms = scope ? SCOPE_RETRIEVAL_TERMS[scope] : null;
   const specificity = computeSectionSpecificity(section);
 
+  // Operational intent phrases that steer retrieval toward assessment-useful content
+  const OPERATIONAL_INTENTS = [
+    "intake assessment guidance",
+    "caseworker interview questions",
+    "required information to collect",
+    "risk and safety factors to assess",
+    "documentation requirements",
+  ];
+
+  // Scope-specific operational steering phrases
+  const SCOPE_OPERATIONAL_INTENTS: Record<string, string> = {
+    child_welfare:
+      "child safety assessment, caregiver/family assessment, household information collection, risk factors, maltreatment indicators, service involvement, documentation requirements, case planning",
+    mental_health:
+      "mental health screening, symptoms assessment, treatment history, medication review, safety/crisis assessment, clinical intake, provider coordination",
+    substance_use:
+      "substance use screening, use patterns assessment, treatment history, withdrawal risk, recovery supports, prior services, medication-assisted treatment documentation",
+    domestic_violence:
+      "danger/lethality assessment, safety planning, incident documentation, children's exposure, protective factors, service coordination",
+    housing_homelessness:
+      "housing assessment, barriers documentation, housing history, stability factors, service needs, resource coordination",
+  };
+
+  const scopeOpsIntent = scope ? SCOPE_OPERATIONAL_INTENTS[scope] : null;
+
   if (scopeTerms) {
     if (specificity <= 0.3) {
-      // Very broad/generic section → strong scope steering
+      // Very broad/generic section → strong scope + operational steering
       parts.push(
-        `Find policy text relevant to the following intake/assessment section, specifically in the context of ${scopeTerms}.`,
+        `Find practical assessment guidance, screening criteria, risk factors, documentation requirements, and caseworker interview guidance relevant to the following intake section, specifically in the context of ${scopeTerms}.`,
+      );
+      if (scopeOpsIntent) {
+        parts.push(`Prioritize content about: ${scopeOpsIntent}.`);
+      }
+      parts.push(
+        `Focus on content that helps a caseworker determine what facts to collect, what risks to assess, and what to document during a client interaction.`,
       );
     } else if (specificity <= 0.6) {
-      // Moderately broad → moderate scope steering
+      // Moderately broad → moderate scope + operational steering
       parts.push(
-        `Find policy text relevant to this template section. Domain context: ${scopeTerms}.`,
+        `Find policy text with practical assessment guidance relevant to this template section. Domain context: ${scopeTerms}.`,
+      );
+      parts.push(
+        `Prefer content about: ${OPERATIONAL_INTENTS.slice(0, 3).join(", ")}.`,
       );
     } else {
-      // Already specific → light scope hint
+      // Already specific → light scope hint + light operational hint
       parts.push(
-        `Find policy text relevant to this template section (domain: ${scope?.replace(/_/g, " ")}).`,
+        `Find policy text relevant to this template section (domain: ${scope?.replace(/_/g, " ")}). Prefer practical assessment and documentation guidance.`,
       );
     }
   } else {
-    parts.push("Find policy text relevant to completing this section of the template.");
+    // No scope → still add operational intent
+    parts.push(
+      `Find policy text relevant to completing this section of the template. Prefer practical intake, assessment, or documentation guidance over general program background.`,
+    );
   }
 
   parts.push(section);
