@@ -328,7 +328,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
 
                   {/* Tool actions + session actions */}
                   <div className="flex flex-wrap items-center gap-2">
-                    {usage.guidanceUsed ? (
+                    {session.guidanceCompleted ? (
                       <Button
                         variant="default"
                         size="sm"
