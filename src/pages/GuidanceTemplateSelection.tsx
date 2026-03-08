@@ -27,6 +27,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { usePdfTextExtractor } from "@/hooks/usePdfTextExtractor";
 import { useTenant } from "@/hooks/useTenant";
 import { toast } from "sonner";
+import { SaveTemplateModal } from "@/components/session/SaveTemplateModal";
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
 
@@ -61,6 +62,7 @@ export default function GuidanceTemplateSelection() {
   const [scopeLabel, setScopeLabel] = useState<string | null>(null);
   const [dbTemplates, setDbTemplates] = useState<DbTemplate[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(true);
+  const [showSaveModal, setShowSaveModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // PDF text extraction
@@ -210,10 +212,22 @@ export default function GuidanceTemplateSelection() {
   };
 
   // ── Real upload handler ─────────────────────────────────
-  const handleUploadTemplate = async () => {
+  const handleUploadClick = () => {
+    if (!selectedTemplate) return;
+    if (selectedTemplate.source === "upload") {
+      // Show save modal for new uploads
+      setShowSaveModal(true);
+    } else {
+      // Existing templates go straight through
+      doUploadTemplate(selectedTemplate.name);
+    }
+  };
+
+  const doUploadTemplate = async (templateName: string) => {
     if (!selectedTemplate || !sessionId) return;
     setIsUploading(true);
     setUploadError(null);
+    setShowSaveModal(false);
 
     try {
       // Resolve session UUID from session_id text
@@ -234,7 +248,7 @@ export default function GuidanceTemplateSelection() {
         const formData = new FormData();
         formData.append("session_id", sessionUuid);
         formData.append("template_upload", selectedTemplate.file);
-        formData.append("template_name", selectedTemplate.name);
+        formData.append("template_name", templateName);
 
         // Include extracted text if available
         if (fullText && fullText.trim().length > 0) {
@@ -270,12 +284,12 @@ export default function GuidanceTemplateSelection() {
           throw new Error("Template was uploaded but extraction failed. Please try a different file.");
         }
 
-        toast.success("Template uploaded and ready for guidance generation.");
+        toast.success(`Template "${templateName}" saved and ready.`);
 
         navigate(`/guidance/${sessionId}`, {
           state: {
             templateId: result.template_id,
-            templateName: result.template?.name,
+            templateName: result.template?.name || templateName,
             templateSource: "upload",
           },
         });
@@ -670,13 +684,13 @@ export default function GuidanceTemplateSelection() {
             Cancel
           </Button>
           <Button
-            onClick={handleUploadTemplate}
+            onClick={handleUploadClick}
             disabled={isConfirmDisabled}
           >
             {isUploading ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                {selectedTemplate?.source === "upload" ? "Uploading…" : "Selecting…"}
+                {selectedTemplate?.source === "upload" ? "Saving…" : "Selecting…"}
               </>
             ) : extracting ? (
               <>
@@ -686,7 +700,7 @@ export default function GuidanceTemplateSelection() {
             ) : selectedTemplate?.source === "upload" ? (
               <>
                 <Upload className="h-4 w-4 mr-2" />
-                Upload Template
+                Save Template
               </>
             ) : (
               <>
@@ -697,6 +711,17 @@ export default function GuidanceTemplateSelection() {
           </Button>
         </div>
       </div>
+
+      {/* Save Template Confirmation Modal */}
+      {selectedTemplate?.source === "upload" && (
+        <SaveTemplateModal
+          open={showSaveModal}
+          onOpenChange={setShowSaveModal}
+          defaultName={selectedTemplate.name}
+          onConfirm={(name) => doUploadTemplate(name)}
+          saving={isUploading}
+        />
+      )}
     </div>
   );
 }

@@ -402,6 +402,16 @@ export default function Guidance() {
               {/* Success — Questions display */}
               {runState === "success" && output && (output.grounding_status !== "insufficient" || output.questions.length > 0) && (
                 <div className="space-y-4">
+                  {/* Success completion banner */}
+                  {output.grounding_status !== "insufficient" && output.questions.length > 0 && (
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-primary/5 border border-primary/15">
+                      <Check className="h-4 w-4 text-primary shrink-0" />
+                      <p className="text-sm text-foreground">
+                        <span className="font-medium">Guidance ready</span>
+                        <span className="text-muted-foreground"> — {output.questions.length} question{output.questions.length !== 1 ? "s" : ""} generated and grounded in your policy pack.</span>
+                      </p>
+                    </div>
+                  )}
                   {/* Summary bar */}
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -533,22 +543,29 @@ export default function Guidance() {
             Back to Dashboard
           </Button>
           <div className="flex items-center gap-2">
-            {runState === "success" && output && (
-              <Button variant="outline" onClick={clearResults}>
-                <RotateCcw className="h-4 w-4 mr-2" />
-                Clear
+            {runState === "success" && output && output.questions.length > 0 ? (
+              <>
+                <Button variant="ghost" size="sm" onClick={() => { clearResults(); }} className="text-muted-foreground text-xs gap-1.5">
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Regenerate
+                </Button>
+                <Button onClick={handleBack}>
+                  <Check className="h-4 w-4 mr-2" />
+                  Done
+                </Button>
+              </>
+            ) : (
+              <Button
+                onClick={runGuidance}
+                disabled={runState === "running" || runState === "compiling" || runState === "generating" || !hasTemplate}
+              >
+                {runState === "compiling" || runState === "generating" || runState === "running" ? (
+                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {runState === "compiling" ? "Compiling…" : "Generating…"}</>
+                ) : (
+                  <><Sparkles className="h-4 w-4 mr-2" /> Generate Questions</>
+                )}
               </Button>
             )}
-            <Button
-              onClick={runGuidance}
-              disabled={runState === "running" || runState === "compiling" || runState === "generating" || !hasTemplate}
-            >
-              {runState === "compiling" || runState === "generating" || runState === "running" ? (
-                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {runState === "compiling" ? "Compiling…" : "Generating…"}</>
-              ) : (
-                <><Sparkles className="h-4 w-4 mr-2" /> Generate Questions</>
-              )}
-            </Button>
           </div>
         </div>
       </div>
