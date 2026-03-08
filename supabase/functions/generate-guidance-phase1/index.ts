@@ -1198,6 +1198,12 @@ No text outside JSON.
         hard_fail_distribution: dropReasonCounts,
         soft_fail_distribution: softFailCounts,
         final_status_distribution: finalStatusDistribution,
+        _diagnostics: {
+          raw_questions: rawQuestionDiagnostics.map((d: any) => ({ q: d.question, topic: d.topic, category: d.category })),
+          kept: validatedQuestions.map((q: any) => ({ q: q.question.slice(0, 120), status: q.validation_status })),
+          dropped: droppedQuestions.map(dq => ({ q: dq.question, reason: dq.reason })),
+          housing: { generated: housingRaw.length > 0, outcome: housingLifecycle[0]?.status ?? null, raw: housingRaw[0]?.question ?? null },
+        },
       };
 
       await supabase.rpc("update_session_guidance_phase1", {
