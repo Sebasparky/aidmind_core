@@ -886,6 +886,7 @@ No text outside JSON.
       total_generated: parsed.questions.length,
       total_grounded: validatedQuestions.length,
       total_dropped: droppedQuestions.length,
+      drop_reason_distribution: dropReasonCounts,
     };
 
     // ── 10. Save to session ────────────────────────────────────
