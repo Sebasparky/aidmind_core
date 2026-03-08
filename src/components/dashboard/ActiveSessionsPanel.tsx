@@ -288,7 +288,8 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
           <div className="space-y-3">
             {filteredActiveSessions.map((session) => {
               const toolCount = (session.guidanceCompleted ? 1 : 0) + (session.reviewerCompleted ? 1 : 0);
-              const allToolsUsed = toolCount >= 2;
+              const totalTools = 3;
+              const allToolsUsed = toolCount >= totalTools;
 
               return (
                 <div
@@ -313,7 +314,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                         variant="secondary"
                         className={cn("text-xs shrink-0", getToolsUsedColor(toolCount))}
                       >
-                        Tools: {toolCount}/2
+                        Tools: {toolCount}/{totalTools}
                       </Badge>
                     </div>
                     <div className="flex items-center gap-2 mt-1">
@@ -327,7 +328,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                   </div>
 
                   {/* Tool actions + session actions */}
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     {session.guidanceCompleted ? (
                       <Button
                         variant="default"

@@ -16,7 +16,7 @@ const Index = () => {
       <DashboardLayout>
         <TourController role="caseworker" />
         
-        <div className="grid grid-cols-3 gap-4 h-full min-h-0">
+        <div className="grid grid-cols-[1fr_1.4fr_1fr] gap-4 h-full min-h-0">
           <div className="min-h-0" data-tour="derived-signals">
             <DerivedSignalsPanel className="h-full" searchQuery={searchQuery} />
           </div>
