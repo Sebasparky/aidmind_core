@@ -177,7 +177,7 @@ Deno.serve(async (req) => {
           serviceName: "select-template",
           payload: { template_id: tidResult.value, result: "denied", reason_code: "TENANT_MISMATCH" },
         });
-        return json(403, { success: false, error: "Template does not belong to this tenant", code: "TENANT_MISMATCH" });
+        return json(req, 403, { success: false, error: "Template does not belong to this tenant", code: "TENANT_MISMATCH" });
       }
 
       if (!template.is_active) {
