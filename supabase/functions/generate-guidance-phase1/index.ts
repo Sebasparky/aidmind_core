@@ -500,11 +500,15 @@ const IMPORTANT_QUALIFIER_PATTERNS: {
     label: "time_window",
     questionCheck: /past\s+(year|12\s*months|six\s*months|6\s*months)|within\s+the\s+(past|last)\s+(year|12|six|6)/i,
   },
-  {
-    snippetDetector: /\bcurrent(ly)?\b/i,
-    label: "current_status",
-    questionCheck: /\bcurrent(ly)?\b/i,
-  },
+  // "currently" is too common — only flag when it appears as part of a
+  // concrete operational phrase, not as a standalone adverb.
+  // Removed from specificity checks because it triggers on nearly every
+  // snippet and question, causing universal false-positive warnings.
+  // {
+  //   snippetDetector: /\bcurrent(ly)?\b/i,
+  //   label: "current_status",
+  //   questionCheck: /\bcurrent(ly)?\b/i,
+  // },
   {
     snippetDetector: /\bimmediate\s+(safety|risk|danger|threat|concern)/i,
     label: "immediate_safety",
@@ -1051,8 +1055,14 @@ No text outside JSON.
         softFailCounts[r] = (softFailCounts[r] ?? 0) + 1;
       }
 
-      // Question survives — determine status
-      const validationStatus = softFails.length > 0 ? ("warning" as const) : ("pass" as const);
+      // Question survives — determine status.
+      // A single minor soft fail (e.g. partial_qualifier_loss) should NOT
+      // escalate to warning. Only escalate when there are multiple soft
+      // fails, or a single genuinely concerning one (specificity < 0.5).
+      const hasSignificantSoftFail = softFails.length >= 2 ||
+        reviewFlags.includes("specificity_soft_fail") ||
+        reviewFlags.includes("weak_support_soft_fail");
+      const validationStatus = hasSignificantSoftFail ? ("warning" as const) : ("pass" as const);
       const enrichedQ = {
         ...q,
         validation_status: validationStatus,
