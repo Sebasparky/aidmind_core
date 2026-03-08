@@ -27,6 +27,7 @@ import {
   GUIDANCE_CATEGORIES,
 } from "@/lib/tools/guidance-types";
 import { useGuidanceSession } from "@/hooks/useGuidanceSession";
+import { useEyeLogger } from "@/hooks/useEyeLogger";
 import { CitationsModal } from "@/components/session/CitationsModal";
 
 export default function Guidance() {
