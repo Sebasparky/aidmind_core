@@ -296,6 +296,8 @@ export default function KbBulkUploadPage() {
           </div>
         </CardContent>
       </Card>
+      {/* ─── Documents list with ingestion status ─── */}
+      <KbDocumentsList />
     </div>
   );
 }
