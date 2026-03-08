@@ -122,7 +122,8 @@ async function embed(
 /* ── Main handler ── */
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+  _corsHeaders = buildCorsSecurityHeaders(req);
+  if (req.method === "OPTIONS") return new Response(null, { headers: _corsHeaders });
   if (req.method !== "POST") return json(405, { success: false, error: "Method not allowed" });
 
   const supabase = createClient(

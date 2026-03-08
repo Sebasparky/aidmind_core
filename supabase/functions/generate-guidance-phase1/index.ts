@@ -30,7 +30,8 @@ function extractJSON(text: string) {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: corsSecurityHeaders });
+  _corsHeaders = buildCorsSecurityHeaders(req);
+  if (req.method === "OPTIONS") return new Response(null, { headers: _corsHeaders });
   if (req.method !== "POST") return json(405, { error: "Method not allowed" });
 
   const requestId = crypto.randomUUID();
