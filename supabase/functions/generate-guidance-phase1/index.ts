@@ -65,6 +65,21 @@ type DropReason =
   | "classification_or_justification_prompt"
   | "specificity_lost";
 
+type ValidationSeverity = "pass" | "soft_fail" | "hard_fail";
+
+interface ValidationSignal {
+  severity: ValidationSeverity;
+  reason?: DropReason;
+  details?: Record<string, unknown>;
+}
+
+type ReviewFlag =
+  | "specificity_soft_fail"
+  | "weak_support_soft_fail"
+  | "broad_paraphrase"
+  | "partial_qualifier_loss"
+  | "low_overlap_but_high_quality_source";
+
 /**
  * Compute structural quality of a snippet (aligned with compile-time computeInfoQuality).
  * Returns 0..1 where 0 = structural junk, 1 = substantive prose.
