@@ -119,7 +119,7 @@ interface QuestionTrace {
   original_question: string;
   support_result: { supported: boolean; reason?: string; details?: Record<string, unknown> };
   style_result: { clientFacing: boolean; reason?: string; details?: Record<string, unknown> };
-  specificity_result: { preserved: boolean; score: number; lost_qualifiers: string[] };
+  specificity_result: { preserved: boolean; score: number; lost_qualifiers: string[]; concept_family: string; considered: string[]; ignored: string[] };
   final_outcome: QuestionOutcome;
 }
 
