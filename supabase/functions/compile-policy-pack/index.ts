@@ -662,6 +662,7 @@ function computeRegionDiversity(
 
 /**
  * Compute the dynamic composite score for a candidate chunk.
+ * Now includes evidence usefulness as a weighted signal.
  */
 function scoreCandidate(
   chunk: MergedChunk,
@@ -675,12 +676,14 @@ function scoreCandidate(
   const novelty = computeNovelty(candidateTokens, state);
   const coverage = computeCoverageGain(chunk.query_indices, state);
   const diversity = computeRegionDiversity(chunk.document_id, chunk.chunk_index, state);
+  const usefulness = chunk.evidence_usefulness;
 
   return (
     W_SIMILARITY * simNorm +
     W_NOVELTY * novelty +
     W_COVERAGE * coverage +
-    W_DIVERSITY * diversity
+    W_DIVERSITY * diversity +
+    W_USEFULNESS * usefulness
   );
 }
 
