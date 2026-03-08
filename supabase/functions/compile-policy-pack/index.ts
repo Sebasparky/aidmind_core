@@ -728,6 +728,7 @@ function greedySelect(
   candidates: MergedChunk[],
   maxTotal: number,
   totalQueries: number,
+  scope?: string | null,
 ): { selected: MergedChunk[]; diagnostics: SelectionDiagnostics } {
   // --- Low-information chunk filtering ---
   let filteredLowInfo = 0;
@@ -738,11 +739,15 @@ function greedySelect(
       filteredLowInfo++;
       continue;
     }
-    // Apply a similarity penalty for borderline chunks
+    // Compute evidence usefulness for each candidate
+    const usefulness = computeEvidenceUsefulness(c.content, scope);
+    const enriched = { ...c, evidence_usefulness: usefulness };
+
+    // Apply a similarity penalty for borderline info-quality chunks
     if (iq < INFO_QUALITY_PENALTY_THRESHOLD) {
-      qualityCandidates.push({ ...c, similarity: c.similarity * iq });
+      qualityCandidates.push({ ...enriched, similarity: enriched.similarity * iq });
     } else {
-      qualityCandidates.push(c);
+      qualityCandidates.push(enriched);
     }
   }
   if (filteredLowInfo > 0) {
@@ -767,6 +772,8 @@ function greedySelect(
     queries_covered: 0,
     queries_total: totalQueries,
     avg_similarity: 0,
+    avg_evidence_usefulness: 0,
+    usefulness_distribution: { high: 0, medium: 0, low: 0 },
   };
 
   // Pre-tokenize all candidates (one-time cost)
@@ -833,7 +840,7 @@ function greedySelect(
         continue;
       }
 
-      // Compute dynamic score
+      // Compute dynamic score (now includes evidence usefulness)
       const score = scoreCandidate(chunk, tokens, state, maxSimilarity);
       if (score > bestScore) {
         bestScore = score;
@@ -871,9 +878,30 @@ function greedySelect(
 
   if (state.selected.length > 0) {
     let simSum = 0;
-    for (const c of state.selected) simSum += c.similarity;
+    let usefulnessSum = 0;
+    for (const c of state.selected) {
+      simSum += c.similarity;
+      usefulnessSum += c.evidence_usefulness;
+      // Classify usefulness tier
+      if (c.evidence_usefulness >= 0.6) (diag as any).usefulness_distribution.high++;
+      else if (c.evidence_usefulness >= 0.4) (diag as any).usefulness_distribution.medium++;
+      else (diag as any).usefulness_distribution.low++;
+    }
     diag.avg_similarity = parseFloat((simSum / state.selected.length).toFixed(4));
+    (diag as any).avg_evidence_usefulness = parseFloat((usefulnessSum / state.selected.length).toFixed(4));
   }
+
+  // Log per-chunk diagnostics for the selected set
+  const chunkDiagnostics = state.selected.map((c, idx) => ({
+    rank: idx + 1,
+    chunk_id: c.chunk_id.slice(0, 8),
+    doc_id: c.document_id.slice(0, 8),
+    chunk_index: c.chunk_index,
+    similarity: parseFloat(c.similarity.toFixed(4)),
+    usefulness: c.evidence_usefulness,
+    content_preview: c.content.slice(0, 120).replace(/\n/g, " "),
+  }));
+  console.log("[compile-policy-pack] Selected chunks detail:", JSON.stringify(chunkDiagnostics));
 
   console.log("[compile-policy-pack] Greedy selection diagnostics:", JSON.stringify(diag));
 
