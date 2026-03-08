@@ -768,32 +768,53 @@ No text outside JSON.
       }
     }
 
-    // ── 7. Post-generation support-strength validation ─────────
+    // ── 7. Post-generation validation: support-strength + client-facing style ──
     const validatedQuestions: typeof parsed.questions = [];
     const droppedQuestions: { question: string; reason: string; citationCount: number; details?: Record<string, unknown> }[] = [];
+    const dropReasonCounts: Record<string, number> = {};
 
     for (const q of parsed.questions) {
       const citedTexts = q.citations
         .map((cid: string) => snippetMap.get(cid))
         .filter(Boolean) as string[];
 
-      const result = validateQuestionSupport(q.question, citedTexts);
-
-      if (result.supported) {
-        validatedQuestions.push(q);
-      } else {
+      // Gate A: Support-strength validation (hard/soft gates)
+      const supportResult = validateQuestionSupport(q.question, citedTexts);
+      if (!supportResult.supported) {
+        const reason = supportResult.reason ?? "unknown";
+        dropReasonCounts[reason] = (dropReasonCounts[reason] ?? 0) + 1;
         droppedQuestions.push({
-          question: q.question.slice(0, 100),
-          reason: result.reason ?? "unknown",
+          question: q.question.slice(0, 120),
+          reason,
           citationCount: q.citations.length,
-          ...(result.details ? { details: result.details } : {}),
+          ...(supportResult.details ? { details: supportResult.details } : {}),
         });
+        continue;
       }
+
+      // Gate B: Client-facing style validation
+      const styleResult = validateClientFacingStyle(q.question, citedTexts);
+      if (!styleResult.clientFacing) {
+        const reason = styleResult.reason ?? "internal_worker_prompt";
+        dropReasonCounts[reason] = (dropReasonCounts[reason] ?? 0) + 1;
+        droppedQuestions.push({
+          question: q.question.slice(0, 120),
+          reason,
+          citationCount: q.citations.length,
+          ...(styleResult.details ? { details: styleResult.details } : {}),
+        });
+        continue;
+      }
+
+      validatedQuestions.push(q);
     }
 
     console.log(
-      `[generate-guidance-phase1] Validation: ${parsed.questions.length} generated → ${validatedQuestions.length} grounded, ${droppedQuestions.length} dropped`
+      `[generate-guidance-phase1] Validation: ${parsed.questions.length} generated → ${validatedQuestions.length} grounded+client-facing, ${droppedQuestions.length} dropped`
     );
+    if (Object.keys(dropReasonCounts).length > 0) {
+      console.log(`[generate-guidance-phase1] Drop reason distribution: ${JSON.stringify(dropReasonCounts)}`);
+    }
     if (droppedQuestions.length > 0) {
       for (const dq of droppedQuestions) {
         console.log(`[generate-guidance-phase1] DROPPED: reason=${dq.reason} citations=${dq.citationCount} q="${dq.question}"${dq.details ? " details=" + JSON.stringify(dq.details) : ""}`);
