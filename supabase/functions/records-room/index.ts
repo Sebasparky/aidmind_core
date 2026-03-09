@@ -575,11 +575,11 @@ function computeSectionMatchScore(query: string, content: string, metadata: Reco
 }
 
 /* ═══════════════════════════════════════════════════════════════
- *  EXACT PHRASE SCORING
+ *  EXACT PHRASE SCORING (v3 — stop-word-preserving for legal phrases)
  *
  *  Rewards candidates containing exact multi-word phrases from
- *  the query. Phrases are extracted as bigrams and trigrams.
- *  Much stronger than bag-of-words overlap.
+ *  the query. Now preserves stop words so legal phrases like
+ *  "notice to appear" are matched as-is.
  * ═══════════════════════════════════════════════════════════════ */
 
 const STOP_WORDS = new Set([
@@ -591,6 +591,75 @@ const STOP_WORDS = new Set([
   "than", "that", "this", "it", "its", "what", "which", "who", "whom",
   "how", "when", "where", "why", "does", "mean", "happens",
 ]);
+
+/**
+ * KNOWN LEGAL CONCEPT PHRASES — matched with stop words intact.
+ * These are the canonical forms caseworkers actually search for.
+ */
+const LEGAL_CONCEPT_PHRASES = [
+  "notice to appear",
+  "removal proceedings",
+  "voluntary departure",
+  "grounds of inadmissibility",
+  "adjustment of status",
+  "cancellation of removal",
+  "asylum application",
+  "credible fear",
+  "reasonable fear",
+  "withholding of removal",
+  "convention against torture",
+  "expedited removal",
+  "aggravated felony",
+  "good moral character",
+  "lawful permanent resident",
+  "temporary protected status",
+  "deferred action",
+  "prosecutorial discretion",
+  "bond hearing",
+  "change of venue",
+  "continuance",
+  "in absentia",
+  "failure to appear",
+  "relief from removal",
+  "suspension of deportation",
+  "registry",
+  "judicial review",
+  "petition for review",
+  "motion to reopen",
+  "motion to reconsider",
+  "alien registration",
+];
+
+/**
+ * Extract concept phrases from query — preserving stop words.
+ * Returns both full legal phrases found in the query AND
+ * n-grams (with stop words) for broader matching.
+ */
+function extractConceptPhrases(query: string): { legal: string[]; ngrams: string[] } {
+  const lower = query.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+
+  // Find known legal phrases present in the query
+  const legal: string[] = [];
+  for (const phrase of LEGAL_CONCEPT_PHRASES) {
+    if (lower.includes(phrase)) {
+      legal.push(phrase);
+    }
+  }
+
+  // Also build n-grams WITH stop words intact for general phrase matching
+  const words = lower.split(" ").filter(w => w.length > 1);
+  const ngrams: string[] = [];
+  // Trigrams (with stop words)
+  for (let i = 0; i < words.length - 2; i++) {
+    ngrams.push(`${words[i]} ${words[i + 1]} ${words[i + 2]}`);
+  }
+  // Bigrams (with stop words)
+  for (let i = 0; i < words.length - 1; i++) {
+    ngrams.push(`${words[i]} ${words[i + 1]}`);
+  }
+
+  return { legal, ngrams };
+}
 
 function extractPhrases(text: string): string[] {
   const words = text.toLowerCase()
@@ -611,24 +680,40 @@ function extractPhrases(text: string): string[] {
 }
 
 function computeExactPhraseScore(query: string, content: string): number {
-  const queryPhrases = extractPhrases(query);
-  if (queryPhrases.length === 0) return 0.5;
-
   const contentLower = content.toLowerCase();
-  let hits = 0;
-  let totalWeight = 0;
+  const concepts = extractConceptPhrases(query);
 
-  for (const phrase of queryPhrases) {
-    const wordCount = phrase.split(" ").length;
-    const weight = wordCount === 3 ? 2.0 : 1.0; // trigrams worth more
-    totalWeight += weight;
-    if (contentLower.includes(phrase)) {
-      hits += weight;
+  // If we found known legal phrases in the query, weight those MUCH more heavily
+  if (concepts.legal.length > 0) {
+    let legalHits = 0;
+    for (const phrase of concepts.legal) {
+      if (contentLower.includes(phrase)) legalHits++;
     }
+    // Legal phrase match is the primary signal
+    const legalScore = legalHits / concepts.legal.length;
+
+    // Also check n-gram overlap as secondary signal
+    let ngramHits = 0;
+    for (const ng of concepts.ngrams) {
+      if (contentLower.includes(ng)) ngramHits++;
+    }
+    const ngramScore = concepts.ngrams.length > 0 ? ngramHits / concepts.ngrams.length : 0;
+
+    // Legal phrase match dominates (70/30 split)
+    return legalScore * 0.7 + ngramScore * 0.3;
   }
 
-  if (totalWeight === 0) return 0.5;
-  return hits / totalWeight;
+  // No known legal phrases — fall back to n-gram matching (with stop words)
+  if (concepts.ngrams.length === 0) return 0.5;
+  let hits = 0;
+  let totalWeight = 0;
+  for (const ng of concepts.ngrams) {
+    const wordCount = ng.split(" ").length;
+    const weight = wordCount === 3 ? 2.0 : 1.0;
+    totalWeight += weight;
+    if (contentLower.includes(ng)) hits += weight;
+  }
+  return totalWeight === 0 ? 0.5 : hits / totalWeight;
 }
 
 /* ═══════════════════════════════════════════════════════════════
