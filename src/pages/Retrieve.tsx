@@ -166,9 +166,9 @@ function ResultsSection({
 /* ── Main Page ── */
 
 export default function Retrieve() {
-  const [query, setQuery] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { status, result, error, search, reset } = useRetrieve();
+  const { query: storedQuery, status, result, error, search, reset } = useRetrieve();
+  const [query, setQuery] = useState(storedQuery);
 
   const handleExampleClick = useCallback((description: string) => {
     setQuery(description);

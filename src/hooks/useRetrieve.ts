@@ -1,9 +1,10 @@
 /**
  * useRetrieve — Hook for the Retrieve / Records Room pipeline.
  * Calls the records-room edge function and manages result state.
+ * Persists last search state in sessionStorage for navigation resilience.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useTenant } from "@/hooks/useTenant";
 
@@ -22,9 +23,7 @@ export interface EvidenceItem {
   document_id: string;
   similarity: number;
   composite_score: number;
-  /** URL to view the original source document, if available */
   source_url: string | null;
-  /** URL to download the original source document, if available */
   download_url: string | null;
 }
 
@@ -40,20 +39,71 @@ export interface RetrieveResult {
   failure_message: string | null;
 }
 
+/* ── SessionStorage persistence ── */
+
+const STORAGE_KEY = "aidmind_retrieve_state";
+
+interface PersistedState {
+  query: string;
+  status: RetrieveStatus;
+  result: RetrieveResult | null;
+  error: string | null;
+  timestamp: number;
+}
+
+function saveState(state: PersistedState) {
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch { /* quota exceeded — non-critical */ }
+}
+
+function loadState(): PersistedState | null {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistedState;
+    // Basic shape validation
+    if (typeof parsed.query !== "string" || typeof parsed.status !== "string") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function clearStoredState() {
+  try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ok */ }
+}
+
 export function useRetrieve() {
   const { tenant } = useTenant();
-  const [status, setStatus] = useState<RetrieveStatus>("idle");
-  const [result, setResult] = useState<RetrieveResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const hydrated = useRef(false);
 
-  const search = useCallback(async (query: string) => {
-    if (!query.trim()) return;
+  // Try to hydrate from sessionStorage on first render
+  const initial = !hydrated.current ? loadState() : null;
+
+  const [query, setQuery] = useState(initial?.query ?? "");
+  const [status, setStatus] = useState<RetrieveStatus>(initial?.status === "loading" ? "idle" : (initial?.status ?? "idle"));
+  const [result, setResult] = useState<RetrieveResult | null>(initial?.result ?? null);
+  const [error, setError] = useState<string | null>(initial?.error ?? null);
+
+  useEffect(() => { hydrated.current = true; }, []);
+
+  // Persist state changes (debounced by React batching)
+  useEffect(() => {
+    if (!hydrated.current) return;
+    if (status === "loading") return; // don't persist transient loading state
+    saveState({ query, status, result, error, timestamp: Date.now() });
+  }, [query, status, result, error]);
+
+  const search = useCallback(async (searchQuery: string) => {
+    if (!searchQuery.trim()) return;
     if (!tenant?.tenantId) {
       setError("No tenant context available");
       setStatus("error");
       return;
     }
 
+    setQuery(searchQuery);
     setStatus("loading");
     setError(null);
     setResult(null);
@@ -61,7 +111,7 @@ export function useRetrieve() {
     try {
       const { data, error: fnErr } = await supabase.functions.invoke("records-room", {
         body: {
-          query: query.trim(),
+          query: searchQuery.trim(),
           tenant_id: tenant.tenantId,
         },
       });
@@ -79,10 +129,12 @@ export function useRetrieve() {
   }, [tenant?.tenantId]);
 
   const reset = useCallback(() => {
+    setQuery("");
     setStatus("idle");
     setResult(null);
     setError(null);
+    clearStoredState();
   }, []);
 
-  return { status, result, error, search, reset };
+  return { query, status, result, error, search, reset };
 }
