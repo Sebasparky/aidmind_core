@@ -208,6 +208,14 @@ async function updateIngestionMeta(
     const ingestion = (meta.ingestion as Record<string, unknown>) ?? {};
     meta.ingestion = { ...ingestion, ...fields };
     await supabase.from("kb_documents").update({ metadata: meta }).eq("id", docId);
+    // Verification log
+    const f = fields as Record<string, unknown>;
+    console.log(
+      `[ingest-kb-text] checkpoint wrote doc=${docId}` +
+      (f.status ? ` status=${f.status}` : "") +
+      (f.next_chunk_index !== undefined ? ` next_chunk_index=${f.next_chunk_index}` : "") +
+      (f.indexed_chunk_count !== undefined ? ` indexed_chunk_count=${f.indexed_chunk_count}` : "")
+    );
   } catch (err) {
     console.error("[ingest-kb-text] updateIngestionMeta failed:", err);
   }
@@ -392,7 +400,7 @@ Deno.serve(async (req) => {
       // Safety: if checkpoint says more chunks than we actually have, cap it
       if (nextChunkIndex >= totalChunks) {
         console.log(`[ingest-kb-text] doc=${document_id} resume index ${nextChunkIndex} >= total ${totalChunks}, marking ready`);
-        await updateIngestionMeta(document_id, {
+        await updateIngestionMeta(supabase, document_id, {
           status: "ready",
           indexed_chunk_count: totalChunks,
           next_chunk_index: totalChunks,
@@ -419,7 +427,7 @@ Deno.serve(async (req) => {
       // ── Fresh / overwrite path: chunk + initialize ──
       await safeLogEye(supabase, "KB_DOCUMENT_INGEST_STARTED", { tenant_id: doc.tenant_id });
 
-      await updateIngestionMeta(document_id, {
+      await updateIngestionMeta(supabase, document_id, {
         status: "chunking",
         chunking_started_at: new Date().toISOString(),
         attempt_count: (checkpoint?.attempt_count ?? 0) + 1,
@@ -435,7 +443,7 @@ Deno.serve(async (req) => {
       if (totalChunks === 0) {
         const reason = "Chunking produced 0 usable chunks (all < 50 chars)";
         console.warn(`[ingest-kb-text] doc=${document_id} ${reason}`);
-        await updateIngestionMeta(document_id, {
+        await updateIngestionMeta(supabase, document_id, {
           status: "failed",
           error: reason,
           failed_at: new Date().toISOString(),
@@ -467,7 +475,7 @@ Deno.serve(async (req) => {
       }
 
       // Initialize checkpoint
-      await updateIngestionMeta(document_id, {
+      await updateIngestionMeta(supabase, document_id, {
         status: "embedding_in_progress",
         chunk_count: totalChunks,
         indexed_chunk_count: 0,
@@ -564,7 +572,7 @@ Deno.serve(async (req) => {
       if (actualChunkCount === 0) {
         const reason = "All batches inserted but verification found 0 rows — possible RLS or constraint issue";
         console.error(`[ingest-kb-text] doc=${document_id} INVARIANT VIOLATION: ${reason}`);
-        await updateIngestionMeta(document_id, {
+        await updateIngestionMeta(supabase, document_id, {
           status: "failed",
           error: reason,
           failed_at: new Date().toISOString(),
@@ -574,7 +582,7 @@ Deno.serve(async (req) => {
         return json(500, { success: false, error: reason });
       }
 
-      await updateIngestionMeta(document_id, {
+      await updateIngestionMeta(supabase, document_id, {
         status: "ready",
         indexed_chunk_count: actualChunkCount,
         next_chunk_index: totalChunks,
@@ -604,7 +612,7 @@ Deno.serve(async (req) => {
       // ── More batches remain: update checkpoint and signal caller ──
       const indexedSoFar = (checkpoint?.indexed_chunk_count ?? 0) + rows.length;
 
-      await updateIngestionMeta(document_id, {
+      await updateIngestionMeta(supabase, document_id, {
         status: "embedding_in_progress",
         indexed_chunk_count: indexedSoFar,
         next_chunk_index: newNextIndex,
@@ -640,14 +648,14 @@ Deno.serve(async (req) => {
     console.error(`[ingest-kb-text] doc=${document_id} FAILED:`, message);
 
     // Persist failure — but preserve progress so resume is possible after fix
+    // NOTE: next_chunk_index and indexed_chunk_count are intentionally
+    // NOT reset here. This allows manual resume after the failure cause
+    // is fixed, by re-calling with the same document_id.
     try {
-      await updateIngestionMeta(document_id, {
+      await updateIngestionMeta(supabase, document_id, {
         status: "failed",
         error: message,
         failed_at: new Date().toISOString(),
-        // NOTE: next_chunk_index and indexed_chunk_count are intentionally
-        // NOT reset here. This allows manual resume after the failure cause
-        // is fixed, by re-calling with the same document_id.
       });
     } catch (_) { /* best effort */ }
 
