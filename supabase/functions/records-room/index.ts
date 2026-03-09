@@ -2410,6 +2410,7 @@ Deno.serve(async (req) => {
           caps_hit_count: caps.hitCount,
           duration_ms: Date.now() - startTime,
           ranking_version: "v6.3_supporting_usefulness",
+          refinement_mode: refinementMode,
           failure_state,
           filtered_low_info: filteredLowInfo,
           dupe_suppressed: dupeSuppressed,
