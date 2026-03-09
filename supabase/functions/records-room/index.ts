@@ -1985,7 +1985,7 @@ Deno.serve(async (req) => {
     // Helper: admit as supporting with floor check
     const tryAdmitSupporting = (chunk: ScoredChunk, baseReason: string, demotionSource: string | null, extras?: Record<string, unknown>): boolean => {
       if (conceptTooWeakFor(chunk)) return false;
-      if (chunk.composite_score < SUPPORTING_THRESHOLD) return false;
+      if (chunk.composite_score < effectiveSupportingThreshold) return false;
       if (supportingCount >= LIMITS.MAX_SUPPORTING_MATERIALS) return false;
 
       const floorFail = checkSupportingFloor(chunk, demotionSource);
