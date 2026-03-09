@@ -2316,6 +2316,7 @@ Deno.serve(async (req) => {
     const diagnostics: Record<string, unknown> = {
       intake,
       ranking_version: "v6.3_supporting_usefulness",
+      refinement_mode: refinementMode,
       // Recall diagnostics
       semantic_recall_count: semanticCandidates.length,
       lexical_recall_count: lexicalCandidates.length,
