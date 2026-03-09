@@ -648,15 +648,14 @@ Deno.serve(async (req) => {
     console.error(`[ingest-kb-text] doc=${document_id} FAILED:`, message);
 
     // Persist failure — but preserve progress so resume is possible after fix
+    // NOTE: next_chunk_index and indexed_chunk_count are intentionally
+    // NOT reset here. This allows manual resume after the failure cause
+    // is fixed, by re-calling with the same document_id.
     try {
       await updateIngestionMeta(supabase, document_id, {
         status: "failed",
         error: message,
         failed_at: new Date().toISOString(),
-      });
-        // NOTE: next_chunk_index and indexed_chunk_count are intentionally
-        // NOT reset here. This allows manual resume after the failure cause
-        // is fixed, by re-calling with the same document_id.
       });
     } catch (_) { /* best effort */ }
 
