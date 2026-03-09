@@ -1991,7 +1991,7 @@ Deno.serve(async (req) => {
 
     const diagnostics: Record<string, unknown> = {
       intake,
-      ranking_version: "v6_cleanliness_adjusted",
+      ranking_version: "v6.1_supporting_cleanup",
       // Recall diagnostics
       semantic_recall_count: semanticCandidates.length,
       lexical_recall_count: lexicalCandidates.length,
