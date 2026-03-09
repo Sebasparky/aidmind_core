@@ -190,6 +190,8 @@ interface ScoredChunk {
   exact_phrase_score: number;
   directness_score: number;
   concept_anchor_score: number;
+  collateral_labels: string[];
+  primary_boost: boolean;
   recall_origin: RecallOrigin;
   bucket: "strong_evidence" | "supporting_material" | "excluded";
   admission_reason?: string;
@@ -719,51 +721,70 @@ function computeExactPhraseScore(query: string, content: string): number {
 }
 
 /* ═══════════════════════════════════════════════════════════════
- *  DIRECTNESS SCORING
+ *  DIRECTNESS SCORING (v4 — generalized primary vs collateral)
  *
- *  Measures how "primary-source" a chunk is for the query topic:
- *  - Does it define/state the concept (vs merely reference it)?
- *  - Does the heading/section directly name the queried concept?
- *  - Does the text begin with the relevant provision language?
- *  - Is it a downstream consequence or appellate mechanism?
+ *  Measures how "primary-governing" a chunk is for the query:
+ *  - Is this the main rule/definition/requirement? (primary provision)
+ *  - Or is it collateral: appeals, exceptions, amendments, editorial,
+ *    penalties, implementation, historical notes, etc.?
+ *
+ *  Generalized across domains — not hardcoded to immigration.
  * ═══════════════════════════════════════════════════════════════ */
 
-const DOWNSTREAM_SIGNALS = [
-  "judicial review", "appeal of", "review of order",
-  "stay of removal", "motion to reopen", "reconsideration",
-  "scope of review", "standard of review",
+/** Collateral provision signals — content that is secondary/downstream */
+const COLLATERAL_SIGNALS: { pattern: RegExp; label: string; penalty: number }[] = [
+  { pattern: /\bjudicial review\b/i, label: "downstream_review", penalty: 0.15 },
+  { pattern: /\b(appellate|appeal of|review of order|petition for review)\b/i, label: "downstream_review", penalty: 0.12 },
+  { pattern: /\b(scope of review|standard of review|court of appeals)\b/i, label: "downstream_review", penalty: 0.12 },
+  { pattern: /\b(motion to reopen|motion to reconsider|reconsideration)\b/i, label: "collateral_procedural", penalty: 0.10 },
+  { pattern: /\bstay of (removal|deportation|execution)\b/i, label: "collateral_procedural", penalty: 0.08 },
+  { pattern: /\b(penalty|penalties|penalized|sanction|fine|forfeiture|civil money)\b/i, label: "penalty_provision", penalty: 0.08 },
+  { pattern: /\b(except as provided|notwithstanding|saving clause|transitional|transition rule)\b/i, label: "exception_provision", penalty: 0.06 },
+  { pattern: /\b(effective date|amendment|repeal|redesignat|transfer of function)\b/i, label: "editorial_or_historical", penalty: 0.10 },
+  { pattern: /\b(editorial note|historical note|prior provision|former section|as amended by)\b/i, label: "editorial_or_historical", penalty: 0.12 },
+  { pattern: /\bregulations?\s+(shall|may)\s+(be\s+)?(promulgat|issu|prescrib)/i, label: "implementation_detail", penalty: 0.06 },
 ];
 
-const DEFINITION_SIGNALS = [
-  "means", "is defined as", "refers to", "shall mean",
-  "for purposes of this", "as used in this",
+/** Primary provision signals — content that states the main rule */
+const PRIMARY_PROVISION_SIGNALS: { pattern: RegExp; boost: number }[] = [
+  { pattern: /\b(means|is defined as|refers to|shall mean|for purposes of this)\b/i, boost: 0.10 },
+  { pattern: /\bshall\s+(be|provide|issue|serve|file|submit|notify|require|determine)\b/i, boost: 0.08 },
+  { pattern: /\bis\s+(required|entitled|eligible|authorized|prohibited)\b/i, boost: 0.08 },
+  { pattern: /\b(eligib(?:le|ility)|qualification|requirement|condition|standard|criteria)\b/i, boost: 0.06 },
+  { pattern: /\b(right to|entitled to|obligation|duty|responsibility)\b/i, boost: 0.06 },
+  { pattern: /\b(notice\s+(?:shall|must|is)|filing\s+(?:deadline|requirement)|within\s+\d+\s+days)\b/i, boost: 0.06 },
 ];
 
-function computeDirectnessScore(query: string, content: string, metadata: Record<string, unknown>): number {
+interface DirectnessResult {
+  score: number;
+  collateral_labels: string[];
+  primary_boost: boolean;
+}
+
+function computeDirectnessScore(query: string, content: string, metadata: Record<string, unknown>): DirectnessResult {
   const queryWords = query.toLowerCase()
     .replace(/[^\w\s]/g, " ")
     .split(/\s+/)
     .filter(w => w.length > 3 && !STOP_WORDS.has(w));
 
-  if (queryWords.length === 0) return 0.5;
+  if (queryWords.length === 0) return { score: 0.5, collateral_labels: [], primary_boost: false };
 
   const contentLower = content.toLowerCase();
   const headingLower = String(metadata.heading_path ?? metadata.section_heading ?? "").toLowerCase();
 
-  let score = 0.5; // neutral baseline
+  let score = 0.5;
+  const collateral_labels: string[] = [];
 
-  // 1. Heading directly contains query concept words → strong directness signal
-  const headingWords = headingLower.split(/\s+/).filter(w => w.length > 2);
-  if (headingWords.length > 0) {
+  // 1. Heading contains query concept words
+  if (headingLower.length > 0) {
     let headingHits = 0;
     for (const w of queryWords) {
       if (headingLower.includes(w)) headingHits++;
     }
-    const headingCoverage = headingHits / queryWords.length;
-    score += headingCoverage * 0.25;
+    score += (headingHits / queryWords.length) * 0.25;
   }
 
-  // 2. Content opens with query-relevant language (first 200 chars)
+  // 2. Opening contains query-relevant language
   const opening = contentLower.slice(0, 200);
   let openingHits = 0;
   for (const w of queryWords) {
@@ -771,36 +792,54 @@ function computeDirectnessScore(query: string, content: string, metadata: Record
   }
   score += (openingHits / queryWords.length) * 0.15;
 
-  // 3. Contains definition/statement language → primary source
-  for (const sig of DEFINITION_SIGNALS) {
-    if (contentLower.includes(sig)) {
-      score += 0.08;
-      break;
+  // 3. Primary provision detection
+  let primary_boost = false;
+  let primaryBoostTotal = 0;
+  for (const sig of PRIMARY_PROVISION_SIGNALS) {
+    if (sig.pattern.test(contentLower)) {
+      primaryBoostTotal += sig.boost;
     }
+  }
+  primaryBoostTotal = Math.min(0.15, primaryBoostTotal);
+  if (primaryBoostTotal > 0.05) {
+    primary_boost = true;
+    score += primaryBoostTotal;
   }
 
-  // 4. Downstream/appellate content when query is about base concept → penalize
-  let isDownstream = false;
-  for (const sig of DOWNSTREAM_SIGNALS) {
-    if (contentLower.includes(sig)) {
-      isDownstream = true;
-      break;
-    }
-  }
-  // Only penalize if the query doesn't seem to be asking about review/appeal
+  // 4. Collateral provision detection — penalize unless query asks about that topic
   const queryLower = query.toLowerCase();
-  const queryAsksReview = /review|appeal|reopen|reconsider/i.test(queryLower);
-  if (isDownstream && !queryAsksReview) {
-    score -= 0.12;
+  const queryAsksReview = /\b(review|appeal|reopen|reconsider|motion)\b/i.test(queryLower);
+  const queryAsksPenalty = /\b(penalty|sanction|fine|forfeiture)\b/i.test(queryLower);
+  const queryAsksException = /\b(exception|notwithstanding|saving)\b/i.test(queryLower);
+  const queryAsksHistory = /\b(history|amendment|effective date|repeal)\b/i.test(queryLower);
+
+  for (const sig of COLLATERAL_SIGNALS) {
+    if (sig.pattern.test(contentLower)) {
+      const skip =
+        (sig.label === "downstream_review" && queryAsksReview) ||
+        (sig.label === "collateral_procedural" && queryAsksReview) ||
+        (sig.label === "penalty_provision" && queryAsksPenalty) ||
+        (sig.label === "exception_provision" && queryAsksException) ||
+        (sig.label === "editorial_or_historical" && queryAsksHistory);
+
+      if (!skip) {
+        score -= sig.penalty;
+        collateral_labels.push(sig.label);
+      }
+    }
   }
 
-  // 5. Exact query phrase appears in content → strong directness
+  // 5. Exact query phrase in content
   const queryPhrase = queryWords.join(" ");
   if (queryPhrase.length > 6 && contentLower.includes(queryPhrase)) {
     score += 0.1;
   }
 
-  return Math.max(0, Math.min(1, score));
+  return {
+    score: Math.max(0, Math.min(1, score)),
+    collateral_labels,
+    primary_boost,
+  };
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1002,7 +1041,7 @@ function buildCitationLabel(
   return label.length > maxLen ? label.slice(0, maxLen - 1) + "…" : label;
 }
 
-/* ── Records Room composite scoring (v3 — concept-anchor-aware) ── */
+/* ── Records Room composite scoring (v4 — primary-provision-aware) ── */
 
 function scoreCandidate(
   chunk: { similarity: number; content: string; metadata: Record<string, unknown> },
@@ -1019,6 +1058,8 @@ function scoreCandidate(
   exact_phrase_score: number;
   directness_score: number;
   concept_anchor_score: number;
+  collateral_labels: string[];
+  primary_boost: boolean;
 } {
   const lexical_score = computeLexicalScore(query, chunk.content);
   const authority_score = computeAuthorityScore(chunk.metadata);
@@ -1029,11 +1070,10 @@ function scoreCandidate(
   const context_quality = computeInfoQuality(chunk.content);
   const section_match_score = computeSectionMatchScore(query, chunk.content, chunk.metadata);
   const exact_phrase_score = computeExactPhraseScore(query, chunk.content);
-  const directness_score = computeDirectnessScore(query, chunk.content, chunk.metadata);
+  const directnessResult = computeDirectnessScore(query, chunk.content, chunk.metadata);
+  const directness_score = directnessResult.score;
   const concept_anchor_score = computeConceptAnchorScore(query, chunk.content, chunk.metadata);
 
-  // Source-type-aware weight adjustment: statute-like content gets
-  // stronger exactness bias (section + phrase + concept anchor boosted)
   const isStatute = isStatuteLikeContent(chunk.content, chunk.metadata);
   const statuteBias = isStatute ? 1.3 : 1.0;
 
@@ -1055,6 +1095,8 @@ function scoreCandidate(
     composite_score, lexical_score, authority_score, excerpt_density,
     metadata_match, freshness_score, section_match_score, exact_phrase_score,
     directness_score, concept_anchor_score,
+    collateral_labels: directnessResult.collateral_labels,
+    primary_boost: directnessResult.primary_boost,
   };
 }
 
@@ -1476,6 +1518,8 @@ Deno.serve(async (req) => {
         exact_phrase_score: scores.exact_phrase_score,
         directness_score: scores.directness_score,
         concept_anchor_score: scores.concept_anchor_score,
+        collateral_labels: scores.collateral_labels,
+        primary_boost: scores.primary_boost,
         recall_origin: entry.origin,
         bucket: "excluded",
       });
@@ -1531,10 +1575,21 @@ Deno.serve(async (req) => {
       // If the concept anchor score is very low, skip even supporting admission
       const conceptTooWeak = chunk.concept_anchor_score < 0.15;
 
+      // Build descriptive admission reason
+      const buildReason = (base: string): string => {
+        const parts = [base];
+        if (chunk.primary_boost) parts.push("primary_provision_boost");
+        if (chunk.concept_anchor_score >= 0.6) parts.push("concept_central");
+        if (chunk.collateral_labels.length > 0) parts.push(...chunk.collateral_labels.map(l => `${l}_demotion`));
+        parts.push(`anc=${chunk.concept_anchor_score.toFixed(2)}`);
+        parts.push(`dir=${chunk.directness_score.toFixed(2)}`);
+        return parts.join(",");
+      };
+
       if (isNeighborOfStronger) {
         if (!conceptTooWeak && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS && chunk.composite_score >= SUPPORTING_THRESHOLD) {
           chunk.bucket = "supporting_material";
-          chunk.admission_reason = "neighbor_demoted_to_supporting";
+          chunk.admission_reason = buildReason("neighbor_demoted");
           supportingCount++;
           neighborSuppressed++;
         } else {
@@ -1542,12 +1597,25 @@ Deno.serve(async (req) => {
           continue;
         }
       } else if (chunk.composite_score >= STRONG_EVIDENCE_THRESHOLD && strongCount < LIMITS.MAX_STRONG_EVIDENCE) {
-        chunk.bucket = "strong_evidence";
-        chunk.admission_reason = `concept_anchor=${chunk.concept_anchor_score.toFixed(2)}`;
-        strongCount++;
+        // Additional gate: heavily collateral chunks should not be strong evidence
+        // unless concept anchor is very high
+        if (chunk.collateral_labels.length >= 2 && chunk.concept_anchor_score < 0.5) {
+          // Demote to supporting instead
+          if (supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
+            chunk.bucket = "supporting_material";
+            chunk.admission_reason = buildReason("collateral_demoted_from_strong");
+            supportingCount++;
+          } else {
+            continue;
+          }
+        } else {
+          chunk.bucket = "strong_evidence";
+          chunk.admission_reason = buildReason("strong");
+          strongCount++;
+        }
       } else if (!conceptTooWeak && chunk.composite_score >= SUPPORTING_THRESHOLD && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
         chunk.bucket = "supporting_material";
-        chunk.admission_reason = `concept_anchor=${chunk.concept_anchor_score.toFixed(2)},composite=${chunk.composite_score.toFixed(3)}`;
+        chunk.admission_reason = buildReason("supporting");
         supportingCount++;
       } else {
         continue;
@@ -1572,7 +1640,7 @@ Deno.serve(async (req) => {
     // Per-candidate scoring diagnostics for top results
     for (let i = 0; i < Math.min(admitted.length, 5); i++) {
       const a = admitted[i];
-      console.log(`[records-room] Rank #${i + 1} [${a.bucket}] chunk=${a.chunk_id.slice(0, 8)} doc=${a.document_id.slice(0, 8)} ci=${a.chunk_index} | sim=${a.similarity.toFixed(3)} lex=${a.lexical_score.toFixed(3)} sec=${a.section_match_score.toFixed(3)} phr=${a.exact_phrase_score.toFixed(3)} dir=${a.directness_score.toFixed(3)} anc=${a.concept_anchor_score.toFixed(3)} auth=${a.authority_score.toFixed(3)} composite=${a.composite_score.toFixed(4)} origin=${a.recall_origin} reason=${a.admission_reason ?? "n/a"}`);
+      console.log(`[records-room] Rank #${i + 1} [${a.bucket}] chunk=${a.chunk_id.slice(0, 8)} doc=${a.document_id.slice(0, 8)} ci=${a.chunk_index} | sim=${a.similarity.toFixed(3)} lex=${a.lexical_score.toFixed(3)} sec=${a.section_match_score.toFixed(3)} phr=${a.exact_phrase_score.toFixed(3)} dir=${a.directness_score.toFixed(3)} anc=${a.concept_anchor_score.toFixed(3)} auth=${a.authority_score.toFixed(3)} composite=${a.composite_score.toFixed(4)} origin=${a.recall_origin} collateral=[${a.collateral_labels.join(",")}] primary=${a.primary_boost} reason=${a.admission_reason ?? "n/a"}`);
     }
 
     /* ══════════════════════════════════════════════════════════
@@ -1663,7 +1731,7 @@ Deno.serve(async (req) => {
 
     const diagnostics: Record<string, unknown> = {
       intake,
-      ranking_version: "v3_concept_anchor",
+      ranking_version: "v4_primary_provision",
       // Recall diagnostics
       semantic_recall_count: semanticCandidates.length,
       lexical_recall_count: lexicalCandidates.length,
@@ -1690,6 +1758,8 @@ Deno.serve(async (req) => {
         rank: i + 1,
         bucket: a.bucket,
         admission_reason: a.admission_reason ?? "n/a",
+        primary_boost: a.primary_boost,
+        collateral_labels: a.collateral_labels,
         chunk_id: a.chunk_id,
         chunk_index: a.chunk_index,
         document_id: a.document_id,
