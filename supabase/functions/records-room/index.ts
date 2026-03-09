@@ -2108,7 +2108,7 @@ Deno.serve(async (req) => {
           admitted_origins: { semantic: admittedFromSemantic, lexical: admittedFromLexical, both: admittedFromBoth },
           caps_hit_count: caps.hitCount,
           duration_ms: Date.now() - startTime,
-          ranking_version: "v6.1_supporting_cleanup",
+          ranking_version: "v6.2_locality_diversity",
           failure_state,
           filtered_low_info: filteredLowInfo,
           dupe_suppressed: dupeSuppressed,
