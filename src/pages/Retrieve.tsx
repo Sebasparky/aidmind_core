@@ -363,11 +363,14 @@ export default function Retrieve() {
             {(result.strong_evidence.length > 0 || result.supporting_materials.length > 0) && (
               <ResultsRefinement
                 query={storedQuery}
-                strongEvidence={result.strong_evidence}
-                supportingMaterials={result.supporting_materials}
-                hints={result.refinement_hints ?? null}
-                activeMode={refinementMode}
-                onModeChange={setRefinementMode}
+                strongEvidence={baseResult?.strong_evidence ?? result.strong_evidence}
+                supportingMaterials={baseResult?.supporting_materials ?? result.supporting_materials}
+                hints={baseResult?.refinement_hints ?? result.refinement_hints ?? null}
+                activeMode={activeRefinementMode}
+                refining={refining}
+                onRefine={refine}
+                onConfirm={() => {}}
+                onReset={() => refine("none")}
               />
             )}
 
@@ -375,7 +378,7 @@ export default function Retrieve() {
             <ResultsSection
               title="Strong Evidence"
               icon={BookOpen}
-              items={refinedResults.strong}
+              items={strongEvidence}
               startRank={1}
             />
 
@@ -383,8 +386,8 @@ export default function Retrieve() {
             <ResultsSection
               title="Supporting Materials"
               icon={FileText}
-              items={refinedResults.supporting}
-              startRank={(refinedResults.strong.length || 0) + 1}
+              items={supportingMaterials}
+              startRank={strongEvidence.length + 1}
             />
 
             {/* Trust footer */}
