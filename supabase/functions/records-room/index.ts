@@ -1936,7 +1936,7 @@ Deno.serve(async (req) => {
 
     const diagnostics: Record<string, unknown> = {
       intake,
-      ranking_version: "v5_collateral_burden",
+      ranking_version: "v6_cleanliness_adjusted",
       // Recall diagnostics
       semantic_recall_count: semanticCandidates.length,
       lexical_recall_count: lexicalCandidates.length,
@@ -1951,6 +1951,7 @@ Deno.serve(async (req) => {
       scored_count: scored.length,
       dupe_suppressed: dupeSuppressed,
       neighbor_suppressed: neighborSuppressed,
+      same_doc_capped: sameDocCapped,
       admitted_count: admitted.length,
       strong_count: strong_evidence.length,
       supporting_count: supporting_materials.length,
@@ -1978,6 +1979,11 @@ Deno.serve(async (req) => {
         metadata_match: parseFloat(a.metadata_match.toFixed(4)),
         composite_score: parseFloat(a.composite_score.toFixed(4)),
         recall_origin: a.recall_origin,
+        // v6 diagnostic fields
+        cleanliness_penalty: parseFloat(a.cleanliness_penalty.toFixed(4)),
+        clean_primary_bonus: parseFloat(a.clean_primary_bonus.toFixed(4)),
+        mixed_chunk_penalty: parseFloat(a.mixed_chunk_penalty.toFixed(4)),
+        broad_query_bonus: parseFloat(a.broad_query_bonus.toFixed(4)),
       })),
       // Quality metrics
       top_similarity: candidates.length > 0 ? parseFloat(Math.max(...candidates.map(c => c.similarity)).toFixed(4)) : 0,
