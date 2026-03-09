@@ -1471,7 +1471,24 @@ Deno.serve(async (req) => {
           session_id: null,
           event_type: "RETRIEVE_SEARCH",
           serviceName: "records-room",
-          payload: { tenant_id, query_type: intake.query_type, candidate_count: 0, result: "failure", reason_code: "no_matching_materials" },
+          payload: {
+            tenant_id,
+            query_type: intake.query_type,
+            candidate_count: 0,
+            result: "failure",
+            reason_code: "no_matching_materials",
+            ranking_version: "v4_primary_provision",
+            failure_state: "no_matching_materials",
+            semantic_recall: semanticCandidates.length,
+            lexical_recall: lexicalCandidates.length,
+            merged_pool: 0,
+            strong_count: 0,
+            supporting_count: 0,
+            scored_count: 0,
+            admitted_count: 0,
+            top_candidates: [],
+            duration_ms: Date.now() - startTime,
+          },
         });
       } catch { /* non-critical */ }
 
