@@ -1475,6 +1475,7 @@ Deno.serve(async (req) => {
         section_match_score: scores.section_match_score,
         exact_phrase_score: scores.exact_phrase_score,
         directness_score: scores.directness_score,
+        concept_anchor_score: scores.concept_anchor_score,
         recall_origin: entry.origin,
         bucket: "excluded",
       });
