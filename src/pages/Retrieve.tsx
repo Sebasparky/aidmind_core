@@ -364,11 +364,23 @@ export default function Retrieve() {
               </div>
             )}
 
+            {/* Refinement module — between search and results */}
+            {(result.strong_evidence.length > 0 || result.supporting_materials.length > 0) && (
+              <ResultsRefinement
+                query={storedQuery}
+                strongEvidence={result.strong_evidence}
+                supportingMaterials={result.supporting_materials}
+                hints={result.refinement_hints ?? null}
+                activeMode={refinementMode}
+                onModeChange={setRefinementMode}
+              />
+            )}
+
             {/* Strong evidence */}
             <ResultsSection
               title="Strong Evidence"
               icon={BookOpen}
-              items={result.strong_evidence}
+              items={refinedResults.strong}
               startRank={1}
             />
 
@@ -376,12 +388,12 @@ export default function Retrieve() {
             <ResultsSection
               title="Supporting Materials"
               icon={FileText}
-              items={result.supporting_materials}
-              startRank={(result.strong_evidence.length || 0) + 1}
+              items={refinedResults.supporting}
+              startRank={(refinedResults.strong.length || 0) + 1}
             />
 
             {/* Trust footer */}
-            {(result.strong_evidence.length > 0 || result.supporting_materials.length > 0) && (
+            {(refinedResults.strong.length > 0 || refinedResults.supporting.length > 0) && (
               <div className="flex items-start gap-3 rounded-lg border border-border bg-secondary/30 px-5 py-4 mt-4">
                 <Quote className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
                 <p className="text-xs text-muted-foreground leading-relaxed">
