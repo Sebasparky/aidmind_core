@@ -237,7 +237,7 @@ interface RetrieveResponse {
 /* ── Scoring constants ── */
 
 const DEFAULT_MIN_SIMILARITY = 0.25;
-const STRONG_EVIDENCE_THRESHOLD = 0.48;
+const STRONG_EVIDENCE_THRESHOLD = 0.50;
 const SUPPORTING_THRESHOLD = 0.36;
 
 /* ── Scoring weights (Records Room v3 — concept-anchor-aware) ── */
