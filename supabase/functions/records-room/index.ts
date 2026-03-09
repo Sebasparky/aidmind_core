@@ -2186,7 +2186,7 @@ Deno.serve(async (req) => {
             strongPerDoc.set(chunk.document_id, docStrongSoFar + 1);
           }
         }
-      } else if (!conceptTooWeak && chunk.composite_score >= SUPPORTING_THRESHOLD && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
+      } else if (!conceptTooWeak && chunk.composite_score >= effectiveSupportingThreshold && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
         // v6.1: Regular supporting candidates also go through floor check
         if (!tryAdmitSupporting(chunk, "supporting", null)) {
           continue;
