@@ -189,8 +189,10 @@ interface ScoredChunk {
   section_match_score: number;
   exact_phrase_score: number;
   directness_score: number;
+  concept_anchor_score: number;
   recall_origin: RecallOrigin;
   bucket: "strong_evidence" | "supporting_material" | "excluded";
+  admission_reason?: string;
 }
 
 interface EvidenceItem {
