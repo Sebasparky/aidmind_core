@@ -1753,6 +1753,8 @@ Deno.serve(async (req) => {
           lexical_count: lexicalCandidates.length, merged_count: 0,
           caps_hit: caps.all, duration_ms: Date.now() - startTime,
         },
+        refinement_hints: null,
+        refinement_mode: refinementMode,
       };
 
       try {
