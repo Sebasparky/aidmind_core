@@ -813,7 +813,7 @@ function buildCitationLabel(
   return label.length > maxLen ? label.slice(0, maxLen - 1) + "…" : label;
 }
 
-/* ── Records Room composite scoring ── */
+/* ── Records Room composite scoring (v2 — directness-aware) ── */
 
 function scoreCandidate(
   chunk: { similarity: number; content: string; metadata: Record<string, unknown> },
@@ -826,6 +826,9 @@ function scoreCandidate(
   excerpt_density: number;
   metadata_match: number;
   freshness_score: number;
+  section_match_score: number;
+  exact_phrase_score: number;
+  directness_score: number;
 } {
   const lexical_score = computeLexicalScore(query, chunk.content);
   const authority_score = computeAuthorityScore(chunk.metadata);
@@ -834,6 +837,14 @@ function scoreCandidate(
   const metadata_match = computeMetadataMatch(query, chunk.metadata, intake);
   const freshness_score = computeFreshnessScore(chunk.metadata);
   const context_quality = computeInfoQuality(chunk.content);
+  const section_match_score = computeSectionMatchScore(query, chunk.content, chunk.metadata);
+  const exact_phrase_score = computeExactPhraseScore(query, chunk.content);
+  const directness_score = computeDirectnessScore(query, chunk.content, chunk.metadata);
+
+  // Source-type-aware weight adjustment: statute-like content gets
+  // stronger exactness bias (section + phrase weights boosted)
+  const isStatute = isStatuteLikeContent(chunk.content, chunk.metadata);
+  const statuteBias = isStatute ? 1.3 : 1.0;
 
   const composite_score =
     W_SEMANTIC * chunk.similarity +
@@ -843,9 +854,16 @@ function scoreCandidate(
     W_EXCERPT_DENSITY * excerpt_density +
     W_METADATA * metadata_match +
     W_FRESHNESS * freshness_score +
-    W_CONTEXT * context_quality;
+    W_CONTEXT * context_quality +
+    W_SECTION_MATCH * section_match_score * statuteBias +
+    W_EXACT_PHRASE * exact_phrase_score * statuteBias +
+    W_DIRECTNESS * directness_score;
 
-  return { composite_score, lexical_score, authority_score, excerpt_density, metadata_match, freshness_score };
+  return {
+    composite_score, lexical_score, authority_score, excerpt_density,
+    metadata_match, freshness_score, section_match_score, exact_phrase_score,
+    directness_score,
+  };
 }
 
 /* ── Source access URL builders (signed URLs for private buckets) ── */
