@@ -174,6 +174,7 @@ export default function Retrieve() {
   const { query: storedQuery, status, result, error, search, reset } = useRetrieve();
   const [query, setQuery] = useState(storedQuery);
   const [showEval, setShowEval] = useState(false);
+  const [refinementMode, setRefinementMode] = useState<RefinementMode>("none");
 
   const handleExampleClick = useCallback((description: string) => {
     setQuery(description);
