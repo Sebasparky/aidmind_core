@@ -15,8 +15,9 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { useState, useRef, useCallback, lazy, Suspense } from "react";
+import { useState, useRef, useCallback, useMemo, lazy, Suspense } from "react";
 import { useRetrieve, type EvidenceItem } from "@/hooks/useRetrieve";
+import { ResultsRefinement, applyRefinement, type RefinementMode } from "@/components/retrieve/ResultsRefinement";
 
 const IS_DEV = import.meta.env.VITE_DEV_MODE === "true";
 const RetrieveEvalPanel = IS_DEV ? lazy(() => import("@/components/dev/RetrieveEvalPanel")) : null;
@@ -173,6 +174,7 @@ export default function Retrieve() {
   const { query: storedQuery, status, result, error, search, reset } = useRetrieve();
   const [query, setQuery] = useState(storedQuery);
   const [showEval, setShowEval] = useState(false);
+  const [refinementMode, setRefinementMode] = useState<RefinementMode>("none");
 
   const handleExampleClick = useCallback((description: string) => {
     setQuery(description);
@@ -187,6 +189,7 @@ export default function Retrieve() {
 
   const handleSearch = useCallback(() => {
     if (query.trim()) {
+      setRefinementMode("none");
       search(query);
     }
   }, [query, search]);
@@ -200,9 +203,16 @@ export default function Retrieve() {
 
   const handleNewSearch = useCallback(() => {
     setQuery("");
+    setRefinementMode("none");
     reset();
     requestAnimationFrame(() => textareaRef.current?.focus());
   }, [reset]);
+
+  // Apply local refinement to results (no network call)
+  const refinedResults = useMemo(() => {
+    if (!result) return { strong: [], supporting: [] };
+    return applyRefinement(result.strong_evidence, result.supporting_materials, refinementMode);
+  }, [result, refinementMode]);
 
   const isLoading = status === "loading";
   const hasResults = status === "success" || status === "no_results" || status === "clarification_needed";
@@ -354,11 +364,23 @@ export default function Retrieve() {
               </div>
             )}
 
+            {/* Refinement module — between search and results */}
+            {(result.strong_evidence.length > 0 || result.supporting_materials.length > 0) && (
+              <ResultsRefinement
+                query={storedQuery}
+                strongEvidence={result.strong_evidence}
+                supportingMaterials={result.supporting_materials}
+                hints={result.refinement_hints ?? null}
+                activeMode={refinementMode}
+                onModeChange={setRefinementMode}
+              />
+            )}
+
             {/* Strong evidence */}
             <ResultsSection
               title="Strong Evidence"
               icon={BookOpen}
-              items={result.strong_evidence}
+              items={refinedResults.strong}
               startRank={1}
             />
 
@@ -366,12 +388,12 @@ export default function Retrieve() {
             <ResultsSection
               title="Supporting Materials"
               icon={FileText}
-              items={result.supporting_materials}
-              startRank={(result.strong_evidence.length || 0) + 1}
+              items={refinedResults.supporting}
+              startRank={(refinedResults.strong.length || 0) + 1}
             />
 
             {/* Trust footer */}
-            {(result.strong_evidence.length > 0 || result.supporting_materials.length > 0) && (
+            {(refinedResults.strong.length > 0 || refinedResults.supporting.length > 0) && (
               <div className="flex items-start gap-3 rounded-lg border border-border bg-secondary/30 px-5 py-4 mt-4">
                 <Quote className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
                 <p className="text-xs text-muted-foreground leading-relaxed">

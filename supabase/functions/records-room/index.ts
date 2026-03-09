@@ -219,6 +219,26 @@ interface EvidenceItem {
   source_url: string | null;
   /** URL to download the original source document, if available */
   download_url: string | null;
+  /* ── Scoring fields for frontend refinement (no extra AI call) ── */
+  directness_score: number;
+  concept_anchor_score: number;
+  section_match_score: number;
+  exact_phrase_score: number;
+  primary_boost: boolean;
+  collateral_labels: string[];
+  recall_origin: RecallOrigin;
+  chunk_index: number;
+  bucket: "strong_evidence" | "supporting_material";
+}
+
+interface RefinementHints {
+  has_procedural_content: boolean;
+  has_exception_content: boolean;
+  has_notice_deadline_content: boolean;
+  has_review_appeal_content: boolean;
+  has_eligibility_content: boolean;
+  strong_count: number;
+  supporting_count: number;
 }
 
 type FailureState =
@@ -237,6 +257,7 @@ interface RetrieveResponse {
   failure_state: FailureState;
   failure_message: string | null;
   diagnostics: Record<string, unknown>;
+  refinement_hints: RefinementHints | null;
 }
 
 /* ── Scoring constants ── */
@@ -2034,6 +2055,16 @@ Deno.serve(async (req) => {
         composite_score: parseFloat(chunk.composite_score.toFixed(4)),
         source_url: urls.source_url,
         download_url: urls.download_url,
+        // Scoring fields for frontend refinement
+        directness_score: parseFloat(chunk.directness_score.toFixed(4)),
+        concept_anchor_score: parseFloat(chunk.concept_anchor_score.toFixed(4)),
+        section_match_score: parseFloat(chunk.section_match_score.toFixed(4)),
+        exact_phrase_score: parseFloat(chunk.exact_phrase_score.toFixed(4)),
+        primary_boost: chunk.primary_boost,
+        collateral_labels: chunk.collateral_labels,
+        recall_origin: chunk.recall_origin,
+        chunk_index: chunk.chunk_index,
+        bucket: chunk.bucket as "strong_evidence" | "supporting_material",
       };
     }
 
@@ -2208,6 +2239,26 @@ Deno.serve(async (req) => {
       });
     } catch { /* non-critical */ }
 
+    // ── Compute refinement hints deterministically from admitted results ──
+    const allAdmittedContent = admitted.map(c => c.content.toLowerCase()).join(" ");
+    const PROCEDURAL_SIGNALS = ["hearing", "appeal", "file", "submit", "respond", "appear", "motion", "petition"];
+    const EXCEPTION_SIGNALS = ["exception", "waiver", "exempt", "unless", "notwithstanding", "provided that"];
+    const NOTICE_DEADLINE_SIGNALS = ["notice", "deadline", "within", "days", "calendar days", "business days", "must file", "time limit"];
+    const REVIEW_APPEAL_SIGNALS = ["review", "appeal", "reconsideration", "rehearing", "judicial review", "motion to reopen"];
+    const ELIGIBILITY_SIGNALS = ["eligib", "qualifying", "requirements", "criteria", "entitled", "may apply", "shall be eligible"];
+
+    const countSignals = (signals: string[]) => signals.filter(s => allAdmittedContent.includes(s)).length;
+
+    const refinement_hints: RefinementHints = {
+      has_procedural_content: countSignals(PROCEDURAL_SIGNALS) >= 2,
+      has_exception_content: countSignals(EXCEPTION_SIGNALS) >= 1,
+      has_notice_deadline_content: countSignals(NOTICE_DEADLINE_SIGNALS) >= 2,
+      has_review_appeal_content: countSignals(REVIEW_APPEAL_SIGNALS) >= 2,
+      has_eligibility_content: countSignals(ELIGIBILITY_SIGNALS) >= 1,
+      strong_count: strong_evidence.length,
+      supporting_count: supporting_materials.length,
+    };
+
     let response: RetrieveResponse = {
       status,
       query_type: intake.query_type,
@@ -2217,6 +2268,7 @@ Deno.serve(async (req) => {
       failure_state,
       failure_message,
       diagnostics,
+      refinement_hints,
     };
 
     response = enforcePayloadSize(response, caps);

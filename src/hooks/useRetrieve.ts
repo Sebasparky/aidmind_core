@@ -10,6 +10,8 @@ import { useTenant } from "@/hooks/useTenant";
 
 /* ── Types (mirror edge function response) ── */
 
+export type RecallOrigin = "semantic" | "lexical" | "both";
+
 export interface EvidenceItem {
   document_title: string;
   section_heading: string | null;
@@ -25,6 +27,26 @@ export interface EvidenceItem {
   composite_score: number;
   source_url: string | null;
   download_url: string | null;
+  /* Scoring fields for frontend refinement */
+  directness_score: number;
+  concept_anchor_score: number;
+  section_match_score: number;
+  exact_phrase_score: number;
+  primary_boost: boolean;
+  collateral_labels: string[];
+  recall_origin: RecallOrigin;
+  chunk_index: number;
+  bucket: "strong_evidence" | "supporting_material";
+}
+
+export interface RefinementHints {
+  has_procedural_content: boolean;
+  has_exception_content: boolean;
+  has_notice_deadline_content: boolean;
+  has_review_appeal_content: boolean;
+  has_eligibility_content: boolean;
+  strong_count: number;
+  supporting_count: number;
 }
 
 export type RetrieveStatus = "idle" | "loading" | "success" | "no_results" | "clarification_needed" | "error";
@@ -37,6 +59,7 @@ export interface RetrieveResult {
   supporting_materials: EvidenceItem[];
   failure_state: string | null;
   failure_message: string | null;
+  refinement_hints: RefinementHints | null;
 }
 
 /* ── SessionStorage persistence ── */
