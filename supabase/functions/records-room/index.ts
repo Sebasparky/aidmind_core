@@ -1575,10 +1575,21 @@ Deno.serve(async (req) => {
       // If the concept anchor score is very low, skip even supporting admission
       const conceptTooWeak = chunk.concept_anchor_score < 0.15;
 
+      // Build descriptive admission reason
+      const buildReason = (base: string): string => {
+        const parts = [base];
+        if (chunk.primary_boost) parts.push("primary_provision_boost");
+        if (chunk.concept_anchor_score >= 0.6) parts.push("concept_central");
+        if (chunk.collateral_labels.length > 0) parts.push(...chunk.collateral_labels.map(l => `${l}_demotion`));
+        parts.push(`anc=${chunk.concept_anchor_score.toFixed(2)}`);
+        parts.push(`dir=${chunk.directness_score.toFixed(2)}`);
+        return parts.join(",");
+      };
+
       if (isNeighborOfStronger) {
         if (!conceptTooWeak && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS && chunk.composite_score >= SUPPORTING_THRESHOLD) {
           chunk.bucket = "supporting_material";
-          chunk.admission_reason = "neighbor_demoted_to_supporting";
+          chunk.admission_reason = buildReason("neighbor_demoted");
           supportingCount++;
           neighborSuppressed++;
         } else {
@@ -1586,12 +1597,25 @@ Deno.serve(async (req) => {
           continue;
         }
       } else if (chunk.composite_score >= STRONG_EVIDENCE_THRESHOLD && strongCount < LIMITS.MAX_STRONG_EVIDENCE) {
-        chunk.bucket = "strong_evidence";
-        chunk.admission_reason = `concept_anchor=${chunk.concept_anchor_score.toFixed(2)}`;
-        strongCount++;
+        // Additional gate: heavily collateral chunks should not be strong evidence
+        // unless concept anchor is very high
+        if (chunk.collateral_labels.length >= 2 && chunk.concept_anchor_score < 0.5) {
+          // Demote to supporting instead
+          if (supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
+            chunk.bucket = "supporting_material";
+            chunk.admission_reason = buildReason("collateral_demoted_from_strong");
+            supportingCount++;
+          } else {
+            continue;
+          }
+        } else {
+          chunk.bucket = "strong_evidence";
+          chunk.admission_reason = buildReason("strong");
+          strongCount++;
+        }
       } else if (!conceptTooWeak && chunk.composite_score >= SUPPORTING_THRESHOLD && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
         chunk.bucket = "supporting_material";
-        chunk.admission_reason = `concept_anchor=${chunk.concept_anchor_score.toFixed(2)},composite=${chunk.composite_score.toFixed(3)}`;
+        chunk.admission_reason = buildReason("supporting");
         supportingCount++;
       } else {
         continue;
@@ -1616,7 +1640,7 @@ Deno.serve(async (req) => {
     // Per-candidate scoring diagnostics for top results
     for (let i = 0; i < Math.min(admitted.length, 5); i++) {
       const a = admitted[i];
-      console.log(`[records-room] Rank #${i + 1} [${a.bucket}] chunk=${a.chunk_id.slice(0, 8)} doc=${a.document_id.slice(0, 8)} ci=${a.chunk_index} | sim=${a.similarity.toFixed(3)} lex=${a.lexical_score.toFixed(3)} sec=${a.section_match_score.toFixed(3)} phr=${a.exact_phrase_score.toFixed(3)} dir=${a.directness_score.toFixed(3)} anc=${a.concept_anchor_score.toFixed(3)} auth=${a.authority_score.toFixed(3)} composite=${a.composite_score.toFixed(4)} origin=${a.recall_origin} reason=${a.admission_reason ?? "n/a"}`);
+      console.log(`[records-room] Rank #${i + 1} [${a.bucket}] chunk=${a.chunk_id.slice(0, 8)} doc=${a.document_id.slice(0, 8)} ci=${a.chunk_index} | sim=${a.similarity.toFixed(3)} lex=${a.lexical_score.toFixed(3)} sec=${a.section_match_score.toFixed(3)} phr=${a.exact_phrase_score.toFixed(3)} dir=${a.directness_score.toFixed(3)} anc=${a.concept_anchor_score.toFixed(3)} auth=${a.authority_score.toFixed(3)} composite=${a.composite_score.toFixed(4)} origin=${a.recall_origin} collateral=[${a.collateral_labels.join(",")}] primary=${a.primary_boost} reason=${a.admission_reason ?? "n/a"}`);
     }
 
     /* ══════════════════════════════════════════════════════════
