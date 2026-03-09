@@ -195,6 +195,11 @@ interface ScoredChunk {
   recall_origin: RecallOrigin;
   bucket: "strong_evidence" | "supporting_material" | "excluded";
   admission_reason?: string;
+  // v6 diagnostic fields
+  cleanliness_penalty: number;
+  clean_primary_bonus: number;
+  mixed_chunk_penalty: number;
+  broad_query_bonus: number;
 }
 
 interface EvidenceItem {
