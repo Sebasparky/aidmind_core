@@ -2239,6 +2239,26 @@ Deno.serve(async (req) => {
       });
     } catch { /* non-critical */ }
 
+    // ── Compute refinement hints deterministically from admitted results ──
+    const allAdmittedContent = admitted.map(c => c.content.toLowerCase()).join(" ");
+    const PROCEDURAL_SIGNALS = ["hearing", "appeal", "file", "submit", "respond", "appear", "motion", "petition"];
+    const EXCEPTION_SIGNALS = ["exception", "waiver", "exempt", "unless", "notwithstanding", "provided that"];
+    const NOTICE_DEADLINE_SIGNALS = ["notice", "deadline", "within", "days", "calendar days", "business days", "must file", "time limit"];
+    const REVIEW_APPEAL_SIGNALS = ["review", "appeal", "reconsideration", "rehearing", "judicial review", "motion to reopen"];
+    const ELIGIBILITY_SIGNALS = ["eligib", "qualifying", "requirements", "criteria", "entitled", "may apply", "shall be eligible"];
+
+    const countSignals = (signals: string[]) => signals.filter(s => allAdmittedContent.includes(s)).length;
+
+    const refinement_hints: RefinementHints = {
+      has_procedural_content: countSignals(PROCEDURAL_SIGNALS) >= 2,
+      has_exception_content: countSignals(EXCEPTION_SIGNALS) >= 1,
+      has_notice_deadline_content: countSignals(NOTICE_DEADLINE_SIGNALS) >= 2,
+      has_review_appeal_content: countSignals(REVIEW_APPEAL_SIGNALS) >= 2,
+      has_eligibility_content: countSignals(ELIGIBILITY_SIGNALS) >= 1,
+      strong_count: strong_evidence.length,
+      supporting_count: supporting_materials.length,
+    };
+
     let response: RetrieveResponse = {
       status,
       query_type: intake.query_type,
@@ -2248,6 +2268,7 @@ Deno.serve(async (req) => {
       failure_state,
       failure_message,
       diagnostics,
+      refinement_hints,
     };
 
     response = enforcePayloadSize(response, caps);
