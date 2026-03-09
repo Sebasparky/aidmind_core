@@ -1663,7 +1663,7 @@ Deno.serve(async (req) => {
 
     const diagnostics: Record<string, unknown> = {
       intake,
-      ranking_version: "v2_directness_aware",
+      ranking_version: "v3_concept_anchor",
       // Recall diagnostics
       semantic_recall_count: semanticCandidates.length,
       lexical_recall_count: lexicalCandidates.length,
@@ -1689,6 +1689,7 @@ Deno.serve(async (req) => {
       top_candidates: admitted.slice(0, 5).map((a, i) => ({
         rank: i + 1,
         bucket: a.bucket,
+        admission_reason: a.admission_reason ?? "n/a",
         chunk_id: a.chunk_id,
         chunk_index: a.chunk_index,
         document_id: a.document_id,
@@ -1697,6 +1698,7 @@ Deno.serve(async (req) => {
         section_match_score: parseFloat(a.section_match_score.toFixed(4)),
         exact_phrase_score: parseFloat(a.exact_phrase_score.toFixed(4)),
         directness_score: parseFloat(a.directness_score.toFixed(4)),
+        concept_anchor_score: parseFloat(a.concept_anchor_score.toFixed(4)),
         authority_score: parseFloat(a.authority_score.toFixed(4)),
         metadata_match: parseFloat(a.metadata_match.toFixed(4)),
         composite_score: parseFloat(a.composite_score.toFixed(4)),
