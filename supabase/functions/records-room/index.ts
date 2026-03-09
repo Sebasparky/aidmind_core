@@ -1833,6 +1833,14 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── Apply refinement profile if active ──
+    if (activeProfile) {
+      for (const chunk of scored) {
+        chunk.composite_score = applyRefinementProfile(chunk, activeProfile);
+      }
+      console.log(`[records-room] Applied refinement profile: ${refinementMode}`);
+    }
+
     // Cap scored candidates
     if (scored.length > LIMITS.MAX_SCORED_CANDIDATES) {
       caps.record("MAX_SCORED_CANDIDATES", LIMITS.MAX_SCORED_CANDIDATES, scored.length, "capped");
@@ -1841,6 +1849,12 @@ Deno.serve(async (req) => {
     } else {
       scored.sort((a, b) => b.composite_score - a.composite_score);
     }
+
+    // ── Adjust thresholds for broader_related mode ──
+    const effectiveSupportingThreshold = refinementMode === "broader_related"
+      ? SUPPORTING_THRESHOLD - 0.04
+      : SUPPORTING_THRESHOLD;
+    const effectiveStrongThreshold = STRONG_EVIDENCE_THRESHOLD;
 
     // Deduplicate + neighbor suppression + bucket assignment
     const admitted: ScoredChunk[] = [];
