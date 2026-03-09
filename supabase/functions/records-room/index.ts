@@ -270,6 +270,7 @@ interface RetrieveResponse {
   failure_message: string | null;
   diagnostics: Record<string, unknown>;
   refinement_hints: RefinementHints | null;
+  refinement_mode: RefinementMode;
 }
 
 /* ── Scoring constants ── */
