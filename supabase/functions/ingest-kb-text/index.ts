@@ -572,7 +572,7 @@ Deno.serve(async (req) => {
       if (actualChunkCount === 0) {
         const reason = "All batches inserted but verification found 0 rows — possible RLS or constraint issue";
         console.error(`[ingest-kb-text] doc=${document_id} INVARIANT VIOLATION: ${reason}`);
-        await updateIngestionMeta(document_id, {
+        await updateIngestionMeta(supabase, document_id, {
           status: "failed",
           error: reason,
           failed_at: new Date().toISOString(),
