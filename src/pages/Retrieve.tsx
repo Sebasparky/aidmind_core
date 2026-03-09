@@ -9,14 +9,17 @@ import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import {
   Search, FileText, Quote, Scale, ShieldCheck, ArrowRight,
   BookOpen, FileSearch, ChevronDown, ChevronUp, ExternalLink,
-  AlertCircle, Loader2, HelpCircle, Download,
+  AlertCircle, Loader2, HelpCircle, Download, FlaskConical,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, lazy, Suspense } from "react";
 import { useRetrieve, type EvidenceItem } from "@/hooks/useRetrieve";
+
+const IS_DEV = import.meta.env.VITE_DEV_MODE === "true";
+const RetrieveEvalPanel = IS_DEV ? lazy(() => import("@/components/dev/RetrieveEvalPanel")) : null;
 
 const EXAMPLE_QUERIES = [
   {
@@ -169,6 +172,7 @@ export default function Retrieve() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { query: storedQuery, status, result, error, search, reset } = useRetrieve();
   const [query, setQuery] = useState(storedQuery);
+  const [showEval, setShowEval] = useState(false);
 
   const handleExampleClick = useCallback((description: string) => {
     setQuery(description);
@@ -467,6 +471,27 @@ export default function Retrieve() {
               </div>
             </div>
           </>
+        )}
+        {/* Dev-only eval harness toggle */}
+        {IS_DEV && RetrieveEvalPanel && (
+          <div className="w-full max-w-4xl mt-8">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-xs text-muted-foreground"
+              onClick={() => setShowEval(!showEval)}
+            >
+              <FlaskConical className="w-3.5 h-3.5 mr-1" />
+              {showEval ? "Hide" : "Show"} Eval Harness
+            </Button>
+            {showEval && (
+              <Suspense fallback={<p className="text-xs text-muted-foreground p-4">Loading eval harness...</p>}>
+                <div className="mt-3 border border-border rounded-lg p-4 bg-muted/20">
+                  <RetrieveEvalPanel />
+                </div>
+              </Suspense>
+            )}
+          </div>
         )}
       </div>
     </DashboardLayout>
