@@ -400,7 +400,7 @@ Deno.serve(async (req) => {
       // Safety: if checkpoint says more chunks than we actually have, cap it
       if (nextChunkIndex >= totalChunks) {
         console.log(`[ingest-kb-text] doc=${document_id} resume index ${nextChunkIndex} >= total ${totalChunks}, marking ready`);
-        await updateIngestionMeta(document_id, {
+        await updateIngestionMeta(supabase, document_id, {
           status: "ready",
           indexed_chunk_count: totalChunks,
           next_chunk_index: totalChunks,
