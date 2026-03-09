@@ -1731,7 +1731,7 @@ Deno.serve(async (req) => {
 
     const diagnostics: Record<string, unknown> = {
       intake,
-      ranking_version: "v3_concept_anchor",
+      ranking_version: "v4_primary_provision",
       // Recall diagnostics
       semantic_recall_count: semanticCandidates.length,
       lexical_recall_count: lexicalCandidates.length,
@@ -1758,6 +1758,8 @@ Deno.serve(async (req) => {
         rank: i + 1,
         bucket: a.bucket,
         admission_reason: a.admission_reason ?? "n/a",
+        primary_boost: a.primary_boost,
+        collateral_labels: a.collateral_labels,
         chunk_id: a.chunk_id,
         chunk_index: a.chunk_index,
         document_id: a.document_id,
