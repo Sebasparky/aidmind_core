@@ -1935,7 +1935,7 @@ Deno.serve(async (req) => {
           caps_hit_count: caps.hitCount,
           duration_ms: Date.now() - startTime,
           // Rich ranking diagnostics
-          ranking_version: "v4_primary_provision",
+          ranking_version: "v5_collateral_burden",
           failure_state,
           filtered_low_info: filteredLowInfo,
           dupe_suppressed: dupeSuppressed,
