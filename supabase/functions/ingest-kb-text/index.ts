@@ -582,7 +582,7 @@ Deno.serve(async (req) => {
         return json(500, { success: false, error: reason });
       }
 
-      await updateIngestionMeta(document_id, {
+      await updateIngestionMeta(supabase, document_id, {
         status: "ready",
         indexed_chunk_count: actualChunkCount,
         next_chunk_index: totalChunks,
