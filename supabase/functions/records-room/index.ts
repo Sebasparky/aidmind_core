@@ -1894,7 +1894,7 @@ Deno.serve(async (req) => {
       else admittedFromBoth++;
     }
 
-    console.log(`[records-room] Admitted: ${admitted.length} (strong: ${strongCount}, supporting: ${supportingCount}, filtered_low_info: ${filteredLowInfo}, dupe_suppressed: ${dupeSuppressed}, neighbor_suppressed: ${neighborSuppressed}, same_doc_capped: ${sameDocCapped})`);
+    console.log(`[records-room] Admitted: ${admitted.length} (strong: ${strongCount}, supporting: ${supportingCount}, filtered_low_info: ${filteredLowInfo}, dupe_suppressed: ${dupeSuppressed}, neighbor_suppressed: ${neighborSuppressed}, same_doc_capped: ${sameDocCapped}, lexical_supp_excluded: ${lexicalSupportingExcluded}, dominance_excluded: ${dominanceDemotedExcluded}, same_doc_supp_capped: ${sameDocSupportingCapped})`);
     console.log(`[records-room] Admitted origins — semantic: ${admittedFromSemantic}, lexical: ${admittedFromLexical}, both: ${admittedFromBoth}`);
 
     // Per-candidate scoring diagnostics for top results
