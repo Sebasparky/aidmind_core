@@ -472,6 +472,27 @@ export default function Retrieve() {
             </div>
           </>
         )}
+        {/* Dev-only eval harness toggle */}
+        {IS_DEV && RetrieveEvalPanel && (
+          <div className="w-full max-w-4xl mt-8">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-xs text-muted-foreground"
+              onClick={() => setShowEval(!showEval)}
+            >
+              <FlaskConical className="w-3.5 h-3.5 mr-1" />
+              {showEval ? "Hide" : "Show"} Eval Harness
+            </Button>
+            {showEval && (
+              <Suspense fallback={<p className="text-xs text-muted-foreground p-4">Loading eval harness...</p>}>
+                <div className="mt-3 border border-border rounded-lg p-4 bg-muted/20">
+                  <RetrieveEvalPanel />
+                </div>
+              </Suspense>
+            )}
+          </div>
+        )}
       </div>
     </DashboardLayout>
   );
