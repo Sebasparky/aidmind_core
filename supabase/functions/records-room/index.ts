@@ -1633,9 +1633,8 @@ Deno.serve(async (req) => {
     // v6: Track per-document strong-evidence count for diversity cap
     const strongPerDoc = new Map<string, number>();
     const MAX_STRONG_PER_DOC = 2;
-    // v6.1: Track per-document supporting count for diversity
-    const supportingPerDoc = new Map<string, number>();
-    const MAX_SUPPORTING_PER_DOC = 3;
+    // v6.2: Locality-based supporting diversity (replaces per-doc cap)
+    const SUPPORTING_LOCALITY_WINDOW = 5; // ±5 chunk indices = "same local region"
     let strongCount = 0;
     let supportingCount = 0;
     let dupeSuppressed = 0;
@@ -1643,7 +1642,8 @@ Deno.serve(async (req) => {
     let sameDocCapped = 0;
     let lexicalSupportingExcluded = 0;
     let dominanceDemotedExcluded = 0;
-    let sameDocSupportingCapped = 0;
+    let localRedundancyExcluded = 0;
+    let distantSameDocAllowed = 0;
 
     // ── v6.1: Supporting admission helper ──
     // Checks whether a chunk deserves supporting admission beyond just meeting SUPPORTING_THRESHOLD.
