@@ -237,7 +237,7 @@ interface RetrieveResponse {
 /* ── Scoring constants ── */
 
 const DEFAULT_MIN_SIMILARITY = 0.25;
-const STRONG_EVIDENCE_THRESHOLD = 0.48;
+const STRONG_EVIDENCE_THRESHOLD = 0.50;
 const SUPPORTING_THRESHOLD = 0.36;
 
 /* ── Scoring weights (Records Room v3 — concept-anchor-aware) ── */
@@ -359,7 +359,14 @@ function analyzeIntake(query: string): IntakeSignals {
   let needs_clarification = false;
   let clarification_question: string | null = null;
 
-  if (query_type === "ambiguous_short_query" && wordCount < 3 && !likely_domain) {
+  // Check if the query matches a known legal concept phrase — never clarify these
+  const isLegalConcept = LEGAL_CONCEPT_PHRASES.some(p => lower.includes(p));
+  // Also detect plausible legal/policy terms of art: 2+ words with substantive tokens
+  const substantiveTokens = lower.split(/\s+/).filter(w => w.length > 2 && !STOP_WORDS.has(w));
+  const looksLikeTermOfArt = substantiveTokens.length >= 2 || 
+    (wordCount >= 2 && (likely_domain !== null || document_type_signals.length > 0));
+
+  if (query_type === "ambiguous_short_query" && wordCount < 3 && !likely_domain && !isLegalConcept && !looksLikeTermOfArt) {
     needs_clarification = true;
     clarification_question = "Could you provide more detail about what you're looking for? For example, paste the text of a notice or letter, or describe the specific policy or rule you need to find.";
   }
@@ -1477,7 +1484,7 @@ Deno.serve(async (req) => {
             candidate_count: 0,
             result: "failure",
             reason_code: "no_matching_materials",
-            ranking_version: "v4_primary_provision",
+            ranking_version: "v5_collateral_burden",
             failure_state: "no_matching_materials",
             semantic_recall: semanticCandidates.length,
             lexical_recall: lexicalCandidates.length,
@@ -1561,6 +1568,11 @@ Deno.serve(async (req) => {
     let dupeSuppressed = 0;
     let neighborSuppressed = 0;
 
+    // ── Query-intent detection for collateral exemptions ──
+    // If the query explicitly asks about collateral topics, don't over-penalize them
+    const queryLower = query.toLowerCase();
+    const queryAsksCollateral = /\b(appeal|review|reopen|reconsider|motion|judicial review|petition for review|stay of removal|penalty|sanction|fine|exception|notwithstanding|effective date|amendment|history|historical)\b/i.test(queryLower);
+
     for (const chunk of scored) {
       if (admitted.length >= LIMITS.MAX_ADMITTED_CANDIDATES) break;
 
@@ -1592,14 +1604,35 @@ Deno.serve(async (req) => {
       // If the concept anchor score is very low, skip even supporting admission
       const conceptTooWeak = chunk.concept_anchor_score < 0.15;
 
+      // ── Collateral burden computation (v5) ──
+      // Accumulates a penalty based on how many and what type of collateral signals exist
+      let collateralBurden = 0;
+      if (!queryAsksCollateral) {
+        // Each collateral label adds penalty; repeated categories from same family compound
+        const labelFamilies = new Map<string, number>();
+        for (const label of chunk.collateral_labels) {
+          const family = label.replace(/_demotion$/, "").replace(/^(downstream|collateral)_/, "review_procedural");
+          labelFamilies.set(family, (labelFamilies.get(family) ?? 0) + 1);
+        }
+        for (const [, count] of labelFamilies) {
+          collateralBurden += 0.15 * count; // each label in family adds 0.15
+        }
+        // Extra penalty for high label count
+        if (chunk.collateral_labels.length >= 3) collateralBurden += 0.10;
+      }
+
       // Build descriptive admission reason
-      const buildReason = (base: string): string => {
+      const buildReason = (base: string, extras?: Record<string, unknown>): string => {
         const parts = [base];
         if (chunk.primary_boost) parts.push("primary_provision_boost");
         if (chunk.concept_anchor_score >= 0.6) parts.push("concept_central");
         if (chunk.collateral_labels.length > 0) parts.push(...chunk.collateral_labels.map(l => `${l}_demotion`));
+        if (collateralBurden > 0) parts.push(`coll_burden=${collateralBurden.toFixed(2)}`);
         parts.push(`anc=${chunk.concept_anchor_score.toFixed(2)}`);
         parts.push(`dir=${chunk.directness_score.toFixed(2)}`);
+        if (extras) {
+          for (const [k, v] of Object.entries(extras)) parts.push(`${k}=${v}`);
+        }
         return parts.join(",");
       };
 
@@ -1614,49 +1647,97 @@ Deno.serve(async (req) => {
           continue;
         }
       } else if (chunk.composite_score >= STRONG_EVIDENCE_THRESHOLD && strongCount < LIMITS.MAX_STRONG_EVIDENCE) {
-        // ── Strong Evidence centrality gate (v4.1) ──
-        // Strong Evidence must represent primary, central, directly answer-bearing chunks.
-        // Three demotion checks prevent false-positive strong admissions:
+        // ── Strong Evidence admission gates (v5 — collateral-burden-aware) ──
+        // Strong Evidence is reserved for primary, central, directly answer-bearing chunks.
+        // Five demotion checks prevent false-positive strong admissions:
 
-        // Gate 1: Heavily collateral chunks need very high concept anchor
-        const collateralDemote = chunk.collateral_labels.length >= 2 && chunk.concept_anchor_score < 0.5;
+        let strongGateFailReason: string | null = null;
 
-        // Gate 2: Lexical-only recall with weak semantic similarity needs strong centrality proof
-        // Without semantic grounding, phrase overlap alone is not enough
-        const lexicalOnlyWeak =
-          (chunk.recall_origin === "lexical" || chunk.similarity < 0.3) &&
-          !chunk.primary_boost &&
-          chunk.concept_anchor_score < 0.6 &&
-          chunk.directness_score < 0.6;
+        // Gate 1: Heavy collateral burden — 2+ collateral labels without primary boost
+        if (!strongGateFailReason && chunk.collateral_labels.length >= 2 && !chunk.primary_boost) {
+          if (chunk.concept_anchor_score < 0.65) {
+            strongGateFailReason = "heavy_collateral_no_primary";
+          }
+        }
 
-        // Gate 3: No primary boost AND both centrality signals are middling
-        // Prevents composite-score-driven admission when no signal is actually strong
-        const centralityInsufficient =
-          !chunk.primary_boost &&
-          chunk.concept_anchor_score < 0.55 &&
-          chunk.directness_score < 0.55 &&
-          chunk.similarity < 0.35;
+        // Gate 2: Any collateral labels + no primary boost + weak centrality
+        if (!strongGateFailReason && chunk.collateral_labels.length >= 1 && !chunk.primary_boost) {
+          if (chunk.concept_anchor_score < 0.5 && chunk.directness_score < 0.5) {
+            strongGateFailReason = "collateral_weak_centrality";
+          }
+        }
 
-        const shouldDemote = collateralDemote || lexicalOnlyWeak || centralityInsufficient;
+        // Gate 3: Lexical-only recall with weak semantic similarity needs strong centrality proof
+        if (!strongGateFailReason &&
+            (chunk.recall_origin === "lexical" || chunk.similarity < 0.3) &&
+            !chunk.primary_boost &&
+            chunk.concept_anchor_score < 0.6 &&
+            chunk.directness_score < 0.6) {
+          strongGateFailReason = "lexical_only_weak_centrality";
+        }
 
-        if (shouldDemote) {
+        // Gate 4: No primary boost AND both centrality signals are middling
+        if (!strongGateFailReason &&
+            !chunk.primary_boost &&
+            chunk.concept_anchor_score < 0.55 &&
+            chunk.directness_score < 0.55 &&
+            chunk.similarity < 0.35) {
+          strongGateFailReason = "insufficient_centrality";
+        }
+
+        // Gate 5: High collateral burden even with decent scores
+        if (!strongGateFailReason && collateralBurden >= 0.30 && !chunk.primary_boost) {
+          strongGateFailReason = "excessive_collateral_burden";
+        }
+
+        if (strongGateFailReason) {
           // Demote to supporting instead of excluding entirely
           if (supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
-            const demoteReason = collateralDemote
-              ? "collateral_demoted_from_strong"
-              : lexicalOnlyWeak
-                ? "lexical_only_weak_centrality"
-                : "insufficient_centrality";
             chunk.bucket = "supporting_material";
-            chunk.admission_reason = buildReason(demoteReason);
+            chunk.admission_reason = buildReason(strongGateFailReason, { gate: strongGateFailReason });
             supportingCount++;
           } else {
             continue;
           }
         } else {
-          chunk.bucket = "strong_evidence";
-          chunk.admission_reason = buildReason("strong");
-          strongCount++;
+          // ── Clean-primary preference (v5) ──
+          // If a cleaner primary chunk is already admitted as strong, and this chunk
+          // is from the same document neighborhood, prefer the cleaner one.
+          // Check: does an already-admitted strong chunk from same doc dominate this one?
+          let dominatedByCleanerPrimary = false;
+          for (const ak of admitted) {
+            if (ak.bucket !== "strong_evidence") continue;
+            if (ak.document_id !== chunk.document_id) continue;
+            // Same document: compare cleanliness
+            const akCleanliness = (ak.primary_boost ? 0.3 : 0) +
+              ak.concept_anchor_score * 0.3 +
+              ak.directness_score * 0.2 +
+              ak.similarity * 0.2 -
+              ak.collateral_labels.length * 0.1;
+            const chunkCleanliness = (chunk.primary_boost ? 0.3 : 0) +
+              chunk.concept_anchor_score * 0.3 +
+              chunk.directness_score * 0.2 +
+              chunk.similarity * 0.2 -
+              chunk.collateral_labels.length * 0.1;
+            if (akCleanliness > chunkCleanliness + 0.05) {
+              dominatedByCleanerPrimary = true;
+              break;
+            }
+          }
+
+          if (dominatedByCleanerPrimary) {
+            if (supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
+              chunk.bucket = "supporting_material";
+              chunk.admission_reason = buildReason("clean_primary_dominance");
+              supportingCount++;
+            } else {
+              continue;
+            }
+          } else {
+            chunk.bucket = "strong_evidence";
+            chunk.admission_reason = buildReason("strong");
+            strongCount++;
+          }
         }
       } else if (!conceptTooWeak && chunk.composite_score >= SUPPORTING_THRESHOLD && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
         chunk.bucket = "supporting_material";
@@ -1776,7 +1857,7 @@ Deno.serve(async (req) => {
 
     const diagnostics: Record<string, unknown> = {
       intake,
-      ranking_version: "v4_primary_provision",
+      ranking_version: "v5_collateral_burden",
       // Recall diagnostics
       semantic_recall_count: semanticCandidates.length,
       lexical_recall_count: lexicalCandidates.length,
@@ -1854,7 +1935,7 @@ Deno.serve(async (req) => {
           caps_hit_count: caps.hitCount,
           duration_ms: Date.now() - startTime,
           // Rich ranking diagnostics
-          ranking_version: "v4_primary_provision",
+          ranking_version: "v5_collateral_burden",
           failure_state,
           filtered_low_info: filteredLowInfo,
           dupe_suppressed: dupeSuppressed,
