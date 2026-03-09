@@ -203,9 +203,16 @@ export default function Retrieve() {
 
   const handleNewSearch = useCallback(() => {
     setQuery("");
+    setRefinementMode("none");
     reset();
     requestAnimationFrame(() => textareaRef.current?.focus());
   }, [reset]);
+
+  // Apply local refinement to results (no network call)
+  const refinedResults = useMemo(() => {
+    if (!result) return { strong: [], supporting: [] };
+    return applyRefinement(result.strong_evidence, result.supporting_materials, refinementMode);
+  }, [result, refinementMode]);
 
   const isLoading = status === "loading";
   const hasResults = status === "success" || status === "no_results" || status === "clarification_needed";
