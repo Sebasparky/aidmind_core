@@ -1053,7 +1053,7 @@ function buildCitationLabel(
   return label.length > maxLen ? label.slice(0, maxLen - 1) + "…" : label;
 }
 
-/* ── Records Room composite scoring (v4 — primary-provision-aware) ── */
+/* ── Records Room composite scoring (v6 — cleanliness-adjusted) ── */
 
 function scoreCandidate(
   chunk: { similarity: number; content: string; metadata: Record<string, unknown> },
@@ -1072,6 +1072,10 @@ function scoreCandidate(
   concept_anchor_score: number;
   collateral_labels: string[];
   primary_boost: boolean;
+  cleanliness_penalty: number;
+  clean_primary_bonus: number;
+  mixed_chunk_penalty: number;
+  broad_query_bonus: number;
 } {
   const lexical_score = computeLexicalScore(query, chunk.content);
   const authority_score = computeAuthorityScore(chunk.metadata);
@@ -1089,7 +1093,7 @@ function scoreCandidate(
   const isStatute = isStatuteLikeContent(chunk.content, chunk.metadata);
   const statuteBias = isStatute ? 1.3 : 1.0;
 
-  const composite_score =
+  const base_composite =
     W_SEMANTIC * chunk.similarity +
     W_LEXICAL * lexical_score +
     W_AUTHORITY * authority_score +
@@ -1103,12 +1107,66 @@ function scoreCandidate(
     W_DIRECTNESS * directness_score +
     W_CONCEPT_ANCHOR * concept_anchor_score * statuteBias;
 
+  // ── v6: Cleanliness penalty — collateral labels reduce composite directly ──
+  let cleanliness_penalty = 0;
+  if (directnessResult.collateral_labels.length > 0) {
+    const families = new Set(
+      directnessResult.collateral_labels.map(l =>
+        l.replace(/_(demotion|provision|detail)$/, "").replace(/^(downstream|collateral)_/, "")
+      )
+    );
+    // Per-label penalty + per-family penalty + editorial surcharge
+    cleanliness_penalty = 0.025 * directnessResult.collateral_labels.length + 0.015 * families.size;
+    if (directnessResult.collateral_labels.some(l => l.includes("editorial_or_historical"))) {
+      cleanliness_penalty += 0.02;
+    }
+    // 3+ labels: extra compound penalty
+    if (directnessResult.collateral_labels.length >= 3) cleanliness_penalty += 0.015;
+  }
+
+  // ── v6: Clean-primary bonus — reward chunks that are primary + collateral-free ──
+  let clean_primary_bonus = 0;
+  if (directnessResult.primary_boost && directnessResult.collateral_labels.length === 0) {
+    if (directness_score >= 0.5) {
+      clean_primary_bonus = 0.04;
+      if (directness_score >= 0.65) clean_primary_bonus += 0.02;
+      if (concept_anchor_score >= 0.5) clean_primary_bonus += 0.02;
+    }
+  }
+
+  // ── v6: Mixed-chunk penalty — high concept anchor but heavily collateral ──
+  let mixed_chunk_penalty = 0;
+  if (concept_anchor_score >= 0.5 && directnessResult.collateral_labels.length >= 2) {
+    mixed_chunk_penalty = 0.025 * (directnessResult.collateral_labels.length - 1);
+    if (directness_score < 0.6) mixed_chunk_penalty += 0.02;
+  }
+
+  // ── v6: Broad-query directness bonus — broader concept queries favor governing clarity ──
+  let broad_query_bonus = 0;
+  const queryHasSectionRefs = extractSectionRefs(query).length > 0;
+  const isBroadConceptQuery = !queryHasSectionRefs &&
+    (intake.query_type === "broad_topic_query" || intake.query_type === "ambiguous_short_query");
+  if (isBroadConceptQuery && directness_score >= 0.55) {
+    // Extra weight on directness for broad queries
+    broad_query_bonus = (directness_score - 0.5) * 0.08;
+    // Additional bonus for clean primary provisions on broad queries
+    if (directnessResult.primary_boost && directnessResult.collateral_labels.length === 0) {
+      broad_query_bonus += 0.02;
+    }
+  }
+
+  const composite_score = base_composite - cleanliness_penalty + clean_primary_bonus - mixed_chunk_penalty + broad_query_bonus;
+
   return {
     composite_score, lexical_score, authority_score, excerpt_density,
     metadata_match, freshness_score, section_match_score, exact_phrase_score,
     directness_score, concept_anchor_score,
     collateral_labels: directnessResult.collateral_labels,
     primary_boost: directnessResult.primary_boost,
+    cleanliness_penalty,
+    clean_primary_bonus,
+    mixed_chunk_penalty,
+    broad_query_bonus,
   };
 }
 
