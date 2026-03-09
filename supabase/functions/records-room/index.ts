@@ -804,6 +804,107 @@ function computeDirectnessScore(query: string, content: string, metadata: Record
 }
 
 /* ═══════════════════════════════════════════════════════════════
+ *  CONCEPT ANCHOR SCORING (v3)
+ *
+ *  Measures how central the query's main concept is to a chunk.
+ *  This is the strongest signal for "is this chunk actually about
+ *  what the user asked for, or merely nearby?"
+ *
+ *  Signals:
+ *    - Does the main concept phrase appear at all?
+ *    - How many times does it appear?
+ *    - Does it appear in the first 300 chars (opening)?
+ *    - Does it appear in heading metadata?
+ *    - Are there close variants present?
+ *
+ *  Also applies an irrelevance penalty: if the chunk matches
+ *  only weak secondary terms but misses the main concept entirely,
+ *  the score is actively penalized.
+ * ═══════════════════════════════════════════════════════════════ */
+
+function computeConceptAnchorScore(query: string, content: string, metadata: Record<string, unknown>): number {
+  const concepts = extractConceptPhrases(query);
+  const contentLower = content.toLowerCase();
+  const headingLower = String(metadata.heading_path ?? metadata.section_heading ?? "").toLowerCase();
+
+  // If we have known legal phrases from the query, use them as anchors
+  if (concepts.legal.length > 0) {
+    let score = 0;
+
+    for (const phrase of concepts.legal) {
+      const phrasePresent = contentLower.includes(phrase);
+      const phraseInHeading = headingLower.includes(phrase);
+      const phraseInOpening = contentLower.slice(0, 300).includes(phrase);
+
+      if (!phrasePresent) {
+        // Main concept phrase completely absent — strong penalty
+        score -= 0.3;
+        continue;
+      }
+
+      // Count occurrences
+      let count = 0;
+      let searchFrom = 0;
+      while (true) {
+        const idx = contentLower.indexOf(phrase, searchFrom);
+        if (idx === -1) break;
+        count++;
+        searchFrom = idx + phrase.length;
+      }
+
+      // Base: present
+      score += 0.4;
+      // In heading: strong signal
+      if (phraseInHeading) score += 0.25;
+      // In opening: strong signal
+      if (phraseInOpening) score += 0.15;
+      // Multiple occurrences: content is focused on this concept
+      if (count >= 3) score += 0.15;
+      else if (count >= 2) score += 0.08;
+    }
+
+    // Normalize by number of legal phrases
+    score = score / concepts.legal.length;
+    return Math.max(0, Math.min(1, score + 0.1)); // slight positive baseline offset
+  }
+
+  // No known legal phrases — use content-word overlap as a weaker concept anchor
+  const queryWords = query.toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .filter(w => w.length > 3 && !STOP_WORDS.has(w));
+
+  if (queryWords.length === 0) return 0.5;
+
+  let hits = 0;
+  let openingHits = 0;
+  let headingHits = 0;
+  const opening = contentLower.slice(0, 300);
+
+  for (const w of queryWords) {
+    if (contentLower.includes(w)) hits++;
+    if (opening.includes(w)) openingHits++;
+    if (headingLower.includes(w)) headingHits++;
+  }
+
+  const coverage = hits / queryWords.length;
+  const openingCoverage = openingHits / queryWords.length;
+  const headingCoverage = headingHits / queryWords.length;
+
+  // If less than half the query words appear, penalize
+  if (coverage < 0.5) {
+    return Math.max(0, coverage * 0.4);
+  }
+
+  return Math.min(1,
+    coverage * 0.45 +
+    openingCoverage * 0.25 +
+    headingCoverage * 0.2 +
+    0.1 // baseline
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
  *  SOURCE TYPE DETECTION
  *
  *  Detects whether content is statute-like (exact matching matters
@@ -901,7 +1002,7 @@ function buildCitationLabel(
   return label.length > maxLen ? label.slice(0, maxLen - 1) + "…" : label;
 }
 
-/* ── Records Room composite scoring (v2 — directness-aware) ── */
+/* ── Records Room composite scoring (v3 — concept-anchor-aware) ── */
 
 function scoreCandidate(
   chunk: { similarity: number; content: string; metadata: Record<string, unknown> },
@@ -917,6 +1018,7 @@ function scoreCandidate(
   section_match_score: number;
   exact_phrase_score: number;
   directness_score: number;
+  concept_anchor_score: number;
 } {
   const lexical_score = computeLexicalScore(query, chunk.content);
   const authority_score = computeAuthorityScore(chunk.metadata);
@@ -928,9 +1030,10 @@ function scoreCandidate(
   const section_match_score = computeSectionMatchScore(query, chunk.content, chunk.metadata);
   const exact_phrase_score = computeExactPhraseScore(query, chunk.content);
   const directness_score = computeDirectnessScore(query, chunk.content, chunk.metadata);
+  const concept_anchor_score = computeConceptAnchorScore(query, chunk.content, chunk.metadata);
 
   // Source-type-aware weight adjustment: statute-like content gets
-  // stronger exactness bias (section + phrase weights boosted)
+  // stronger exactness bias (section + phrase + concept anchor boosted)
   const isStatute = isStatuteLikeContent(chunk.content, chunk.metadata);
   const statuteBias = isStatute ? 1.3 : 1.0;
 
@@ -945,12 +1048,13 @@ function scoreCandidate(
     W_CONTEXT * context_quality +
     W_SECTION_MATCH * section_match_score * statuteBias +
     W_EXACT_PHRASE * exact_phrase_score * statuteBias +
-    W_DIRECTNESS * directness_score;
+    W_DIRECTNESS * directness_score +
+    W_CONCEPT_ANCHOR * concept_anchor_score * statuteBias;
 
   return {
     composite_score, lexical_score, authority_score, excerpt_density,
     metadata_match, freshness_score, section_match_score, exact_phrase_score,
-    directness_score,
+    directness_score, concept_anchor_score,
   };
 }
 
