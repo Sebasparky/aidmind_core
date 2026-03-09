@@ -195,6 +195,11 @@ interface ScoredChunk {
   recall_origin: RecallOrigin;
   bucket: "strong_evidence" | "supporting_material" | "excluded";
   admission_reason?: string;
+  // v6 diagnostic fields
+  cleanliness_penalty: number;
+  clean_primary_bonus: number;
+  mixed_chunk_penalty: number;
+  broad_query_bonus: number;
 }
 
 interface EvidenceItem {
@@ -1048,7 +1053,7 @@ function buildCitationLabel(
   return label.length > maxLen ? label.slice(0, maxLen - 1) + "…" : label;
 }
 
-/* ── Records Room composite scoring (v4 — primary-provision-aware) ── */
+/* ── Records Room composite scoring (v6 — cleanliness-adjusted) ── */
 
 function scoreCandidate(
   chunk: { similarity: number; content: string; metadata: Record<string, unknown> },
@@ -1067,6 +1072,10 @@ function scoreCandidate(
   concept_anchor_score: number;
   collateral_labels: string[];
   primary_boost: boolean;
+  cleanliness_penalty: number;
+  clean_primary_bonus: number;
+  mixed_chunk_penalty: number;
+  broad_query_bonus: number;
 } {
   const lexical_score = computeLexicalScore(query, chunk.content);
   const authority_score = computeAuthorityScore(chunk.metadata);
@@ -1084,7 +1093,7 @@ function scoreCandidate(
   const isStatute = isStatuteLikeContent(chunk.content, chunk.metadata);
   const statuteBias = isStatute ? 1.3 : 1.0;
 
-  const composite_score =
+  const base_composite =
     W_SEMANTIC * chunk.similarity +
     W_LEXICAL * lexical_score +
     W_AUTHORITY * authority_score +
@@ -1098,12 +1107,66 @@ function scoreCandidate(
     W_DIRECTNESS * directness_score +
     W_CONCEPT_ANCHOR * concept_anchor_score * statuteBias;
 
+  // ── v6: Cleanliness penalty — collateral labels reduce composite directly ──
+  let cleanliness_penalty = 0;
+  if (directnessResult.collateral_labels.length > 0) {
+    const families = new Set(
+      directnessResult.collateral_labels.map(l =>
+        l.replace(/_(demotion|provision|detail)$/, "").replace(/^(downstream|collateral)_/, "")
+      )
+    );
+    // Per-label penalty + per-family penalty + editorial surcharge
+    cleanliness_penalty = 0.025 * directnessResult.collateral_labels.length + 0.015 * families.size;
+    if (directnessResult.collateral_labels.some(l => l.includes("editorial_or_historical"))) {
+      cleanliness_penalty += 0.02;
+    }
+    // 3+ labels: extra compound penalty
+    if (directnessResult.collateral_labels.length >= 3) cleanliness_penalty += 0.015;
+  }
+
+  // ── v6: Clean-primary bonus — reward chunks that are primary + collateral-free ──
+  let clean_primary_bonus = 0;
+  if (directnessResult.primary_boost && directnessResult.collateral_labels.length === 0) {
+    if (directness_score >= 0.5) {
+      clean_primary_bonus = 0.04;
+      if (directness_score >= 0.65) clean_primary_bonus += 0.02;
+      if (concept_anchor_score >= 0.5) clean_primary_bonus += 0.02;
+    }
+  }
+
+  // ── v6: Mixed-chunk penalty — high concept anchor but heavily collateral ──
+  let mixed_chunk_penalty = 0;
+  if (concept_anchor_score >= 0.5 && directnessResult.collateral_labels.length >= 2) {
+    mixed_chunk_penalty = 0.025 * (directnessResult.collateral_labels.length - 1);
+    if (directness_score < 0.6) mixed_chunk_penalty += 0.02;
+  }
+
+  // ── v6: Broad-query directness bonus — broader concept queries favor governing clarity ──
+  let broad_query_bonus = 0;
+  const queryHasSectionRefs = extractSectionRefs(query).length > 0;
+  const isBroadConceptQuery = !queryHasSectionRefs &&
+    (intake.query_type === "broad_topic_query" || intake.query_type === "ambiguous_short_query");
+  if (isBroadConceptQuery && directness_score >= 0.55) {
+    // Extra weight on directness for broad queries
+    broad_query_bonus = (directness_score - 0.5) * 0.08;
+    // Additional bonus for clean primary provisions on broad queries
+    if (directnessResult.primary_boost && directnessResult.collateral_labels.length === 0) {
+      broad_query_bonus += 0.02;
+    }
+  }
+
+  const composite_score = base_composite - cleanliness_penalty + clean_primary_bonus - mixed_chunk_penalty + broad_query_bonus;
+
   return {
     composite_score, lexical_score, authority_score, excerpt_density,
     metadata_match, freshness_score, section_match_score, exact_phrase_score,
     directness_score, concept_anchor_score,
     collateral_labels: directnessResult.collateral_labels,
     primary_boost: directnessResult.primary_boost,
+    cleanliness_penalty,
+    clean_primary_bonus,
+    mixed_chunk_penalty,
+    broad_query_bonus,
   };
 }
 
@@ -1546,6 +1609,10 @@ Deno.serve(async (req) => {
         primary_boost: scores.primary_boost,
         recall_origin: entry.origin,
         bucket: "excluded",
+        cleanliness_penalty: scores.cleanliness_penalty,
+        clean_primary_bonus: scores.clean_primary_bonus,
+        mixed_chunk_penalty: scores.mixed_chunk_penalty,
+        broad_query_bonus: scores.broad_query_bonus,
       });
     }
 
@@ -1563,10 +1630,14 @@ Deno.serve(async (req) => {
     const admittedTokenSets: Set<string>[] = [];
     // Track admitted (document_id, chunk_index) for neighbor suppression
     const admittedChunkKeys: { document_id: string; chunk_index: number }[] = [];
+    // v6: Track per-document strong-evidence count for diversity cap
+    const strongPerDoc = new Map<string, number>();
+    const MAX_STRONG_PER_DOC = 2;
     let strongCount = 0;
     let supportingCount = 0;
     let dupeSuppressed = 0;
     let neighborSuppressed = 0;
+    let sameDocCapped = 0;
 
     // ── Query-intent detection for collateral exemptions ──
     // If the query explicitly asks about collateral topics, don't over-penalize them
@@ -1588,13 +1659,11 @@ Deno.serve(async (req) => {
       }
       if (isDupe) continue;
 
-      // Neighbor-chunk suppression: if a chunk from the same document
-      // with adjacent chunk_index is already admitted with a higher score,
-      // demote this one (still allow it as supporting, but not strong)
+      // v6: Neighbor-chunk suppression with wider ±2 window
       let isNeighborOfStronger = false;
       for (const ak of admittedChunkKeys) {
         if (ak.document_id === chunk.document_id &&
-            Math.abs(ak.chunk_index - chunk.chunk_index) <= 1) {
+            Math.abs(ak.chunk_index - chunk.chunk_index) <= 2) {
           isNeighborOfStronger = true;
           break;
         }
@@ -1647,11 +1716,16 @@ Deno.serve(async (req) => {
           continue;
         }
       } else if (chunk.composite_score >= STRONG_EVIDENCE_THRESHOLD && strongCount < LIMITS.MAX_STRONG_EVIDENCE) {
-        // ── Strong Evidence admission gates (v5 — collateral-burden-aware) ──
-        // Strong Evidence is reserved for primary, central, directly answer-bearing chunks.
-        // Five demotion checks prevent false-positive strong admissions:
+        // ── Strong Evidence admission gates (v6 — cleanliness-in-composite) ──
 
         let strongGateFailReason: string | null = null;
+
+        // v6: Same-document strong cap — prevent one document region from flooding strong
+        const docStrongSoFar = strongPerDoc.get(chunk.document_id) ?? 0;
+        if (docStrongSoFar >= MAX_STRONG_PER_DOC) {
+          strongGateFailReason = "same_doc_strong_cap";
+          sameDocCapped++;
+        }
 
         // Gate 1: Heavy collateral burden — 2+ collateral labels without primary boost
         if (!strongGateFailReason && chunk.collateral_labels.length >= 2 && !chunk.primary_boost) {
@@ -1660,14 +1734,21 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Gate 2: Any collateral labels + no primary boost + weak centrality
+        // Gate 2: Primary boost BUT heavy collateral — mixed chunks need very high directness
+        if (!strongGateFailReason && chunk.collateral_labels.length >= 2 && chunk.primary_boost) {
+          if (chunk.directness_score < 0.65 && chunk.concept_anchor_score < 0.75) {
+            strongGateFailReason = "mixed_primary_heavy_collateral";
+          }
+        }
+
+        // Gate 3: Any collateral labels + no primary boost + weak centrality
         if (!strongGateFailReason && chunk.collateral_labels.length >= 1 && !chunk.primary_boost) {
           if (chunk.concept_anchor_score < 0.5 && chunk.directness_score < 0.5) {
             strongGateFailReason = "collateral_weak_centrality";
           }
         }
 
-        // Gate 3: Lexical-only recall with weak semantic similarity needs strong centrality proof
+        // Gate 4: Lexical-only recall with weak semantic similarity needs strong centrality proof
         if (!strongGateFailReason &&
             (chunk.recall_origin === "lexical" || chunk.similarity < 0.3) &&
             !chunk.primary_boost &&
@@ -1676,7 +1757,7 @@ Deno.serve(async (req) => {
           strongGateFailReason = "lexical_only_weak_centrality";
         }
 
-        // Gate 4: No primary boost AND both centrality signals are middling
+        // Gate 5: No primary boost AND both centrality signals are middling
         if (!strongGateFailReason &&
             !chunk.primary_boost &&
             chunk.concept_anchor_score < 0.55 &&
@@ -1685,7 +1766,7 @@ Deno.serve(async (req) => {
           strongGateFailReason = "insufficient_centrality";
         }
 
-        // Gate 5: High collateral burden even with decent scores
+        // Gate 6: High collateral burden even with decent scores
         if (!strongGateFailReason && collateralBurden >= 0.30 && !chunk.primary_boost) {
           strongGateFailReason = "excessive_collateral_burden";
         }
@@ -1700,10 +1781,7 @@ Deno.serve(async (req) => {
             continue;
           }
         } else {
-          // ── Clean-primary preference (v5) ──
-          // If a cleaner primary chunk is already admitted as strong, and this chunk
-          // is from the same document neighborhood, prefer the cleaner one.
-          // Check: does an already-admitted strong chunk from same doc dominate this one?
+          // ── Clean-primary preference (v6 — enhanced) ──
           let dominatedByCleanerPrimary = false;
           for (const ak of admitted) {
             if (ak.bucket !== "strong_evidence") continue;
@@ -1713,12 +1791,12 @@ Deno.serve(async (req) => {
               ak.concept_anchor_score * 0.3 +
               ak.directness_score * 0.2 +
               ak.similarity * 0.2 -
-              ak.collateral_labels.length * 0.1;
+              ak.collateral_labels.length * 0.15;
             const chunkCleanliness = (chunk.primary_boost ? 0.3 : 0) +
               chunk.concept_anchor_score * 0.3 +
               chunk.directness_score * 0.2 +
               chunk.similarity * 0.2 -
-              chunk.collateral_labels.length * 0.1;
+              chunk.collateral_labels.length * 0.15;
             if (akCleanliness > chunkCleanliness + 0.05) {
               dominatedByCleanerPrimary = true;
               break;
@@ -1737,6 +1815,7 @@ Deno.serve(async (req) => {
             chunk.bucket = "strong_evidence";
             chunk.admission_reason = buildReason("strong");
             strongCount++;
+            strongPerDoc.set(chunk.document_id, docStrongSoFar + 1);
           }
         }
       } else if (!conceptTooWeak && chunk.composite_score >= SUPPORTING_THRESHOLD && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
@@ -1760,13 +1839,13 @@ Deno.serve(async (req) => {
       else admittedFromBoth++;
     }
 
-    console.log(`[records-room] Admitted: ${admitted.length} (strong: ${strongCount}, supporting: ${supportingCount}, filtered_low_info: ${filteredLowInfo}, dupe_suppressed: ${dupeSuppressed}, neighbor_suppressed: ${neighborSuppressed})`);
+    console.log(`[records-room] Admitted: ${admitted.length} (strong: ${strongCount}, supporting: ${supportingCount}, filtered_low_info: ${filteredLowInfo}, dupe_suppressed: ${dupeSuppressed}, neighbor_suppressed: ${neighborSuppressed}, same_doc_capped: ${sameDocCapped})`);
     console.log(`[records-room] Admitted origins — semantic: ${admittedFromSemantic}, lexical: ${admittedFromLexical}, both: ${admittedFromBoth}`);
 
     // Per-candidate scoring diagnostics for top results
     for (let i = 0; i < Math.min(admitted.length, 5); i++) {
       const a = admitted[i];
-      console.log(`[records-room] Rank #${i + 1} [${a.bucket}] chunk=${a.chunk_id.slice(0, 8)} doc=${a.document_id.slice(0, 8)} ci=${a.chunk_index} | sim=${a.similarity.toFixed(3)} lex=${a.lexical_score.toFixed(3)} sec=${a.section_match_score.toFixed(3)} phr=${a.exact_phrase_score.toFixed(3)} dir=${a.directness_score.toFixed(3)} anc=${a.concept_anchor_score.toFixed(3)} auth=${a.authority_score.toFixed(3)} composite=${a.composite_score.toFixed(4)} origin=${a.recall_origin} collateral=[${a.collateral_labels.join(",")}] primary=${a.primary_boost} reason=${a.admission_reason ?? "n/a"}`);
+      console.log(`[records-room] Rank #${i + 1} [${a.bucket}] chunk=${a.chunk_id.slice(0, 8)} ci=${a.chunk_index} | sim=${a.similarity.toFixed(3)} lex=${a.lexical_score.toFixed(3)} dir=${a.directness_score.toFixed(3)} anc=${a.concept_anchor_score.toFixed(3)} composite=${a.composite_score.toFixed(4)} clean_pen=${a.cleanliness_penalty.toFixed(3)} clean_bon=${a.clean_primary_bonus.toFixed(3)} mix_pen=${a.mixed_chunk_penalty.toFixed(3)} broad=${a.broad_query_bonus.toFixed(3)} collateral=[${a.collateral_labels.join(",")}] primary=${a.primary_boost} reason=${a.admission_reason ?? "n/a"}`);
     }
 
     /* ══════════════════════════════════════════════════════════
@@ -1857,7 +1936,7 @@ Deno.serve(async (req) => {
 
     const diagnostics: Record<string, unknown> = {
       intake,
-      ranking_version: "v5_collateral_burden",
+      ranking_version: "v6_cleanliness_adjusted",
       // Recall diagnostics
       semantic_recall_count: semanticCandidates.length,
       lexical_recall_count: lexicalCandidates.length,
@@ -1872,6 +1951,7 @@ Deno.serve(async (req) => {
       scored_count: scored.length,
       dupe_suppressed: dupeSuppressed,
       neighbor_suppressed: neighborSuppressed,
+      same_doc_capped: sameDocCapped,
       admitted_count: admitted.length,
       strong_count: strong_evidence.length,
       supporting_count: supporting_materials.length,
@@ -1899,6 +1979,11 @@ Deno.serve(async (req) => {
         metadata_match: parseFloat(a.metadata_match.toFixed(4)),
         composite_score: parseFloat(a.composite_score.toFixed(4)),
         recall_origin: a.recall_origin,
+        // v6 diagnostic fields
+        cleanliness_penalty: parseFloat(a.cleanliness_penalty.toFixed(4)),
+        clean_primary_bonus: parseFloat(a.clean_primary_bonus.toFixed(4)),
+        mixed_chunk_penalty: parseFloat(a.mixed_chunk_penalty.toFixed(4)),
+        broad_query_bonus: parseFloat(a.broad_query_bonus.toFixed(4)),
       })),
       // Quality metrics
       top_similarity: candidates.length > 0 ? parseFloat(Math.max(...candidates.map(c => c.similarity)).toFixed(4)) : 0,
@@ -1925,7 +2010,6 @@ Deno.serve(async (req) => {
           tenant_id,
           query_type: intake.query_type,
           result: strong_evidence.length > 0 ? "success" : supporting_materials.length > 0 ? "partial" : "failure",
-          // Existing summary fields
           semantic_recall: semanticCandidates.length,
           lexical_recall: lexicalCandidates.length,
           merged_pool: mergedCount,
@@ -1934,12 +2018,12 @@ Deno.serve(async (req) => {
           admitted_origins: { semantic: admittedFromSemantic, lexical: admittedFromLexical, both: admittedFromBoth },
           caps_hit_count: caps.hitCount,
           duration_ms: Date.now() - startTime,
-          // Rich ranking diagnostics
-          ranking_version: "v5_collateral_burden",
+          ranking_version: "v6_cleanliness_adjusted",
           failure_state,
           filtered_low_info: filteredLowInfo,
           dupe_suppressed: dupeSuppressed,
           neighbor_suppressed: neighborSuppressed,
+          same_doc_capped: sameDocCapped,
           scored_count: scored.length,
           admitted_count: admitted.length,
           top_similarity: candidates.length > 0 ? parseFloat(Math.max(...candidates.map(c => c.similarity)).toFixed(4)) : 0,
@@ -1965,6 +2049,10 @@ Deno.serve(async (req) => {
             metadata_match: parseFloat(a.metadata_match.toFixed(4)),
             composite_score: parseFloat(a.composite_score.toFixed(4)),
             recall_origin: a.recall_origin,
+            cleanliness_penalty: parseFloat(a.cleanliness_penalty.toFixed(4)),
+            clean_primary_bonus: parseFloat(a.clean_primary_bonus.toFixed(4)),
+            mixed_chunk_penalty: parseFloat(a.mixed_chunk_penalty.toFixed(4)),
+            broad_query_bonus: parseFloat(a.broad_query_bonus.toFixed(4)),
           })),
         },
       });
