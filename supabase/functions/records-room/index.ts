@@ -1903,10 +1903,11 @@ Deno.serve(async (req) => {
       ) - recallPenalty;
     };
 
-    // Minimum supporting usefulness thresholds
-    const MIN_SUPPORTING_USEFULNESS = 0.35; // general floor
-    const MIN_SUPPORTING_USEFULNESS_LEXICAL = 0.42; // stricter for lexical-only
-    const MIN_SUPPORTING_USEFULNESS_DEMOTED = 0.40; // stricter for dominance-demoted
+    // Minimum supporting usefulness thresholds — adjusted by refinement profile
+    const profileAdmissionBonus = activeProfile?.supporting_admission_bonus ?? 0;
+    const MIN_SUPPORTING_USEFULNESS = Math.max(0.15, 0.35 + profileAdmissionBonus);
+    const MIN_SUPPORTING_USEFULNESS_LEXICAL = Math.max(0.20, 0.42 + profileAdmissionBonus);
+    const MIN_SUPPORTING_USEFULNESS_DEMOTED = Math.max(0.20, 0.40 + profileAdmissionBonus);
 
     // ── v6.3: Supporting admission helper — usefulness + locality ──
     // Returns null if admitted, or a reason string if excluded.
