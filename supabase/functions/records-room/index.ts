@@ -1614,13 +1614,41 @@ Deno.serve(async (req) => {
           continue;
         }
       } else if (chunk.composite_score >= STRONG_EVIDENCE_THRESHOLD && strongCount < LIMITS.MAX_STRONG_EVIDENCE) {
-        // Additional gate: heavily collateral chunks should not be strong evidence
-        // unless concept anchor is very high
-        if (chunk.collateral_labels.length >= 2 && chunk.concept_anchor_score < 0.5) {
-          // Demote to supporting instead
+        // ── Strong Evidence centrality gate (v4.1) ──
+        // Strong Evidence must represent primary, central, directly answer-bearing chunks.
+        // Three demotion checks prevent false-positive strong admissions:
+
+        // Gate 1: Heavily collateral chunks need very high concept anchor
+        const collateralDemote = chunk.collateral_labels.length >= 2 && chunk.concept_anchor_score < 0.5;
+
+        // Gate 2: Lexical-only recall with weak semantic similarity needs strong centrality proof
+        // Without semantic grounding, phrase overlap alone is not enough
+        const lexicalOnlyWeak =
+          (chunk.recall_origin === "lexical" || chunk.similarity < 0.3) &&
+          !chunk.primary_boost &&
+          chunk.concept_anchor_score < 0.6 &&
+          chunk.directness_score < 0.6;
+
+        // Gate 3: No primary boost AND both centrality signals are middling
+        // Prevents composite-score-driven admission when no signal is actually strong
+        const centralityInsufficient =
+          !chunk.primary_boost &&
+          chunk.concept_anchor_score < 0.55 &&
+          chunk.directness_score < 0.55 &&
+          chunk.similarity < 0.35;
+
+        const shouldDemote = collateralDemote || lexicalOnlyWeak || centralityInsufficient;
+
+        if (shouldDemote) {
+          // Demote to supporting instead of excluding entirely
           if (supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
+            const demoteReason = collateralDemote
+              ? "collateral_demoted_from_strong"
+              : lexicalOnlyWeak
+                ? "lexical_only_weak_centrality"
+                : "insufficient_centrality";
             chunk.bucket = "supporting_material";
-            chunk.admission_reason = buildReason("collateral_demoted_from_strong");
+            chunk.admission_reason = buildReason(demoteReason);
             supportingCount++;
           } else {
             continue;
