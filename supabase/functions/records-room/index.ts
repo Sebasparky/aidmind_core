@@ -1297,16 +1297,20 @@ Deno.serve(async (req) => {
       scored.sort((a, b) => b.composite_score - a.composite_score);
     }
 
-    // Deduplicate + bucket assignment
+    // Deduplicate + neighbor suppression + bucket assignment
     const admitted: ScoredChunk[] = [];
     const admittedTokenSets: Set<string>[] = [];
+    // Track admitted (document_id, chunk_index) for neighbor suppression
+    const admittedChunkKeys: { document_id: string; chunk_index: number }[] = [];
     let strongCount = 0;
     let supportingCount = 0;
     let dupeSuppressed = 0;
+    let neighborSuppressed = 0;
 
     for (const chunk of scored) {
       if (admitted.length >= LIMITS.MAX_ADMITTED_CANDIDATES) break;
 
+      // Jaccard dedup
       const tokens = tokenize(chunk.content);
       let isDupe = false;
       for (const existing of admittedTokenSets) {
@@ -1318,7 +1322,29 @@ Deno.serve(async (req) => {
       }
       if (isDupe) continue;
 
-      if (chunk.composite_score >= STRONG_EVIDENCE_THRESHOLD && strongCount < LIMITS.MAX_STRONG_EVIDENCE) {
+      // Neighbor-chunk suppression: if a chunk from the same document
+      // with adjacent chunk_index is already admitted with a higher score,
+      // demote this one (still allow it as supporting, but not strong)
+      let isNeighborOfStronger = false;
+      for (const ak of admittedChunkKeys) {
+        if (ak.document_id === chunk.document_id &&
+            Math.abs(ak.chunk_index - chunk.chunk_index) <= 1) {
+          isNeighborOfStronger = true;
+          break;
+        }
+      }
+
+      if (isNeighborOfStronger) {
+        // Neighbor of already-admitted chunk: can only be supporting, not strong
+        if (supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS && chunk.composite_score >= SUPPORTING_THRESHOLD) {
+          chunk.bucket = "supporting_material";
+          supportingCount++;
+          neighborSuppressed++;
+        } else {
+          neighborSuppressed++;
+          continue;
+        }
+      } else if (chunk.composite_score >= STRONG_EVIDENCE_THRESHOLD && strongCount < LIMITS.MAX_STRONG_EVIDENCE) {
         chunk.bucket = "strong_evidence";
         strongCount++;
       } else if (chunk.composite_score >= SUPPORTING_THRESHOLD && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
@@ -1330,6 +1356,7 @@ Deno.serve(async (req) => {
 
       admitted.push(chunk);
       admittedTokenSets.push(tokens);
+      admittedChunkKeys.push({ document_id: chunk.document_id, chunk_index: chunk.chunk_index });
     }
 
     // Track admitted origins
