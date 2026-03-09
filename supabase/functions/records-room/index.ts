@@ -1518,6 +1518,8 @@ Deno.serve(async (req) => {
         exact_phrase_score: scores.exact_phrase_score,
         directness_score: scores.directness_score,
         concept_anchor_score: scores.concept_anchor_score,
+        collateral_labels: scores.collateral_labels,
+        primary_boost: scores.primary_boost,
         recall_origin: entry.origin,
         bucket: "excluded",
       });
