@@ -1041,7 +1041,7 @@ function buildCitationLabel(
   return label.length > maxLen ? label.slice(0, maxLen - 1) + "…" : label;
 }
 
-/* ── Records Room composite scoring (v3 — concept-anchor-aware) ── */
+/* ── Records Room composite scoring (v4 — primary-provision-aware) ── */
 
 function scoreCandidate(
   chunk: { similarity: number; content: string; metadata: Record<string, unknown> },
@@ -1058,6 +1058,8 @@ function scoreCandidate(
   exact_phrase_score: number;
   directness_score: number;
   concept_anchor_score: number;
+  collateral_labels: string[];
+  primary_boost: boolean;
 } {
   const lexical_score = computeLexicalScore(query, chunk.content);
   const authority_score = computeAuthorityScore(chunk.metadata);
@@ -1068,11 +1070,10 @@ function scoreCandidate(
   const context_quality = computeInfoQuality(chunk.content);
   const section_match_score = computeSectionMatchScore(query, chunk.content, chunk.metadata);
   const exact_phrase_score = computeExactPhraseScore(query, chunk.content);
-  const directness_score = computeDirectnessScore(query, chunk.content, chunk.metadata);
+  const directnessResult = computeDirectnessScore(query, chunk.content, chunk.metadata);
+  const directness_score = directnessResult.score;
   const concept_anchor_score = computeConceptAnchorScore(query, chunk.content, chunk.metadata);
 
-  // Source-type-aware weight adjustment: statute-like content gets
-  // stronger exactness bias (section + phrase + concept anchor boosted)
   const isStatute = isStatuteLikeContent(chunk.content, chunk.metadata);
   const statuteBias = isStatute ? 1.3 : 1.0;
 
@@ -1094,6 +1095,8 @@ function scoreCandidate(
     composite_score, lexical_score, authority_score, excerpt_density,
     metadata_match, freshness_score, section_match_score, exact_phrase_score,
     directness_score, concept_anchor_score,
+    collateral_labels: directnessResult.collateral_labels,
+    primary_boost: directnessResult.primary_boost,
   };
 }
 
