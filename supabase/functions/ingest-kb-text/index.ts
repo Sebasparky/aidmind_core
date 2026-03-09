@@ -308,15 +308,27 @@ Deno.serve(async (req) => {
     // ============================================================
 
     if (isOverwrite) {
-      // Clear existing chunks and reset checkpoint
+      // Diagnostic: count rows BEFORE cleanup (by document_id only — matches unique constraint)
+      const { count: preCount } = await supabase
+        .from("document_chunks")
+        .select("*", { count: "exact", head: true })
+        .eq("document_id", document_id);
+      console.log(`[ingest-kb-text] doc=${document_id} overwrite: ${preCount ?? 0} chunks exist before cleanup`);
+
+      // Delete by document_id ONLY — the unique constraint is (document_id, chunk_index),
+      // so filtering by tenant_id can miss rows and cause collisions on insert.
       const { error: delErr } = await supabase
         .from("document_chunks")
         .delete()
-        .eq("document_id", document_id)
-        .eq("tenant_id", doc.tenant_id);
+        .eq("document_id", document_id);
       if (delErr) throw new Error(`Failed to delete existing chunks: ${delErr.message}`);
 
-      console.log(`[ingest-kb-text] doc=${document_id} overwrite: cleared old chunks`);
+      // Diagnostic: verify cleanup
+      const { count: postCount } = await supabase
+        .from("document_chunks")
+        .select("*", { count: "exact", head: true })
+        .eq("document_id", document_id);
+      console.log(`[ingest-kb-text] doc=${document_id} overwrite: ${postCount ?? 0} chunks remain after cleanup`);
     } else if (!isResume) {
       // Fresh ingest — check for already-completed ingestion
       if (checkpoint?.status === "ready") {
@@ -328,18 +340,28 @@ Deno.serve(async (req) => {
       // Check for leftover chunks from a non-resumable state
       if (checkpoint?.status === "failed") {
         // Failed previously — clear stale chunks and restart
-        console.log(`[ingest-kb-text] doc=${document_id} clearing chunks from previous failed ingest`);
-        await supabase
+        const { count: staleCount } = await supabase
+          .from("document_chunks")
+          .select("*", { count: "exact", head: true })
+          .eq("document_id", document_id);
+        console.log(`[ingest-kb-text] doc=${document_id} failed-cleanup: ${staleCount ?? 0} stale chunks before delete`);
+
+        const { error: staleDelErr } = await supabase
           .from("document_chunks")
           .delete()
-          .eq("document_id", document_id)
-          .eq("tenant_id", doc.tenant_id);
+          .eq("document_id", document_id);
+        if (staleDelErr) console.error(`[ingest-kb-text] doc=${document_id} stale cleanup error: ${staleDelErr.message}`);
+
+        const { count: stalePostCount } = await supabase
+          .from("document_chunks")
+          .select("*", { count: "exact", head: true })
+          .eq("document_id", document_id);
+        console.log(`[ingest-kb-text] doc=${document_id} failed-cleanup: ${stalePostCount ?? 0} chunks remain after delete`);
       } else {
         const { count, error: countErr } = await supabase
           .from("document_chunks")
           .select("*", { count: "exact", head: true })
-          .eq("document_id", document_id)
-          .eq("tenant_id", doc.tenant_id);
+          .eq("document_id", document_id);
         if (countErr) throw new Error(`Failed to check existing chunks: ${countErr.message}`);
         if (count && count > 0 && !checkpoint) {
           return json(409, {
