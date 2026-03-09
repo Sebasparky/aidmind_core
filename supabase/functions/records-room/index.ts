@@ -1547,7 +1547,7 @@ Deno.serve(async (req) => {
             candidate_count: 0,
             result: "failure",
             reason_code: "no_matching_materials",
-            ranking_version: "v5_collateral_burden",
+            ranking_version: "v6.1_supporting_cleanup",
             failure_state: "no_matching_materials",
             semantic_recall: semanticCandidates.length,
             lexical_recall: lexicalCandidates.length,
@@ -1633,16 +1633,109 @@ Deno.serve(async (req) => {
     // v6: Track per-document strong-evidence count for diversity cap
     const strongPerDoc = new Map<string, number>();
     const MAX_STRONG_PER_DOC = 2;
+    // v6.1: Track per-document supporting count for diversity
+    const supportingPerDoc = new Map<string, number>();
+    const MAX_SUPPORTING_PER_DOC = 3;
     let strongCount = 0;
     let supportingCount = 0;
     let dupeSuppressed = 0;
     let neighborSuppressed = 0;
     let sameDocCapped = 0;
+    let lexicalSupportingExcluded = 0;
+    let dominanceDemotedExcluded = 0;
+    let sameDocSupportingCapped = 0;
+
+    // ── v6.1: Supporting admission helper ──
+    // Checks whether a chunk deserves supporting admission beyond just meeting SUPPORTING_THRESHOLD.
+    // Returns null if admitted, or a reason string if excluded.
+    const checkSupportingFloor = (chunk: ScoredChunk, demotionSource: string | null): string | null => {
+      // Gate A: Lexical-only with weak semantic similarity needs strong proof
+      if (chunk.recall_origin === "lexical" && chunk.similarity < 0.25) {
+        const hasStrongProof =
+          chunk.section_match_score >= 0.7 ||
+          chunk.concept_anchor_score >= 0.55 ||
+          chunk.directness_score >= 0.6 ||
+          (chunk.exact_phrase_score >= 0.5 && chunk.section_match_score >= 0.5);
+        if (!hasStrongProof) return "lexical_supporting_excluded";
+      }
+
+      // Gate B: Dominance-demoted chunks need to actually add value
+      if (demotionSource === "clean_primary_dominance") {
+        // Must clear a higher bar: either strong concept anchor or high directness or good similarity
+        const addsValue =
+          chunk.concept_anchor_score >= 0.5 ||
+          chunk.directness_score >= 0.55 ||
+          chunk.similarity >= 0.35 ||
+          chunk.section_match_score >= 0.7;
+        if (!addsValue) return "dominance_demoted_excluded";
+      }
+
+      // Gate C: Same-document supporting cap
+      const docSupportingSoFar = supportingPerDoc.get(chunk.document_id) ?? 0;
+      if (docSupportingSoFar >= MAX_SUPPORTING_PER_DOC) return "same_doc_supporting_cap";
+
+      return null;
+    };
+
+    // Helper: admit as supporting with floor check
+    const tryAdmitSupporting = (chunk: ScoredChunk, baseReason: string, demotionSource: string | null, extras?: Record<string, unknown>): boolean => {
+      if (conceptTooWeakFor(chunk)) return false;
+      if (chunk.composite_score < SUPPORTING_THRESHOLD) return false;
+      if (supportingCount >= LIMITS.MAX_SUPPORTING_MATERIALS) return false;
+
+      const floorFail = checkSupportingFloor(chunk, demotionSource);
+      if (floorFail) {
+        if (floorFail === "lexical_supporting_excluded") lexicalSupportingExcluded++;
+        else if (floorFail === "dominance_demoted_excluded") dominanceDemotedExcluded++;
+        else if (floorFail === "same_doc_supporting_cap") sameDocSupportingCapped++;
+        return false;
+      }
+
+      chunk.bucket = "supporting_material";
+      chunk.admission_reason = buildReasonFor(chunk, collateralBurdenFor(chunk), baseReason, extras);
+      supportingCount++;
+      supportingPerDoc.set(chunk.document_id, (supportingPerDoc.get(chunk.document_id) ?? 0) + 1);
+      return true;
+    };
+
+    // Concept-anchor weakness check (extracted for reuse)
+    const conceptTooWeakFor = (chunk: ScoredChunk): boolean => chunk.concept_anchor_score < 0.15;
 
     // ── Query-intent detection for collateral exemptions ──
     // If the query explicitly asks about collateral topics, don't over-penalize them
     const queryLower = query.toLowerCase();
     const queryAsksCollateral = /\b(appeal|review|reopen|reconsider|motion|judicial review|petition for review|stay of removal|penalty|sanction|fine|exception|notwithstanding|effective date|amendment|history|historical)\b/i.test(queryLower);
+
+    // Collateral burden calculator (extracted for reuse)
+    const collateralBurdenFor = (chunk: ScoredChunk): number => {
+      if (queryAsksCollateral) return 0;
+      let burden = 0;
+      const labelFamilies = new Map<string, number>();
+      for (const label of chunk.collateral_labels) {
+        const family = label.replace(/_demotion$/, "").replace(/^(downstream|collateral)_/, "review_procedural");
+        labelFamilies.set(family, (labelFamilies.get(family) ?? 0) + 1);
+      }
+      for (const [, count] of labelFamilies) {
+        burden += 0.15 * count;
+      }
+      if (chunk.collateral_labels.length >= 3) burden += 0.10;
+      return burden;
+    };
+
+    // Reason builder (extracted for reuse)
+    const buildReasonFor = (chunk: ScoredChunk, collateralBurden: number, base: string, extras?: Record<string, unknown>): string => {
+      const parts = [base];
+      if (chunk.primary_boost) parts.push("primary_provision_boost");
+      if (chunk.concept_anchor_score >= 0.6) parts.push("concept_central");
+      if (chunk.collateral_labels.length > 0) parts.push(...chunk.collateral_labels.map(l => `${l}_demotion`));
+      if (collateralBurden > 0) parts.push(`coll_burden=${collateralBurden.toFixed(2)}`);
+      parts.push(`anc=${chunk.concept_anchor_score.toFixed(2)}`);
+      parts.push(`dir=${chunk.directness_score.toFixed(2)}`);
+      if (extras) {
+        for (const [k, v] of Object.entries(extras)) parts.push(`${k}=${v}`);
+      }
+      return parts.join(",");
+    };
 
     for (const chunk of scored) {
       if (admitted.length >= LIMITS.MAX_ADMITTED_CANDIDATES) break;
@@ -1670,46 +1763,14 @@ Deno.serve(async (req) => {
       }
 
       // Concept-anchor gating for supporting materials:
-      // If the concept anchor score is very low, skip even supporting admission
-      const conceptTooWeak = chunk.concept_anchor_score < 0.15;
+      const conceptTooWeak = conceptTooWeakFor(chunk);
 
-      // ── Collateral burden computation (v5) ──
-      // Accumulates a penalty based on how many and what type of collateral signals exist
-      let collateralBurden = 0;
-      if (!queryAsksCollateral) {
-        // Each collateral label adds penalty; repeated categories from same family compound
-        const labelFamilies = new Map<string, number>();
-        for (const label of chunk.collateral_labels) {
-          const family = label.replace(/_demotion$/, "").replace(/^(downstream|collateral)_/, "review_procedural");
-          labelFamilies.set(family, (labelFamilies.get(family) ?? 0) + 1);
-        }
-        for (const [, count] of labelFamilies) {
-          collateralBurden += 0.15 * count; // each label in family adds 0.15
-        }
-        // Extra penalty for high label count
-        if (chunk.collateral_labels.length >= 3) collateralBurden += 0.10;
-      }
-
-      // Build descriptive admission reason
-      const buildReason = (base: string, extras?: Record<string, unknown>): string => {
-        const parts = [base];
-        if (chunk.primary_boost) parts.push("primary_provision_boost");
-        if (chunk.concept_anchor_score >= 0.6) parts.push("concept_central");
-        if (chunk.collateral_labels.length > 0) parts.push(...chunk.collateral_labels.map(l => `${l}_demotion`));
-        if (collateralBurden > 0) parts.push(`coll_burden=${collateralBurden.toFixed(2)}`);
-        parts.push(`anc=${chunk.concept_anchor_score.toFixed(2)}`);
-        parts.push(`dir=${chunk.directness_score.toFixed(2)}`);
-        if (extras) {
-          for (const [k, v] of Object.entries(extras)) parts.push(`${k}=${v}`);
-        }
-        return parts.join(",");
-      };
+      // ── Collateral burden computation ──
+      const collateralBurden = collateralBurdenFor(chunk);
 
       if (isNeighborOfStronger) {
-        if (!conceptTooWeak && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS && chunk.composite_score >= SUPPORTING_THRESHOLD) {
-          chunk.bucket = "supporting_material";
-          chunk.admission_reason = buildReason("neighbor_demoted");
-          supportingCount++;
+        // v6.1: Neighbor-demoted chunks go through supporting floor check
+        if (tryAdmitSupporting(chunk, "neighbor_demoted", "neighbor_demotion")) {
           neighborSuppressed++;
         } else {
           neighborSuppressed++;
@@ -1772,12 +1833,8 @@ Deno.serve(async (req) => {
         }
 
         if (strongGateFailReason) {
-          // Demote to supporting instead of excluding entirely
-          if (supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
-            chunk.bucket = "supporting_material";
-            chunk.admission_reason = buildReason(strongGateFailReason, { gate: strongGateFailReason });
-            supportingCount++;
-          } else {
+          // v6.1: Demoted strong candidates go through supporting floor check
+          if (!tryAdmitSupporting(chunk, strongGateFailReason, strongGateFailReason, { gate: strongGateFailReason })) {
             continue;
           }
         } else {
@@ -1804,24 +1861,22 @@ Deno.serve(async (req) => {
           }
 
           if (dominatedByCleanerPrimary) {
-            if (supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
-              chunk.bucket = "supporting_material";
-              chunk.admission_reason = buildReason("clean_primary_dominance");
-              supportingCount++;
-            } else {
+            // v6.1: Dominance-demoted chunks must pass supporting floor
+            if (!tryAdmitSupporting(chunk, "clean_primary_dominance", "clean_primary_dominance")) {
               continue;
             }
           } else {
             chunk.bucket = "strong_evidence";
-            chunk.admission_reason = buildReason("strong");
+            chunk.admission_reason = buildReasonFor(chunk, collateralBurden, "strong");
             strongCount++;
             strongPerDoc.set(chunk.document_id, docStrongSoFar + 1);
           }
         }
       } else if (!conceptTooWeak && chunk.composite_score >= SUPPORTING_THRESHOLD && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
-        chunk.bucket = "supporting_material";
-        chunk.admission_reason = buildReason("supporting");
-        supportingCount++;
+        // v6.1: Regular supporting candidates also go through floor check
+        if (!tryAdmitSupporting(chunk, "supporting", null)) {
+          continue;
+        }
       } else {
         continue;
       }
@@ -1839,7 +1894,7 @@ Deno.serve(async (req) => {
       else admittedFromBoth++;
     }
 
-    console.log(`[records-room] Admitted: ${admitted.length} (strong: ${strongCount}, supporting: ${supportingCount}, filtered_low_info: ${filteredLowInfo}, dupe_suppressed: ${dupeSuppressed}, neighbor_suppressed: ${neighborSuppressed}, same_doc_capped: ${sameDocCapped})`);
+    console.log(`[records-room] Admitted: ${admitted.length} (strong: ${strongCount}, supporting: ${supportingCount}, filtered_low_info: ${filteredLowInfo}, dupe_suppressed: ${dupeSuppressed}, neighbor_suppressed: ${neighborSuppressed}, same_doc_capped: ${sameDocCapped}, lexical_supp_excluded: ${lexicalSupportingExcluded}, dominance_excluded: ${dominanceDemotedExcluded}, same_doc_supp_capped: ${sameDocSupportingCapped})`);
     console.log(`[records-room] Admitted origins — semantic: ${admittedFromSemantic}, lexical: ${admittedFromLexical}, both: ${admittedFromBoth}`);
 
     // Per-candidate scoring diagnostics for top results
@@ -1936,7 +1991,7 @@ Deno.serve(async (req) => {
 
     const diagnostics: Record<string, unknown> = {
       intake,
-      ranking_version: "v6_cleanliness_adjusted",
+      ranking_version: "v6.1_supporting_cleanup",
       // Recall diagnostics
       semantic_recall_count: semanticCandidates.length,
       lexical_recall_count: lexicalCandidates.length,
@@ -1952,6 +2007,9 @@ Deno.serve(async (req) => {
       dupe_suppressed: dupeSuppressed,
       neighbor_suppressed: neighborSuppressed,
       same_doc_capped: sameDocCapped,
+      lexical_supporting_excluded: lexicalSupportingExcluded,
+      dominance_demoted_excluded: dominanceDemotedExcluded,
+      same_doc_supporting_capped: sameDocSupportingCapped,
       admitted_count: admitted.length,
       strong_count: strong_evidence.length,
       supporting_count: supporting_materials.length,
@@ -2018,12 +2076,15 @@ Deno.serve(async (req) => {
           admitted_origins: { semantic: admittedFromSemantic, lexical: admittedFromLexical, both: admittedFromBoth },
           caps_hit_count: caps.hitCount,
           duration_ms: Date.now() - startTime,
-          ranking_version: "v6_cleanliness_adjusted",
+          ranking_version: "v6.1_supporting_cleanup",
           failure_state,
           filtered_low_info: filteredLowInfo,
           dupe_suppressed: dupeSuppressed,
           neighbor_suppressed: neighborSuppressed,
           same_doc_capped: sameDocCapped,
+          lexical_supporting_excluded: lexicalSupportingExcluded,
+          dominance_demoted_excluded: dominanceDemotedExcluded,
+          same_doc_supporting_capped: sameDocSupportingCapped,
           scored_count: scored.length,
           admitted_count: admitted.length,
           top_similarity: candidates.length > 0 ? parseFloat(Math.max(...candidates.map(c => c.similarity)).toFixed(4)) : 0,
