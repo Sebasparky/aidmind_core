@@ -1609,6 +1609,10 @@ Deno.serve(async (req) => {
         primary_boost: scores.primary_boost,
         recall_origin: entry.origin,
         bucket: "excluded",
+        cleanliness_penalty: scores.cleanliness_penalty,
+        clean_primary_bonus: scores.clean_primary_bonus,
+        mixed_chunk_penalty: scores.mixed_chunk_penalty,
+        broad_query_bonus: scores.broad_query_bonus,
       });
     }
 
