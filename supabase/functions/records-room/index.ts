@@ -2055,6 +2055,16 @@ Deno.serve(async (req) => {
         composite_score: parseFloat(chunk.composite_score.toFixed(4)),
         source_url: urls.source_url,
         download_url: urls.download_url,
+        // Scoring fields for frontend refinement
+        directness_score: parseFloat(chunk.directness_score.toFixed(4)),
+        concept_anchor_score: parseFloat(chunk.concept_anchor_score.toFixed(4)),
+        section_match_score: parseFloat(chunk.section_match_score.toFixed(4)),
+        exact_phrase_score: parseFloat(chunk.exact_phrase_score.toFixed(4)),
+        primary_boost: chunk.primary_boost,
+        collateral_labels: chunk.collateral_labels,
+        recall_origin: chunk.recall_origin,
+        chunk_index: chunk.chunk_index,
+        bucket: chunk.bucket as "strong_evidence" | "supporting_material",
       };
     }
 
