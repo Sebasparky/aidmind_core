@@ -2010,7 +2010,6 @@ Deno.serve(async (req) => {
           tenant_id,
           query_type: intake.query_type,
           result: strong_evidence.length > 0 ? "success" : supporting_materials.length > 0 ? "partial" : "failure",
-          // Existing summary fields
           semantic_recall: semanticCandidates.length,
           lexical_recall: lexicalCandidates.length,
           merged_pool: mergedCount,
@@ -2019,12 +2018,12 @@ Deno.serve(async (req) => {
           admitted_origins: { semantic: admittedFromSemantic, lexical: admittedFromLexical, both: admittedFromBoth },
           caps_hit_count: caps.hitCount,
           duration_ms: Date.now() - startTime,
-          // Rich ranking diagnostics
-          ranking_version: "v5_collateral_burden",
+          ranking_version: "v6_cleanliness_adjusted",
           failure_state,
           filtered_low_info: filteredLowInfo,
           dupe_suppressed: dupeSuppressed,
           neighbor_suppressed: neighborSuppressed,
+          same_doc_capped: sameDocCapped,
           scored_count: scored.length,
           admitted_count: admitted.length,
           top_similarity: candidates.length > 0 ? parseFloat(Math.max(...candidates.map(c => c.similarity)).toFixed(4)) : 0,
@@ -2050,6 +2049,10 @@ Deno.serve(async (req) => {
             metadata_match: parseFloat(a.metadata_match.toFixed(4)),
             composite_score: parseFloat(a.composite_score.toFixed(4)),
             recall_origin: a.recall_origin,
+            cleanliness_penalty: parseFloat(a.cleanliness_penalty.toFixed(4)),
+            clean_primary_bonus: parseFloat(a.clean_primary_bonus.toFixed(4)),
+            mixed_chunk_penalty: parseFloat(a.mixed_chunk_penalty.toFixed(4)),
+            broad_query_bonus: parseFloat(a.broad_query_bonus.toFixed(4)),
           })),
         },
       });
