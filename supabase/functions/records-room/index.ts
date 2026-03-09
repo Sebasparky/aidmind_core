@@ -1280,6 +1280,9 @@ Deno.serve(async (req) => {
         excerpt_density: scores.excerpt_density,
         metadata_match: scores.metadata_match,
         freshness_score: scores.freshness_score,
+        section_match_score: scores.section_match_score,
+        exact_phrase_score: scores.exact_phrase_score,
+        directness_score: scores.directness_score,
         recall_origin: entry.origin,
         bucket: "excluded",
       });
