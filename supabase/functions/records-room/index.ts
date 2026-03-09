@@ -2094,6 +2094,8 @@ Deno.serve(async (req) => {
       dominance_demoted_excluded: dominanceDemotedExcluded,
       local_redundancy_excluded: localRedundancyExcluded,
       distant_same_doc_allowed: distantSameDocAllowed,
+      supporting_usefulness_failed: supportingUsefulnessFailed,
+      distant_low_value_excluded: distantLowValueExcluded,
       admitted_count: admitted.length,
       strong_count: strong_evidence.length,
       supporting_count: supporting_materials.length,
