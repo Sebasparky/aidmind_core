@@ -171,10 +171,9 @@ function ResultsSection({
 
 export default function Retrieve() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { query: storedQuery, status, result, error, search, reset } = useRetrieve();
+  const { query: storedQuery, status, result, error, search, reset, refine, refining, activeRefinementMode, baseResult } = useRetrieve();
   const [query, setQuery] = useState(storedQuery);
   const [showEval, setShowEval] = useState(false);
-  const [refinementMode, setRefinementMode] = useState<RefinementMode>("none");
 
   const handleExampleClick = useCallback((description: string) => {
     setQuery(description);
@@ -189,7 +188,6 @@ export default function Retrieve() {
 
   const handleSearch = useCallback(() => {
     if (query.trim()) {
-      setRefinementMode("none");
       search(query);
     }
   }, [query, search]);
@@ -203,16 +201,13 @@ export default function Retrieve() {
 
   const handleNewSearch = useCallback(() => {
     setQuery("");
-    setRefinementMode("none");
     reset();
     requestAnimationFrame(() => textareaRef.current?.focus());
   }, [reset]);
 
-  // Apply local refinement to results (no network call)
-  const refinedResults = useMemo(() => {
-    if (!result) return { strong: [], supporting: [] };
-    return applyRefinement(result.strong_evidence, result.supporting_materials, refinementMode);
-  }, [result, refinementMode]);
+  // Use result directly — refinement is now backend-powered via the hook
+  const strongEvidence = result?.strong_evidence ?? [];
+  const supportingMaterials = result?.supporting_materials ?? [];
 
   const isLoading = status === "loading";
   const hasResults = status === "success" || status === "no_results" || status === "clarification_needed";
