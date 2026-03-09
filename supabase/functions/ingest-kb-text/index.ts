@@ -556,8 +556,7 @@ Deno.serve(async (req) => {
       const { count: verifyCount, error: verifyErr } = await supabase
         .from("document_chunks")
         .select("*", { count: "exact", head: true })
-        .eq("document_id", document_id)
-        .eq("tenant_id", doc.tenant_id);
+        .eq("document_id", document_id);
 
       const actualChunkCount = verifyErr ? totalChunks : (verifyCount ?? 0);
       console.log(`[ingest-kb-text] doc=${document_id} COMPLETE — verified ${actualChunkCount} chunks in DB`);
