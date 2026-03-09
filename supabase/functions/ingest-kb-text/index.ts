@@ -612,7 +612,7 @@ Deno.serve(async (req) => {
       // ── More batches remain: update checkpoint and signal caller ──
       const indexedSoFar = (checkpoint?.indexed_chunk_count ?? 0) + rows.length;
 
-      await updateIngestionMeta(document_id, {
+      await updateIngestionMeta(supabase, document_id, {
         status: "embedding_in_progress",
         indexed_chunk_count: indexedSoFar,
         next_chunk_index: newNextIndex,
