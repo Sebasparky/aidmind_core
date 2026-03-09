@@ -186,6 +186,9 @@ interface ScoredChunk {
   excerpt_density: number;
   metadata_match: number;
   freshness_score: number;
+  section_match_score: number;
+  exact_phrase_score: number;
+  directness_score: number;
   recall_origin: RecallOrigin;
   bucket: "strong_evidence" | "supporting_material" | "excluded";
 }
