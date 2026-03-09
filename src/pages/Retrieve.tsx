@@ -9,14 +9,17 @@ import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import {
   Search, FileText, Quote, Scale, ShieldCheck, ArrowRight,
   BookOpen, FileSearch, ChevronDown, ChevronUp, ExternalLink,
-  AlertCircle, Loader2, HelpCircle, Download,
+  AlertCircle, Loader2, HelpCircle, Download, FlaskConical,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, lazy, Suspense } from "react";
 import { useRetrieve, type EvidenceItem } from "@/hooks/useRetrieve";
+
+const IS_DEV = import.meta.env.VITE_DEV_MODE === "true";
+const RetrieveEvalPanel = IS_DEV ? lazy(() => import("@/components/dev/RetrieveEvalPanel")) : null;
 
 const EXAMPLE_QUERIES = [
   {
