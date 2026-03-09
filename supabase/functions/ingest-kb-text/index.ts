@@ -308,15 +308,27 @@ Deno.serve(async (req) => {
     // ============================================================
 
     if (isOverwrite) {
-      // Clear existing chunks and reset checkpoint
+      // Diagnostic: count rows BEFORE cleanup (by document_id only — matches unique constraint)
+      const { count: preCount } = await supabase
+        .from("document_chunks")
+        .select("*", { count: "exact", head: true })
+        .eq("document_id", document_id);
+      console.log(`[ingest-kb-text] doc=${document_id} overwrite: ${preCount ?? 0} chunks exist before cleanup`);
+
+      // Delete by document_id ONLY — the unique constraint is (document_id, chunk_index),
+      // so filtering by tenant_id can miss rows and cause collisions on insert.
       const { error: delErr } = await supabase
         .from("document_chunks")
         .delete()
-        .eq("document_id", document_id)
-        .eq("tenant_id", doc.tenant_id);
+        .eq("document_id", document_id);
       if (delErr) throw new Error(`Failed to delete existing chunks: ${delErr.message}`);
 
-      console.log(`[ingest-kb-text] doc=${document_id} overwrite: cleared old chunks`);
+      // Diagnostic: verify cleanup
+      const { count: postCount } = await supabase
+        .from("document_chunks")
+        .select("*", { count: "exact", head: true })
+        .eq("document_id", document_id);
+      console.log(`[ingest-kb-text] doc=${document_id} overwrite: ${postCount ?? 0} chunks remain after cleanup`);
     } else if (!isResume) {
       // Fresh ingest — check for already-completed ingestion
       if (checkpoint?.status === "ready") {
@@ -328,18 +340,28 @@ Deno.serve(async (req) => {
       // Check for leftover chunks from a non-resumable state
       if (checkpoint?.status === "failed") {
         // Failed previously — clear stale chunks and restart
-        console.log(`[ingest-kb-text] doc=${document_id} clearing chunks from previous failed ingest`);
-        await supabase
+        const { count: staleCount } = await supabase
+          .from("document_chunks")
+          .select("*", { count: "exact", head: true })
+          .eq("document_id", document_id);
+        console.log(`[ingest-kb-text] doc=${document_id} failed-cleanup: ${staleCount ?? 0} stale chunks before delete`);
+
+        const { error: staleDelErr } = await supabase
           .from("document_chunks")
           .delete()
-          .eq("document_id", document_id)
-          .eq("tenant_id", doc.tenant_id);
+          .eq("document_id", document_id);
+        if (staleDelErr) console.error(`[ingest-kb-text] doc=${document_id} stale cleanup error: ${staleDelErr.message}`);
+
+        const { count: stalePostCount } = await supabase
+          .from("document_chunks")
+          .select("*", { count: "exact", head: true })
+          .eq("document_id", document_id);
+        console.log(`[ingest-kb-text] doc=${document_id} failed-cleanup: ${stalePostCount ?? 0} chunks remain after delete`);
       } else {
         const { count, error: countErr } = await supabase
           .from("document_chunks")
           .select("*", { count: "exact", head: true })
-          .eq("document_id", document_id)
-          .eq("tenant_id", doc.tenant_id);
+          .eq("document_id", document_id);
         if (countErr) throw new Error(`Failed to check existing chunks: ${countErr.message}`);
         if (count && count > 0 && !checkpoint) {
           return json(409, {
@@ -500,16 +522,25 @@ Deno.serve(async (req) => {
 
     for (let i = 0; i < rows.length; i += DB_INSERT_BATCH_SIZE) {
       const batch = rows.slice(i, i + DB_INSERT_BATCH_SIZE);
-      const { error: insertErr } = await supabase.from("document_chunks").insert(batch);
-      if (insertErr) {
+      const batchStartIdx = nextChunkIndex + i;
+      const batchEndIdx = batchStartIdx + batch.length - 1;
+      console.log(
+        `[ingest-kb-text] doc=${document_id} upserting batch: chunk_index ${batchStartIdx}–${batchEndIdx} ` +
+        `(${batch.length} rows, onConflict=document_id,chunk_index)`
+      );
+      const { error: upsertErr } = await supabase
+        .from("document_chunks")
+        .upsert(batch, { onConflict: "document_id,chunk_index" });
+      if (upsertErr) {
         throw new Error(
-          `Failed to insert chunk batch at absolute index ${nextChunkIndex + i}: ${insertErr.message}`
+          `Failed to upsert chunk batch at absolute index ${batchStartIdx}: ${upsertErr.message}`
         );
       }
+      console.log(`[ingest-kb-text] doc=${document_id} upsert OK for chunk_index ${batchStartIdx}–${batchEndIdx}`);
     }
 
     console.log(
-      `[ingest-kb-text] doc=${document_id} inserted ${rows.length} chunks ` +
+      `[ingest-kb-text] doc=${document_id} upserted ${rows.length} chunks ` +
       `(indices ${nextChunkIndex}–${batchEnd - 1})`
     );
 
@@ -525,8 +556,7 @@ Deno.serve(async (req) => {
       const { count: verifyCount, error: verifyErr } = await supabase
         .from("document_chunks")
         .select("*", { count: "exact", head: true })
-        .eq("document_id", document_id)
-        .eq("tenant_id", doc.tenant_id);
+        .eq("document_id", document_id);
 
       const actualChunkCount = verifyErr ? totalChunks : (verifyCount ?? 0);
       console.log(`[ingest-kb-text] doc=${document_id} COMPLETE — verified ${actualChunkCount} chunks in DB`);
