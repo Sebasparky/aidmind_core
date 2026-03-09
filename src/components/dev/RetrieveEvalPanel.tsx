@@ -325,6 +325,8 @@ export default function RetrieveEvalPanel() {
   const top1Yes = judged.filter((r) => r.judgment.top1_correct === true).length;
   const collateralBad = judged.filter((r) => r.judgment.collateral_outranked_primary === true).length;
 
+  if (!IS_DEV) return null;
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
