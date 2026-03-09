@@ -233,8 +233,6 @@ function QueryResultCard({ result, onJudgmentChange }: {
 }
 
 export default function RetrieveEvalPanel() {
-  if (!IS_DEV) return null;
-
   const { tenant } = useTenant();
   const [results, setResults] = useState<QueryResult[]>([]);
   const [running, setRunning] = useState(false);
