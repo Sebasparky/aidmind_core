@@ -1798,6 +1798,8 @@ Deno.serve(async (req) => {
         payload: {
           tenant_id,
           query_type: intake.query_type,
+          result: strong_evidence.length > 0 ? "success" : supporting_materials.length > 0 ? "partial" : "failure",
+          // Existing summary fields
           semantic_recall: semanticCandidates.length,
           lexical_recall: lexicalCandidates.length,
           merged_pool: mergedCount,
@@ -1806,7 +1808,38 @@ Deno.serve(async (req) => {
           admitted_origins: { semantic: admittedFromSemantic, lexical: admittedFromLexical, both: admittedFromBoth },
           caps_hit_count: caps.hitCount,
           duration_ms: Date.now() - startTime,
-          result: strong_evidence.length > 0 ? "success" : supporting_materials.length > 0 ? "partial" : "failure",
+          // Rich ranking diagnostics
+          ranking_version: "v4_primary_provision",
+          failure_state,
+          filtered_low_info: filteredLowInfo,
+          dupe_suppressed: dupeSuppressed,
+          neighbor_suppressed: neighborSuppressed,
+          scored_count: scored.length,
+          admitted_count: admitted.length,
+          top_similarity: candidates.length > 0 ? parseFloat(Math.max(...candidates.map(c => c.similarity)).toFixed(4)) : 0,
+          avg_composite: admitted.length > 0
+            ? parseFloat((admitted.reduce((s, c) => s + c.composite_score, 0) / admitted.length).toFixed(4))
+            : 0,
+          top_candidates: admitted.slice(0, 5).map((a, i) => ({
+            rank: i + 1,
+            bucket: a.bucket,
+            admission_reason: a.admission_reason ?? "n/a",
+            primary_boost: a.primary_boost,
+            collateral_labels: a.collateral_labels,
+            chunk_id: a.chunk_id,
+            chunk_index: a.chunk_index,
+            document_id: a.document_id,
+            similarity: parseFloat(a.similarity.toFixed(4)),
+            lexical_score: parseFloat(a.lexical_score.toFixed(4)),
+            section_match_score: parseFloat(a.section_match_score.toFixed(4)),
+            exact_phrase_score: parseFloat(a.exact_phrase_score.toFixed(4)),
+            directness_score: parseFloat(a.directness_score.toFixed(4)),
+            concept_anchor_score: parseFloat(a.concept_anchor_score.toFixed(4)),
+            authority_score: parseFloat(a.authority_score.toFixed(4)),
+            metadata_match: parseFloat(a.metadata_match.toFixed(4)),
+            composite_score: parseFloat(a.composite_score.toFixed(4)),
+            recall_origin: a.recall_origin,
+          })),
         },
       });
     } catch { /* non-critical */ }
