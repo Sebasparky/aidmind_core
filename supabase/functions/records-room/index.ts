@@ -625,41 +625,63 @@ function scoreCandidate(
   return { composite_score, lexical_score, authority_score, excerpt_density, metadata_match, freshness_score };
 }
 
-/* ── Source access URL builders ── */
+/* ── Source access URL builders (signed URLs for private buckets) ── */
 
-function buildSourceUrl(
-  supabaseUrl: string,
-  doc: { file_path: string | null; metadata: Record<string, unknown> } | undefined,
-): string | null {
-  if (!doc) return null;
+async function buildSourceUrls(
+  supabase: ReturnType<typeof createClient>,
+  doc: { file_path: string | null; metadata: Record<string, unknown>; id?: string } | undefined,
+): Promise<{ source_url: string | null; download_url: string | null }> {
+  const none = { source_url: null, download_url: null };
+  if (!doc) return none;
 
-  // Check for explicit URL in metadata
+  // Check for explicit URL in metadata first
   const metaUrl = doc.metadata?.source_url ?? doc.metadata?.file_url ?? doc.metadata?.url;
-  if (typeof metaUrl === "string" && metaUrl.startsWith("http")) return metaUrl;
-
-  // Build signed URL from storage path if file_path exists
-  if (doc.file_path) {
-    // The file_path is a storage object key in the kb-documents bucket
-    return `${supabaseUrl}/storage/v1/object/public/kb-documents/${doc.file_path}`;
+  if (typeof metaUrl === "string" && metaUrl.startsWith("http")) {
+    const metaDownload = doc.metadata?.download_url;
+    return {
+      source_url: metaUrl,
+      download_url: typeof metaDownload === "string" && metaDownload.startsWith("http") ? metaDownload : metaUrl,
+    };
   }
 
-  return null;
-}
-
-function buildDownloadUrl(
-  supabaseUrl: string,
-  doc: { file_path: string | null; metadata: Record<string, unknown> } | undefined,
-): string | null {
-  if (!doc) return null;
-
-  const metaDownload = doc.metadata?.download_url;
-  if (typeof metaDownload === "string" && metaDownload.startsWith("http")) return metaDownload;
-
-  if (doc.file_path) {
-    return `${supabaseUrl}/storage/v1/object/public/kb-documents/${doc.file_path}?download=true`;
+  // Derive storage path from file_path or metadata
+  const storagePath = doc.file_path
+    ?? (typeof doc.metadata?.storage_path === "string" ? doc.metadata.storage_path : null);
+  if (!storagePath) {
+    console.log(`[records-room][source-url] doc=${doc.id ?? "?"} — no file_path or storage_path, skipping`);
+    return none;
   }
 
-  return null;
+  // Derive bucket from metadata or default to kb-documents
+  const storageBucket = typeof doc.metadata?.storage_bucket === "string"
+    ? doc.metadata.storage_bucket
+    : "kb-documents";
+
+  // Generate signed URLs (1 hour expiry) for private buckets
+  try {
+    const { data: viewData, error: viewErr } = await supabase.storage
+      .from(storageBucket)
+      .createSignedUrl(storagePath, 3600); // 1 hour
+
+    if (viewErr || !viewData?.signedUrl) {
+      console.warn(`[records-room][source-url] doc=${doc.id ?? "?"} bucket=${storageBucket} path=${storagePath} — signed URL failed:`, viewErr?.message ?? "no data");
+      return none;
+    }
+
+    const { data: dlData, error: dlErr } = await supabase.storage
+      .from(storageBucket)
+      .createSignedUrl(storagePath, 3600, { download: true });
+
+    console.log(`[records-room][source-url] doc=${doc.id ?? "?"} bucket=${storageBucket} path=${storagePath} — signed URLs generated OK`);
+
+    return {
+      source_url: viewData.signedUrl,
+      download_url: (dlErr || !dlData?.signedUrl) ? viewData.signedUrl : dlData.signedUrl,
+    };
+  } catch (err) {
+    console.error(`[records-room][source-url] doc=${doc.id ?? "?"} — exception:`, err);
+    return none;
+  }
 }
 
 /* ── Response helpers ── */
