@@ -1644,6 +1644,8 @@ Deno.serve(async (req) => {
     let dominanceDemotedExcluded = 0;
     let localRedundancyExcluded = 0;
     let distantSameDocAllowed = 0;
+    let supportingUsefulnessFailed = 0;
+    let distantLowValueExcluded = 0;
 
     // ── v6.2: Supporting admission helper — locality-based diversity ──
     // Checks whether a chunk deserves supporting admission beyond just meeting SUPPORTING_THRESHOLD.
