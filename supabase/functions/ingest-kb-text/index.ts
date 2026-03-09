@@ -649,10 +649,11 @@ Deno.serve(async (req) => {
 
     // Persist failure — but preserve progress so resume is possible after fix
     try {
-      await updateIngestionMeta(document_id, {
+      await updateIngestionMeta(supabase, document_id, {
         status: "failed",
         error: message,
         failed_at: new Date().toISOString(),
+      });
         // NOTE: next_chunk_index and indexed_chunk_count are intentionally
         // NOT reset here. This allows manual resume after the failure cause
         // is fixed, by re-calling with the same document_id.
