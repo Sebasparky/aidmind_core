@@ -146,11 +146,23 @@ function createHostedEmbeddingProvider(apiKey: string, model: string): Embedding
 
 /* ── Types ── */
 
+type RefinementMode =
+  | "none"
+  | "main_rule"
+  | "direct_matches"
+  | "broader_related"
+  | "strong_only"
+  | "procedural"
+  | "exceptions"
+  | "notices_deadlines"
+  | "eligibility";
+
 interface RetrieveRequest {
   query: string;
   tenant_id: string;
   max_results?: number;
   min_similarity?: number;
+  refinement_mode?: RefinementMode;
 }
 
 type QueryType =
