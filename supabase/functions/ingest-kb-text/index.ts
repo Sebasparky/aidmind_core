@@ -475,7 +475,7 @@ Deno.serve(async (req) => {
       }
 
       // Initialize checkpoint
-      await updateIngestionMeta(document_id, {
+      await updateIngestionMeta(supabase, document_id, {
         status: "embedding_in_progress",
         chunk_count: totalChunks,
         indexed_chunk_count: 0,
