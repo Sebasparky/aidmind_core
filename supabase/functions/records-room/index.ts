@@ -1762,6 +1762,8 @@ Deno.serve(async (req) => {
         if (floorFail === "lexical_supporting_excluded") lexicalSupportingExcluded++;
         else if (floorFail === "dominance_demoted_excluded") dominanceDemotedExcluded++;
         else if (floorFail === "local_redundancy_excluded") localRedundancyExcluded++;
+        else if (floorFail === "supporting_usefulness_failed") supportingUsefulnessFailed++;
+        else if (floorFail === "distant_but_low_value_excluded") distantLowValueExcluded++;
         return false;
       }
 
@@ -1772,8 +1774,9 @@ Deno.serve(async (req) => {
         if (allDistant) distantSameDocAllowed++;
       }
 
+      const usefulness = computeSupportingUsefulness(chunk);
       chunk.bucket = "supporting_material";
-      chunk.admission_reason = buildReasonFor(chunk, collateralBurdenFor(chunk), baseReason, extras);
+      chunk.admission_reason = buildReasonFor(chunk, collateralBurdenFor(chunk), baseReason, { ...extras, usefulness: usefulness.toFixed(3) });
       supportingCount++;
       return true;
     };
