@@ -1464,6 +1464,7 @@ Deno.serve(async (req) => {
 
     const diagnostics: Record<string, unknown> = {
       intake,
+      ranking_version: "v2_directness_aware",
       // Recall diagnostics
       semantic_recall_count: semanticCandidates.length,
       lexical_recall_count: lexicalCandidates.length,
@@ -1477,6 +1478,7 @@ Deno.serve(async (req) => {
       filtered_low_info: filteredLowInfo,
       scored_count: scored.length,
       dupe_suppressed: dupeSuppressed,
+      neighbor_suppressed: neighborSuppressed,
       admitted_count: admitted.length,
       strong_count: strong_evidence.length,
       supporting_count: supporting_materials.length,
@@ -1484,6 +1486,23 @@ Deno.serve(async (req) => {
       admitted_from_semantic: admittedFromSemantic,
       admitted_from_lexical: admittedFromLexical,
       admitted_from_both: admittedFromBoth,
+      // Per-candidate scoring breakdown (top 5)
+      top_candidates: admitted.slice(0, 5).map((a, i) => ({
+        rank: i + 1,
+        bucket: a.bucket,
+        chunk_id: a.chunk_id,
+        chunk_index: a.chunk_index,
+        document_id: a.document_id,
+        similarity: parseFloat(a.similarity.toFixed(4)),
+        lexical_score: parseFloat(a.lexical_score.toFixed(4)),
+        section_match_score: parseFloat(a.section_match_score.toFixed(4)),
+        exact_phrase_score: parseFloat(a.exact_phrase_score.toFixed(4)),
+        directness_score: parseFloat(a.directness_score.toFixed(4)),
+        authority_score: parseFloat(a.authority_score.toFixed(4)),
+        metadata_match: parseFloat(a.metadata_match.toFixed(4)),
+        composite_score: parseFloat(a.composite_score.toFixed(4)),
+        recall_origin: a.recall_origin,
+      })),
       // Quality metrics
       top_similarity: candidates.length > 0 ? parseFloat(Math.max(...candidates.map(c => c.similarity)).toFixed(4)) : 0,
       avg_composite: admitted.length > 0
@@ -1495,7 +1514,7 @@ Deno.serve(async (req) => {
       failure_state,
       duration_ms: Date.now() - startTime,
       // Architecture note
-      embedding_provider: "openai_hosted_bridge", // TEMPORARY — will change to "local" when local embeddings available
+      embedding_provider: "openai_hosted_bridge",
     };
 
     console.log("[records-room] Diagnostics:", JSON.stringify(diagnostics));
