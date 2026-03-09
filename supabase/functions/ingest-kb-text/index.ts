@@ -208,6 +208,14 @@ async function updateIngestionMeta(
     const ingestion = (meta.ingestion as Record<string, unknown>) ?? {};
     meta.ingestion = { ...ingestion, ...fields };
     await supabase.from("kb_documents").update({ metadata: meta }).eq("id", docId);
+    // Verification log
+    const f = fields as Record<string, unknown>;
+    console.log(
+      `[ingest-kb-text] checkpoint wrote doc=${docId}` +
+      (f.status ? ` status=${f.status}` : "") +
+      (f.next_chunk_index !== undefined ? ` next_chunk_index=${f.next_chunk_index}` : "") +
+      (f.indexed_chunk_count !== undefined ? ` indexed_chunk_count=${f.indexed_chunk_count}` : "")
+    );
   } catch (err) {
     console.error("[ingest-kb-text] updateIngestionMeta failed:", err);
   }
