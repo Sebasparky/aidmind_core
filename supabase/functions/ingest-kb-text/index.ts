@@ -443,7 +443,7 @@ Deno.serve(async (req) => {
       if (totalChunks === 0) {
         const reason = "Chunking produced 0 usable chunks (all < 50 chars)";
         console.warn(`[ingest-kb-text] doc=${document_id} ${reason}`);
-        await updateIngestionMeta(document_id, {
+        await updateIngestionMeta(supabase, document_id, {
           status: "failed",
           error: reason,
           failed_at: new Date().toISOString(),
