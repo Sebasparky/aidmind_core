@@ -359,7 +359,14 @@ function analyzeIntake(query: string): IntakeSignals {
   let needs_clarification = false;
   let clarification_question: string | null = null;
 
-  if (query_type === "ambiguous_short_query" && wordCount < 3 && !likely_domain) {
+  // Check if the query matches a known legal concept phrase — never clarify these
+  const isLegalConcept = LEGAL_CONCEPT_PHRASES.some(p => lower.includes(p));
+  // Also detect plausible legal/policy terms of art: 2+ words with substantive tokens
+  const substantiveTokens = lower.split(/\s+/).filter(w => w.length > 2 && !STOP_WORDS.has(w));
+  const looksLikeTermOfArt = substantiveTokens.length >= 2 || 
+    (wordCount >= 2 && (likely_domain !== null || document_type_signals.length > 0));
+
+  if (query_type === "ambiguous_short_query" && wordCount < 3 && !likely_domain && !isLegalConcept && !looksLikeTermOfArt) {
     needs_clarification = true;
     clarification_question = "Could you provide more detail about what you're looking for? For example, paste the text of a notice or letter, or describe the specific policy or rule you need to find.";
   }
