@@ -1547,7 +1547,7 @@ Deno.serve(async (req) => {
             candidate_count: 0,
             result: "failure",
             reason_code: "no_matching_materials",
-            ranking_version: "v6.1_supporting_cleanup",
+            ranking_version: "v6.2_locality_diversity",
             failure_state: "no_matching_materials",
             semantic_recall: semanticCandidates.length,
             lexical_recall: lexicalCandidates.length,
@@ -1633,9 +1633,8 @@ Deno.serve(async (req) => {
     // v6: Track per-document strong-evidence count for diversity cap
     const strongPerDoc = new Map<string, number>();
     const MAX_STRONG_PER_DOC = 2;
-    // v6.1: Track per-document supporting count for diversity
-    const supportingPerDoc = new Map<string, number>();
-    const MAX_SUPPORTING_PER_DOC = 3;
+    // v6.2: Locality-based supporting diversity (replaces per-doc cap)
+    const SUPPORTING_LOCALITY_WINDOW = 5; // ±5 chunk indices = "same local region"
     let strongCount = 0;
     let supportingCount = 0;
     let dupeSuppressed = 0;
@@ -1643,10 +1642,12 @@ Deno.serve(async (req) => {
     let sameDocCapped = 0;
     let lexicalSupportingExcluded = 0;
     let dominanceDemotedExcluded = 0;
-    let sameDocSupportingCapped = 0;
+    let localRedundancyExcluded = 0;
+    let distantSameDocAllowed = 0;
 
-    // ── v6.1: Supporting admission helper ──
+    // ── v6.2: Supporting admission helper — locality-based diversity ──
     // Checks whether a chunk deserves supporting admission beyond just meeting SUPPORTING_THRESHOLD.
+    // Replaces the old per-document cap with content-locality awareness.
     // Returns null if admitted, or a reason string if excluded.
     const checkSupportingFloor = (chunk: ScoredChunk, demotionSource: string | null): string | null => {
       // Gate A: Lexical-only with weak semantic similarity needs strong proof
@@ -1661,7 +1662,6 @@ Deno.serve(async (req) => {
 
       // Gate B: Dominance-demoted chunks need to actually add value
       if (demotionSource === "clean_primary_dominance") {
-        // Must clear a higher bar: either strong concept anchor or high directness or good similarity
         const addsValue =
           chunk.concept_anchor_score >= 0.5 ||
           chunk.directness_score >= 0.55 ||
@@ -1670,9 +1670,34 @@ Deno.serve(async (req) => {
         if (!addsValue) return "dominance_demoted_excluded";
       }
 
-      // Gate C: Same-document supporting cap
-      const docSupportingSoFar = supportingPerDoc.get(chunk.document_id) ?? 0;
-      if (docSupportingSoFar >= MAX_SUPPORTING_PER_DOC) return "same_doc_supporting_cap";
+      // Gate C (v6.2): Locality-based redundancy — replace flat per-doc cap.
+      // A chunk is "locally redundant" if an already-admitted chunk from the same document
+      // is within ±SUPPORTING_LOCALITY_WINDOW chunk indices AND shares similar heading context.
+      // Distant chunks from the same document are allowed through.
+      const chunkHeading = String(chunk.metadata.heading_path ?? chunk.metadata.section_heading ?? "").toLowerCase();
+      let localNeighborCount = 0;
+      for (const ak of admitted) {
+        if (ak.document_id !== chunk.document_id) continue;
+        const idxDistance = Math.abs(ak.chunk_index - chunk.chunk_index);
+
+        // Far-apart chunks (different region of document) — not redundant
+        if (idxDistance > SUPPORTING_LOCALITY_WINDOW) continue;
+
+        // Same local region: check heading similarity for extra confirmation
+        const akHeading = String(ak.metadata.heading_path ?? ak.metadata.section_heading ?? "").toLowerCase();
+        const headingsSame = chunkHeading.length > 0 && akHeading.length > 0 &&
+          (chunkHeading === akHeading || chunkHeading.startsWith(akHeading) || akHeading.startsWith(chunkHeading));
+
+        // If within ±2 (very close), always counts as local neighbor
+        // If within ±5 but >2, only counts if headings overlap
+        if (idxDistance <= 2 || headingsSame) {
+          localNeighborCount++;
+        }
+      }
+
+      // Allow at most 1 local neighbor from the same region in supporting
+      // (the primary/strong chunk from that region is already admitted)
+      if (localNeighborCount >= 2) return "local_redundancy_excluded";
 
       return null;
     };
@@ -1687,14 +1712,20 @@ Deno.serve(async (req) => {
       if (floorFail) {
         if (floorFail === "lexical_supporting_excluded") lexicalSupportingExcluded++;
         else if (floorFail === "dominance_demoted_excluded") dominanceDemotedExcluded++;
-        else if (floorFail === "same_doc_supporting_cap") sameDocSupportingCapped++;
+        else if (floorFail === "local_redundancy_excluded") localRedundancyExcluded++;
         return false;
+      }
+
+      // Track distant same-doc admits for diagnostics
+      const sameDocAdmitted = admitted.filter(a => a.document_id === chunk.document_id);
+      if (sameDocAdmitted.length > 0) {
+        const allDistant = sameDocAdmitted.every(a => Math.abs(a.chunk_index - chunk.chunk_index) > SUPPORTING_LOCALITY_WINDOW);
+        if (allDistant) distantSameDocAllowed++;
       }
 
       chunk.bucket = "supporting_material";
       chunk.admission_reason = buildReasonFor(chunk, collateralBurdenFor(chunk), baseReason, extras);
       supportingCount++;
-      supportingPerDoc.set(chunk.document_id, (supportingPerDoc.get(chunk.document_id) ?? 0) + 1);
       return true;
     };
 
@@ -1894,7 +1925,7 @@ Deno.serve(async (req) => {
       else admittedFromBoth++;
     }
 
-    console.log(`[records-room] Admitted: ${admitted.length} (strong: ${strongCount}, supporting: ${supportingCount}, filtered_low_info: ${filteredLowInfo}, dupe_suppressed: ${dupeSuppressed}, neighbor_suppressed: ${neighborSuppressed}, same_doc_capped: ${sameDocCapped}, lexical_supp_excluded: ${lexicalSupportingExcluded}, dominance_excluded: ${dominanceDemotedExcluded}, same_doc_supp_capped: ${sameDocSupportingCapped})`);
+    console.log(`[records-room] Admitted: ${admitted.length} (strong: ${strongCount}, supporting: ${supportingCount}, filtered_low_info: ${filteredLowInfo}, dupe_suppressed: ${dupeSuppressed}, neighbor_suppressed: ${neighborSuppressed}, same_doc_capped: ${sameDocCapped}, lexical_supp_excluded: ${lexicalSupportingExcluded}, dominance_excluded: ${dominanceDemotedExcluded}, local_redundancy_excluded: ${localRedundancyExcluded}, distant_same_doc_allowed: ${distantSameDocAllowed})`);
     console.log(`[records-room] Admitted origins — semantic: ${admittedFromSemantic}, lexical: ${admittedFromLexical}, both: ${admittedFromBoth}`);
 
     // Per-candidate scoring diagnostics for top results
@@ -1991,7 +2022,7 @@ Deno.serve(async (req) => {
 
     const diagnostics: Record<string, unknown> = {
       intake,
-      ranking_version: "v6.1_supporting_cleanup",
+      ranking_version: "v6.2_locality_diversity",
       // Recall diagnostics
       semantic_recall_count: semanticCandidates.length,
       lexical_recall_count: lexicalCandidates.length,
@@ -2009,7 +2040,8 @@ Deno.serve(async (req) => {
       same_doc_capped: sameDocCapped,
       lexical_supporting_excluded: lexicalSupportingExcluded,
       dominance_demoted_excluded: dominanceDemotedExcluded,
-      same_doc_supporting_capped: sameDocSupportingCapped,
+      local_redundancy_excluded: localRedundancyExcluded,
+      distant_same_doc_allowed: distantSameDocAllowed,
       admitted_count: admitted.length,
       strong_count: strong_evidence.length,
       supporting_count: supporting_materials.length,
@@ -2076,7 +2108,7 @@ Deno.serve(async (req) => {
           admitted_origins: { semantic: admittedFromSemantic, lexical: admittedFromLexical, both: admittedFromBoth },
           caps_hit_count: caps.hitCount,
           duration_ms: Date.now() - startTime,
-          ranking_version: "v6.1_supporting_cleanup",
+          ranking_version: "v6.2_locality_diversity",
           failure_state,
           filtered_low_info: filteredLowInfo,
           dupe_suppressed: dupeSuppressed,
@@ -2084,7 +2116,8 @@ Deno.serve(async (req) => {
           same_doc_capped: sameDocCapped,
           lexical_supporting_excluded: lexicalSupportingExcluded,
           dominance_demoted_excluded: dominanceDemotedExcluded,
-          same_doc_supporting_capped: sameDocSupportingCapped,
+          local_redundancy_excluded: localRedundancyExcluded,
+          distant_same_doc_allowed: distantSameDocAllowed,
           scored_count: scored.length,
           admitted_count: admitted.length,
           top_similarity: candidates.length > 0 ? parseFloat(Math.max(...candidates.map(c => c.similarity)).toFixed(4)) : 0,
