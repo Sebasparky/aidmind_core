@@ -2090,7 +2090,7 @@ Deno.serve(async (req) => {
           neighborSuppressed++;
           continue;
         }
-      } else if (chunk.composite_score >= STRONG_EVIDENCE_THRESHOLD && strongCount < LIMITS.MAX_STRONG_EVIDENCE) {
+      } else if (chunk.composite_score >= effectiveStrongThreshold && strongCount < LIMITS.MAX_STRONG_EVIDENCE) {
         // ── Strong Evidence admission gates (v6 — cleanliness-in-composite) ──
 
         let strongGateFailReason: string | null = null;
