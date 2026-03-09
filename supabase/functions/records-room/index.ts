@@ -186,6 +186,9 @@ interface ScoredChunk {
   excerpt_density: number;
   metadata_match: number;
   freshness_score: number;
+  section_match_score: number;
+  exact_phrase_score: number;
+  directness_score: number;
   recall_origin: RecallOrigin;
   bucket: "strong_evidence" | "supporting_material" | "excluded";
 }
@@ -230,18 +233,21 @@ interface RetrieveResponse {
 /* ── Scoring constants ── */
 
 const DEFAULT_MIN_SIMILARITY = 0.25;
-const STRONG_EVIDENCE_THRESHOLD = 0.55;
-const SUPPORTING_THRESHOLD = 0.35;
+const STRONG_EVIDENCE_THRESHOLD = 0.52;
+const SUPPORTING_THRESHOLD = 0.32;
 
-/* ── Scoring weights (Records Room v1) ── */
-const W_SEMANTIC = 0.30;
-const W_LEXICAL = 0.20;
-const W_AUTHORITY = 0.15;
-const W_PROCEDURAL = 0.10;
-const W_EXCERPT_DENSITY = 0.10;
-const W_METADATA = 0.05;
-const W_FRESHNESS = 0.05;
-const W_CONTEXT = 0.05;
+/* ── Scoring weights (Records Room v2 — directness-aware) ── */
+const W_SEMANTIC = 0.20;
+const W_LEXICAL = 0.12;
+const W_AUTHORITY = 0.10;
+const W_PROCEDURAL = 0.06;
+const W_EXCERPT_DENSITY = 0.05;
+const W_METADATA = 0.04;
+const W_FRESHNESS = 0.03;
+const W_CONTEXT = 0.03;
+const W_SECTION_MATCH = 0.15;
+const W_EXACT_PHRASE = 0.12;
+const W_DIRECTNESS = 0.10;
 
 /* ── Low-info detection ── */
 
@@ -512,6 +518,223 @@ function computeFreshnessScore(metadata: Record<string, unknown>): number {
   return 0.2;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+ *  SECTION MATCH SCORING
+ *
+ *  Detects section-style references in query (e.g. 1229, 1229a,
+ *  §1182, "8 U.S.C. 1229a") and rewards candidates that contain
+ *  those exact references.
+ * ═══════════════════════════════════════════════════════════════ */
+
+const SECTION_REF_PATTERN = /(?:§\s*|section\s+|8\s+u\.?s\.?c\.?\s+)(\d{3,5}[a-z]?(?:-\d+)?)/gi;
+const BARE_SECTION_PATTERN = /\b(\d{4}[a-z]?)\b/g;
+
+function extractSectionRefs(text: string): string[] {
+  const refs = new Set<string>();
+  const lower = text.toLowerCase();
+
+  let m: RegExpExecArray | null;
+  const p1 = new RegExp(SECTION_REF_PATTERN.source, "gi");
+  while ((m = p1.exec(lower)) !== null) {
+    refs.add(m[1].replace(/\s+/g, ""));
+  }
+
+  // Also catch bare 4-digit numbers that look like USC section numbers
+  const p2 = new RegExp(BARE_SECTION_PATTERN.source, "g");
+  while ((m = p2.exec(lower)) !== null) {
+    const num = parseInt(m[1], 10);
+    // Plausible USC section range (Title 8 is ~1101-1778)
+    if (num >= 1100 && num <= 9999) {
+      refs.add(m[1]);
+    }
+  }
+
+  return [...refs];
+}
+
+function computeSectionMatchScore(query: string, content: string, metadata: Record<string, unknown>): number {
+  const queryRefs = extractSectionRefs(query);
+  if (queryRefs.length === 0) return 0.5; // neutral when query has no section refs
+
+  const contentLower = content.toLowerCase();
+  const headingLower = String(metadata.heading_path ?? metadata.section_heading ?? "").toLowerCase();
+  const allText = contentLower + " " + headingLower;
+
+  let matches = 0;
+  for (const ref of queryRefs) {
+    // Exact section reference in content or heading
+    if (allText.includes(ref)) {
+      matches++;
+    }
+  }
+
+  if (matches === 0) return 0.0; // no section match at all
+  if (matches === queryRefs.length) return 1.0; // all sections matched
+  return 0.5 + (matches / queryRefs.length) * 0.5;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ *  EXACT PHRASE SCORING
+ *
+ *  Rewards candidates containing exact multi-word phrases from
+ *  the query. Phrases are extracted as bigrams and trigrams.
+ *  Much stronger than bag-of-words overlap.
+ * ═══════════════════════════════════════════════════════════════ */
+
+const STOP_WORDS = new Set([
+  "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+  "have", "has", "had", "do", "does", "did", "will", "would", "shall",
+  "should", "may", "might", "can", "could", "to", "of", "in", "for",
+  "on", "with", "at", "by", "from", "as", "into", "about", "between",
+  "through", "during", "and", "but", "or", "not", "no", "so", "if",
+  "than", "that", "this", "it", "its", "what", "which", "who", "whom",
+  "how", "when", "where", "why", "does", "mean", "happens",
+]);
+
+function extractPhrases(text: string): string[] {
+  const words = text.toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .filter(w => w.length > 1 && !STOP_WORDS.has(w));
+
+  const phrases: string[] = [];
+  // Trigrams
+  for (let i = 0; i < words.length - 2; i++) {
+    phrases.push(`${words[i]} ${words[i + 1]} ${words[i + 2]}`);
+  }
+  // Bigrams
+  for (let i = 0; i < words.length - 1; i++) {
+    phrases.push(`${words[i]} ${words[i + 1]}`);
+  }
+  return phrases;
+}
+
+function computeExactPhraseScore(query: string, content: string): number {
+  const queryPhrases = extractPhrases(query);
+  if (queryPhrases.length === 0) return 0.5;
+
+  const contentLower = content.toLowerCase();
+  let hits = 0;
+  let totalWeight = 0;
+
+  for (const phrase of queryPhrases) {
+    const wordCount = phrase.split(" ").length;
+    const weight = wordCount === 3 ? 2.0 : 1.0; // trigrams worth more
+    totalWeight += weight;
+    if (contentLower.includes(phrase)) {
+      hits += weight;
+    }
+  }
+
+  if (totalWeight === 0) return 0.5;
+  return hits / totalWeight;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ *  DIRECTNESS SCORING
+ *
+ *  Measures how "primary-source" a chunk is for the query topic:
+ *  - Does it define/state the concept (vs merely reference it)?
+ *  - Does the heading/section directly name the queried concept?
+ *  - Does the text begin with the relevant provision language?
+ *  - Is it a downstream consequence or appellate mechanism?
+ * ═══════════════════════════════════════════════════════════════ */
+
+const DOWNSTREAM_SIGNALS = [
+  "judicial review", "appeal of", "review of order",
+  "stay of removal", "motion to reopen", "reconsideration",
+  "scope of review", "standard of review",
+];
+
+const DEFINITION_SIGNALS = [
+  "means", "is defined as", "refers to", "shall mean",
+  "for purposes of this", "as used in this",
+];
+
+function computeDirectnessScore(query: string, content: string, metadata: Record<string, unknown>): number {
+  const queryWords = query.toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .filter(w => w.length > 3 && !STOP_WORDS.has(w));
+
+  if (queryWords.length === 0) return 0.5;
+
+  const contentLower = content.toLowerCase();
+  const headingLower = String(metadata.heading_path ?? metadata.section_heading ?? "").toLowerCase();
+
+  let score = 0.5; // neutral baseline
+
+  // 1. Heading directly contains query concept words → strong directness signal
+  const headingWords = headingLower.split(/\s+/).filter(w => w.length > 2);
+  if (headingWords.length > 0) {
+    let headingHits = 0;
+    for (const w of queryWords) {
+      if (headingLower.includes(w)) headingHits++;
+    }
+    const headingCoverage = headingHits / queryWords.length;
+    score += headingCoverage * 0.25;
+  }
+
+  // 2. Content opens with query-relevant language (first 200 chars)
+  const opening = contentLower.slice(0, 200);
+  let openingHits = 0;
+  for (const w of queryWords) {
+    if (opening.includes(w)) openingHits++;
+  }
+  score += (openingHits / queryWords.length) * 0.15;
+
+  // 3. Contains definition/statement language → primary source
+  for (const sig of DEFINITION_SIGNALS) {
+    if (contentLower.includes(sig)) {
+      score += 0.08;
+      break;
+    }
+  }
+
+  // 4. Downstream/appellate content when query is about base concept → penalize
+  let isDownstream = false;
+  for (const sig of DOWNSTREAM_SIGNALS) {
+    if (contentLower.includes(sig)) {
+      isDownstream = true;
+      break;
+    }
+  }
+  // Only penalize if the query doesn't seem to be asking about review/appeal
+  const queryLower = query.toLowerCase();
+  const queryAsksReview = /review|appeal|reopen|reconsider/i.test(queryLower);
+  if (isDownstream && !queryAsksReview) {
+    score -= 0.12;
+  }
+
+  // 5. Exact query phrase appears in content → strong directness
+  const queryPhrase = queryWords.join(" ");
+  if (queryPhrase.length > 6 && contentLower.includes(queryPhrase)) {
+    score += 0.1;
+  }
+
+  return Math.max(0, Math.min(1, score));
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ *  SOURCE TYPE DETECTION
+ *
+ *  Detects whether content is statute-like (exact matching matters
+ *  more) vs handbook-like (semantic relevance can be broader).
+ * ═══════════════════════════════════════════════════════════════ */
+
+function isStatuteLikeContent(content: string, metadata: Record<string, unknown>): boolean {
+  const title = String(metadata.title ?? "").toLowerCase();
+  const source = String(metadata.source_type ?? metadata.source ?? "").toLowerCase();
+  const allMeta = `${title} ${source}`;
+
+  if (/\b(statute|code|u\.?s\.?c|title\s+\d|regulation|cfr|act)\b/i.test(allMeta)) return true;
+  // Content-based detection: high density of section references and "shall"/"must" language
+  const lower = content.toLowerCase();
+  const sectionCount = (lower.match(/§|\bsection\s+\d/g) ?? []).length;
+  const shallCount = (lower.match(/\bshall\b/g) ?? []).length;
+  return sectionCount >= 2 || shallCount >= 3;
+}
+
 /* ── Duplication detection ── */
 
 function tokenize(text: string): Set<string> {
@@ -590,7 +813,7 @@ function buildCitationLabel(
   return label.length > maxLen ? label.slice(0, maxLen - 1) + "…" : label;
 }
 
-/* ── Records Room composite scoring ── */
+/* ── Records Room composite scoring (v2 — directness-aware) ── */
 
 function scoreCandidate(
   chunk: { similarity: number; content: string; metadata: Record<string, unknown> },
@@ -603,6 +826,9 @@ function scoreCandidate(
   excerpt_density: number;
   metadata_match: number;
   freshness_score: number;
+  section_match_score: number;
+  exact_phrase_score: number;
+  directness_score: number;
 } {
   const lexical_score = computeLexicalScore(query, chunk.content);
   const authority_score = computeAuthorityScore(chunk.metadata);
@@ -611,6 +837,14 @@ function scoreCandidate(
   const metadata_match = computeMetadataMatch(query, chunk.metadata, intake);
   const freshness_score = computeFreshnessScore(chunk.metadata);
   const context_quality = computeInfoQuality(chunk.content);
+  const section_match_score = computeSectionMatchScore(query, chunk.content, chunk.metadata);
+  const exact_phrase_score = computeExactPhraseScore(query, chunk.content);
+  const directness_score = computeDirectnessScore(query, chunk.content, chunk.metadata);
+
+  // Source-type-aware weight adjustment: statute-like content gets
+  // stronger exactness bias (section + phrase weights boosted)
+  const isStatute = isStatuteLikeContent(chunk.content, chunk.metadata);
+  const statuteBias = isStatute ? 1.3 : 1.0;
 
   const composite_score =
     W_SEMANTIC * chunk.similarity +
@@ -620,9 +854,16 @@ function scoreCandidate(
     W_EXCERPT_DENSITY * excerpt_density +
     W_METADATA * metadata_match +
     W_FRESHNESS * freshness_score +
-    W_CONTEXT * context_quality;
+    W_CONTEXT * context_quality +
+    W_SECTION_MATCH * section_match_score * statuteBias +
+    W_EXACT_PHRASE * exact_phrase_score * statuteBias +
+    W_DIRECTNESS * directness_score;
 
-  return { composite_score, lexical_score, authority_score, excerpt_density, metadata_match, freshness_score };
+  return {
+    composite_score, lexical_score, authority_score, excerpt_density,
+    metadata_match, freshness_score, section_match_score, exact_phrase_score,
+    directness_score,
+  };
 }
 
 /* ── Source access URL builders (signed URLs for private buckets) ── */
@@ -1039,6 +1280,9 @@ Deno.serve(async (req) => {
         excerpt_density: scores.excerpt_density,
         metadata_match: scores.metadata_match,
         freshness_score: scores.freshness_score,
+        section_match_score: scores.section_match_score,
+        exact_phrase_score: scores.exact_phrase_score,
+        directness_score: scores.directness_score,
         recall_origin: entry.origin,
         bucket: "excluded",
       });
@@ -1053,16 +1297,20 @@ Deno.serve(async (req) => {
       scored.sort((a, b) => b.composite_score - a.composite_score);
     }
 
-    // Deduplicate + bucket assignment
+    // Deduplicate + neighbor suppression + bucket assignment
     const admitted: ScoredChunk[] = [];
     const admittedTokenSets: Set<string>[] = [];
+    // Track admitted (document_id, chunk_index) for neighbor suppression
+    const admittedChunkKeys: { document_id: string; chunk_index: number }[] = [];
     let strongCount = 0;
     let supportingCount = 0;
     let dupeSuppressed = 0;
+    let neighborSuppressed = 0;
 
     for (const chunk of scored) {
       if (admitted.length >= LIMITS.MAX_ADMITTED_CANDIDATES) break;
 
+      // Jaccard dedup
       const tokens = tokenize(chunk.content);
       let isDupe = false;
       for (const existing of admittedTokenSets) {
@@ -1074,7 +1322,29 @@ Deno.serve(async (req) => {
       }
       if (isDupe) continue;
 
-      if (chunk.composite_score >= STRONG_EVIDENCE_THRESHOLD && strongCount < LIMITS.MAX_STRONG_EVIDENCE) {
+      // Neighbor-chunk suppression: if a chunk from the same document
+      // with adjacent chunk_index is already admitted with a higher score,
+      // demote this one (still allow it as supporting, but not strong)
+      let isNeighborOfStronger = false;
+      for (const ak of admittedChunkKeys) {
+        if (ak.document_id === chunk.document_id &&
+            Math.abs(ak.chunk_index - chunk.chunk_index) <= 1) {
+          isNeighborOfStronger = true;
+          break;
+        }
+      }
+
+      if (isNeighborOfStronger) {
+        // Neighbor of already-admitted chunk: can only be supporting, not strong
+        if (supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS && chunk.composite_score >= SUPPORTING_THRESHOLD) {
+          chunk.bucket = "supporting_material";
+          supportingCount++;
+          neighborSuppressed++;
+        } else {
+          neighborSuppressed++;
+          continue;
+        }
+      } else if (chunk.composite_score >= STRONG_EVIDENCE_THRESHOLD && strongCount < LIMITS.MAX_STRONG_EVIDENCE) {
         chunk.bucket = "strong_evidence";
         strongCount++;
       } else if (chunk.composite_score >= SUPPORTING_THRESHOLD && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
@@ -1086,6 +1356,7 @@ Deno.serve(async (req) => {
 
       admitted.push(chunk);
       admittedTokenSets.push(tokens);
+      admittedChunkKeys.push({ document_id: chunk.document_id, chunk_index: chunk.chunk_index });
     }
 
     // Track admitted origins
@@ -1096,8 +1367,14 @@ Deno.serve(async (req) => {
       else admittedFromBoth++;
     }
 
-    console.log(`[records-room] Admitted: ${admitted.length} (strong: ${strongCount}, supporting: ${supportingCount}, filtered_low_info: ${filteredLowInfo}, dupe_suppressed: ${dupeSuppressed})`);
+    console.log(`[records-room] Admitted: ${admitted.length} (strong: ${strongCount}, supporting: ${supportingCount}, filtered_low_info: ${filteredLowInfo}, dupe_suppressed: ${dupeSuppressed}, neighbor_suppressed: ${neighborSuppressed})`);
     console.log(`[records-room] Admitted origins — semantic: ${admittedFromSemantic}, lexical: ${admittedFromLexical}, both: ${admittedFromBoth}`);
+
+    // Per-candidate scoring diagnostics for top results
+    for (let i = 0; i < Math.min(admitted.length, 5); i++) {
+      const a = admitted[i];
+      console.log(`[records-room] Rank #${i + 1} [${a.bucket}] chunk=${a.chunk_id.slice(0, 8)} doc=${a.document_id.slice(0, 8)} ci=${a.chunk_index} | sim=${a.similarity.toFixed(3)} lex=${a.lexical_score.toFixed(3)} sec=${a.section_match_score.toFixed(3)} phr=${a.exact_phrase_score.toFixed(3)} dir=${a.directness_score.toFixed(3)} auth=${a.authority_score.toFixed(3)} composite=${a.composite_score.toFixed(4)} origin=${a.recall_origin}`);
+    }
 
     /* ══════════════════════════════════════════════════════════
      *  Stage 4: Excerpt assembly
@@ -1187,6 +1464,7 @@ Deno.serve(async (req) => {
 
     const diagnostics: Record<string, unknown> = {
       intake,
+      ranking_version: "v2_directness_aware",
       // Recall diagnostics
       semantic_recall_count: semanticCandidates.length,
       lexical_recall_count: lexicalCandidates.length,
@@ -1200,6 +1478,7 @@ Deno.serve(async (req) => {
       filtered_low_info: filteredLowInfo,
       scored_count: scored.length,
       dupe_suppressed: dupeSuppressed,
+      neighbor_suppressed: neighborSuppressed,
       admitted_count: admitted.length,
       strong_count: strong_evidence.length,
       supporting_count: supporting_materials.length,
@@ -1207,6 +1486,23 @@ Deno.serve(async (req) => {
       admitted_from_semantic: admittedFromSemantic,
       admitted_from_lexical: admittedFromLexical,
       admitted_from_both: admittedFromBoth,
+      // Per-candidate scoring breakdown (top 5)
+      top_candidates: admitted.slice(0, 5).map((a, i) => ({
+        rank: i + 1,
+        bucket: a.bucket,
+        chunk_id: a.chunk_id,
+        chunk_index: a.chunk_index,
+        document_id: a.document_id,
+        similarity: parseFloat(a.similarity.toFixed(4)),
+        lexical_score: parseFloat(a.lexical_score.toFixed(4)),
+        section_match_score: parseFloat(a.section_match_score.toFixed(4)),
+        exact_phrase_score: parseFloat(a.exact_phrase_score.toFixed(4)),
+        directness_score: parseFloat(a.directness_score.toFixed(4)),
+        authority_score: parseFloat(a.authority_score.toFixed(4)),
+        metadata_match: parseFloat(a.metadata_match.toFixed(4)),
+        composite_score: parseFloat(a.composite_score.toFixed(4)),
+        recall_origin: a.recall_origin,
+      })),
       // Quality metrics
       top_similarity: candidates.length > 0 ? parseFloat(Math.max(...candidates.map(c => c.similarity)).toFixed(4)) : 0,
       avg_composite: admitted.length > 0
@@ -1218,7 +1514,7 @@ Deno.serve(async (req) => {
       failure_state,
       duration_ms: Date.now() - startTime,
       // Architecture note
-      embedding_provider: "openai_hosted_bridge", // TEMPORARY — will change to "local" when local embeddings available
+      embedding_provider: "openai_hosted_bridge",
     };
 
     console.log("[records-room] Diagnostics:", JSON.stringify(diagnostics));
