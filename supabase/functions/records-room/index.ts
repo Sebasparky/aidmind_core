@@ -1547,7 +1547,7 @@ Deno.serve(async (req) => {
             candidate_count: 0,
             result: "failure",
             reason_code: "no_matching_materials",
-            ranking_version: "v6.2_locality_diversity",
+            ranking_version: "v6.3_supporting_usefulness",
             failure_state: "no_matching_materials",
             semantic_recall: semanticCandidates.length,
             lexical_recall: lexicalCandidates.length,
@@ -1644,60 +1644,109 @@ Deno.serve(async (req) => {
     let dominanceDemotedExcluded = 0;
     let localRedundancyExcluded = 0;
     let distantSameDocAllowed = 0;
+    let supportingUsefulnessFailed = 0;
+    let distantLowValueExcluded = 0;
 
-    // ── v6.2: Supporting admission helper — locality-based diversity ──
-    // Checks whether a chunk deserves supporting admission beyond just meeting SUPPORTING_THRESHOLD.
-    // Replaces the old per-document cap with content-locality awareness.
+    // ── v6.3: Supporting usefulness score ──
+    // Computes a 0-1 score representing how much genuine value a supporting chunk adds.
+    // This is NOT the composite score — it measures usefulness specifically for supporting admission.
+    const computeSupportingUsefulness = (chunk: ScoredChunk): number => {
+      // Weighted combination of signals that indicate real supporting value
+      const semGrounding = Math.min(1, chunk.similarity / 0.5); // 0-1 normalized, 0.5+ = full credit
+      const conceptStrength = chunk.concept_anchor_score;
+      const directnessVal = chunk.directness_score;
+      const sectionSpecificity = chunk.section_match_score;
+
+      // Penalize lexical-only with very low semantic grounding
+      const recallPenalty = (chunk.recall_origin === "lexical" && chunk.similarity < 0.2) ? 0.15 : 0;
+
+      return (
+        semGrounding * 0.30 +
+        conceptStrength * 0.30 +
+        directnessVal * 0.20 +
+        sectionSpecificity * 0.20
+      ) - recallPenalty;
+    };
+
+    // Minimum supporting usefulness thresholds
+    const MIN_SUPPORTING_USEFULNESS = 0.35; // general floor
+    const MIN_SUPPORTING_USEFULNESS_LEXICAL = 0.42; // stricter for lexical-only
+    const MIN_SUPPORTING_USEFULNESS_DEMOTED = 0.40; // stricter for dominance-demoted
+
+    // ── v6.3: Supporting admission helper — usefulness + locality ──
     // Returns null if admitted, or a reason string if excluded.
     const checkSupportingFloor = (chunk: ScoredChunk, demotionSource: string | null): string | null => {
-      // Gate A: Lexical-only with weak semantic similarity needs strong proof
+      const usefulness = computeSupportingUsefulness(chunk);
+
+      // Gate A (v6.3 tightened): Lexical-only with weak semantic similarity
+      // Now requires BOTH strong proof AND minimum usefulness
       if (chunk.recall_origin === "lexical" && chunk.similarity < 0.25) {
-        const hasStrongProof =
-          chunk.section_match_score >= 0.7 ||
-          chunk.concept_anchor_score >= 0.55 ||
-          chunk.directness_score >= 0.6 ||
-          (chunk.exact_phrase_score >= 0.5 && chunk.section_match_score >= 0.5);
-        if (!hasStrongProof) return "lexical_supporting_excluded";
+        // Needs at least two of these signals, not just one
+        let proofSignals = 0;
+        if (chunk.section_match_score >= 0.7) proofSignals++;
+        if (chunk.concept_anchor_score >= 0.55) proofSignals++;
+        if (chunk.directness_score >= 0.6 && chunk.similarity >= 0.18) proofSignals++; // directness alone not enough
+        if (chunk.exact_phrase_score >= 0.5 && chunk.section_match_score >= 0.5) proofSignals++;
+        if (proofSignals < 2 || usefulness < MIN_SUPPORTING_USEFULNESS_LEXICAL) {
+          return "lexical_supporting_excluded";
+        }
       }
 
-      // Gate B: Dominance-demoted chunks need to actually add value
+      // Gate B (v6.3 tightened): Dominance-demoted chunks need real value-add
+      // Must pass stricter usefulness floor AND prove distinct contribution
       if (demotionSource === "clean_primary_dominance") {
-        const addsValue =
-          chunk.concept_anchor_score >= 0.5 ||
-          chunk.directness_score >= 0.55 ||
-          chunk.similarity >= 0.35 ||
-          chunk.section_match_score >= 0.7;
-        if (!addsValue) return "dominance_demoted_excluded";
+        if (usefulness < MIN_SUPPORTING_USEFULNESS_DEMOTED) return "dominance_demoted_excluded";
+        // Additional: must have meaningful semantic grounding or section specificity
+        const hasSubstance =
+          chunk.similarity >= 0.30 ||
+          (chunk.concept_anchor_score >= 0.5 && chunk.section_match_score >= 0.6) ||
+          (chunk.directness_score >= 0.6 && chunk.concept_anchor_score >= 0.45);
+        if (!hasSubstance) return "dominance_demoted_excluded";
       }
 
-      // Gate C (v6.2): Locality-based redundancy — replace flat per-doc cap.
-      // A chunk is "locally redundant" if an already-admitted chunk from the same document
-      // is within ±SUPPORTING_LOCALITY_WINDOW chunk indices AND shares similar heading context.
-      // Distant chunks from the same document are allowed through.
+      // Gate C (v6.2 preserved): Locality-based redundancy
       const chunkHeading = String(chunk.metadata.heading_path ?? chunk.metadata.section_heading ?? "").toLowerCase();
       let localNeighborCount = 0;
       for (const ak of admitted) {
         if (ak.document_id !== chunk.document_id) continue;
         const idxDistance = Math.abs(ak.chunk_index - chunk.chunk_index);
-
-        // Far-apart chunks (different region of document) — not redundant
         if (idxDistance > SUPPORTING_LOCALITY_WINDOW) continue;
 
-        // Same local region: check heading similarity for extra confirmation
         const akHeading = String(ak.metadata.heading_path ?? ak.metadata.section_heading ?? "").toLowerCase();
         const headingsSame = chunkHeading.length > 0 && akHeading.length > 0 &&
           (chunkHeading === akHeading || chunkHeading.startsWith(akHeading) || akHeading.startsWith(chunkHeading));
 
-        // If within ±2 (very close), always counts as local neighbor
-        // If within ±5 but >2, only counts if headings overlap
         if (idxDistance <= 2 || headingsSame) {
           localNeighborCount++;
         }
       }
-
-      // Allow at most 1 local neighbor from the same region in supporting
-      // (the primary/strong chunk from that region is already admitted)
       if (localNeighborCount >= 2) return "local_redundancy_excluded";
+
+      // Gate D (v6.3 new): General supporting usefulness floor
+      // Every supporting candidate must clear a minimum usefulness bar
+      if (usefulness < MIN_SUPPORTING_USEFULNESS) return "supporting_usefulness_failed";
+
+      // Gate E (v6.3 new): Distant same-doc chunks need HIGHER usefulness
+      // Distance earns diversity credit but not automatic admission
+      const sameDocAdmitted = admitted.filter(a => a.document_id === chunk.document_id);
+      if (sameDocAdmitted.length > 0) {
+        const allDistant = sameDocAdmitted.every(a =>
+          Math.abs(a.chunk_index - chunk.chunk_index) > SUPPORTING_LOCALITY_WINDOW
+        );
+        if (allDistant) {
+          // Distant same-doc: must prove substantive distinctness
+          const distantFloor = 0.40;
+          if (usefulness < distantFloor) return "distant_but_low_value_excluded";
+          // Check heading/section distinctness from already-admitted same-doc chunks
+          const chunkSection = chunkHeading || String(chunk.chunk_index);
+          const isSubstantivelyDistinct = sameDocAdmitted.every(a => {
+            const aHeading = String(a.metadata.heading_path ?? a.metadata.section_heading ?? "").toLowerCase();
+            const aSection = aHeading || String(a.chunk_index);
+            return chunkSection !== aSection;
+          });
+          if (!isSubstantivelyDistinct && usefulness < 0.50) return "distant_but_low_value_excluded";
+        }
+      }
 
       return null;
     };
@@ -1713,6 +1762,8 @@ Deno.serve(async (req) => {
         if (floorFail === "lexical_supporting_excluded") lexicalSupportingExcluded++;
         else if (floorFail === "dominance_demoted_excluded") dominanceDemotedExcluded++;
         else if (floorFail === "local_redundancy_excluded") localRedundancyExcluded++;
+        else if (floorFail === "supporting_usefulness_failed") supportingUsefulnessFailed++;
+        else if (floorFail === "distant_but_low_value_excluded") distantLowValueExcluded++;
         return false;
       }
 
@@ -1723,8 +1774,9 @@ Deno.serve(async (req) => {
         if (allDistant) distantSameDocAllowed++;
       }
 
+      const usefulness = computeSupportingUsefulness(chunk);
       chunk.bucket = "supporting_material";
-      chunk.admission_reason = buildReasonFor(chunk, collateralBurdenFor(chunk), baseReason, extras);
+      chunk.admission_reason = buildReasonFor(chunk, collateralBurdenFor(chunk), baseReason, { ...extras, usefulness: usefulness.toFixed(3) });
       supportingCount++;
       return true;
     };
@@ -1925,7 +1977,7 @@ Deno.serve(async (req) => {
       else admittedFromBoth++;
     }
 
-    console.log(`[records-room] Admitted: ${admitted.length} (strong: ${strongCount}, supporting: ${supportingCount}, filtered_low_info: ${filteredLowInfo}, dupe_suppressed: ${dupeSuppressed}, neighbor_suppressed: ${neighborSuppressed}, same_doc_capped: ${sameDocCapped}, lexical_supp_excluded: ${lexicalSupportingExcluded}, dominance_excluded: ${dominanceDemotedExcluded}, local_redundancy_excluded: ${localRedundancyExcluded}, distant_same_doc_allowed: ${distantSameDocAllowed})`);
+    console.log(`[records-room] Admitted: ${admitted.length} (strong: ${strongCount}, supporting: ${supportingCount}, filtered_low_info: ${filteredLowInfo}, dupe_suppressed: ${dupeSuppressed}, neighbor_suppressed: ${neighborSuppressed}, same_doc_capped: ${sameDocCapped}, lexical_supp_excluded: ${lexicalSupportingExcluded}, dominance_excluded: ${dominanceDemotedExcluded}, local_redundancy_excluded: ${localRedundancyExcluded}, distant_same_doc_allowed: ${distantSameDocAllowed}, usefulness_failed: ${supportingUsefulnessFailed}, distant_low_value: ${distantLowValueExcluded})`);
     console.log(`[records-room] Admitted origins — semantic: ${admittedFromSemantic}, lexical: ${admittedFromLexical}, both: ${admittedFromBoth}`);
 
     // Per-candidate scoring diagnostics for top results
@@ -2022,7 +2074,7 @@ Deno.serve(async (req) => {
 
     const diagnostics: Record<string, unknown> = {
       intake,
-      ranking_version: "v6.2_locality_diversity",
+      ranking_version: "v6.3_supporting_usefulness",
       // Recall diagnostics
       semantic_recall_count: semanticCandidates.length,
       lexical_recall_count: lexicalCandidates.length,
@@ -2042,6 +2094,8 @@ Deno.serve(async (req) => {
       dominance_demoted_excluded: dominanceDemotedExcluded,
       local_redundancy_excluded: localRedundancyExcluded,
       distant_same_doc_allowed: distantSameDocAllowed,
+      supporting_usefulness_failed: supportingUsefulnessFailed,
+      distant_low_value_excluded: distantLowValueExcluded,
       admitted_count: admitted.length,
       strong_count: strong_evidence.length,
       supporting_count: supporting_materials.length,
@@ -2108,7 +2162,7 @@ Deno.serve(async (req) => {
           admitted_origins: { semantic: admittedFromSemantic, lexical: admittedFromLexical, both: admittedFromBoth },
           caps_hit_count: caps.hitCount,
           duration_ms: Date.now() - startTime,
-          ranking_version: "v6.2_locality_diversity",
+          ranking_version: "v6.3_supporting_usefulness",
           failure_state,
           filtered_low_info: filteredLowInfo,
           dupe_suppressed: dupeSuppressed,
@@ -2118,6 +2172,8 @@ Deno.serve(async (req) => {
           dominance_demoted_excluded: dominanceDemotedExcluded,
           local_redundancy_excluded: localRedundancyExcluded,
           distant_same_doc_allowed: distantSameDocAllowed,
+          supporting_usefulness_failed: supportingUsefulnessFailed,
+          distant_low_value_excluded: distantLowValueExcluded,
           scored_count: scored.length,
           admitted_count: admitted.length,
           top_similarity: candidates.length > 0 ? parseFloat(Math.max(...candidates.map(c => c.similarity)).toFixed(4)) : 0,
