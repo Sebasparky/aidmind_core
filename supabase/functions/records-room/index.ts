@@ -518,6 +518,223 @@ function computeFreshnessScore(metadata: Record<string, unknown>): number {
   return 0.2;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+ *  SECTION MATCH SCORING
+ *
+ *  Detects section-style references in query (e.g. 1229, 1229a,
+ *  §1182, "8 U.S.C. 1229a") and rewards candidates that contain
+ *  those exact references.
+ * ═══════════════════════════════════════════════════════════════ */
+
+const SECTION_REF_PATTERN = /(?:§\s*|section\s+|8\s+u\.?s\.?c\.?\s+)(\d{3,5}[a-z]?(?:-\d+)?)/gi;
+const BARE_SECTION_PATTERN = /\b(\d{4}[a-z]?)\b/g;
+
+function extractSectionRefs(text: string): string[] {
+  const refs = new Set<string>();
+  const lower = text.toLowerCase();
+
+  let m: RegExpExecArray | null;
+  const p1 = new RegExp(SECTION_REF_PATTERN.source, "gi");
+  while ((m = p1.exec(lower)) !== null) {
+    refs.add(m[1].replace(/\s+/g, ""));
+  }
+
+  // Also catch bare 4-digit numbers that look like USC section numbers
+  const p2 = new RegExp(BARE_SECTION_PATTERN.source, "g");
+  while ((m = p2.exec(lower)) !== null) {
+    const num = parseInt(m[1], 10);
+    // Plausible USC section range (Title 8 is ~1101-1778)
+    if (num >= 1100 && num <= 9999) {
+      refs.add(m[1]);
+    }
+  }
+
+  return [...refs];
+}
+
+function computeSectionMatchScore(query: string, content: string, metadata: Record<string, unknown>): number {
+  const queryRefs = extractSectionRefs(query);
+  if (queryRefs.length === 0) return 0.5; // neutral when query has no section refs
+
+  const contentLower = content.toLowerCase();
+  const headingLower = String(metadata.heading_path ?? metadata.section_heading ?? "").toLowerCase();
+  const allText = contentLower + " " + headingLower;
+
+  let matches = 0;
+  for (const ref of queryRefs) {
+    // Exact section reference in content or heading
+    if (allText.includes(ref)) {
+      matches++;
+    }
+  }
+
+  if (matches === 0) return 0.0; // no section match at all
+  if (matches === queryRefs.length) return 1.0; // all sections matched
+  return 0.5 + (matches / queryRefs.length) * 0.5;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ *  EXACT PHRASE SCORING
+ *
+ *  Rewards candidates containing exact multi-word phrases from
+ *  the query. Phrases are extracted as bigrams and trigrams.
+ *  Much stronger than bag-of-words overlap.
+ * ═══════════════════════════════════════════════════════════════ */
+
+const STOP_WORDS = new Set([
+  "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+  "have", "has", "had", "do", "does", "did", "will", "would", "shall",
+  "should", "may", "might", "can", "could", "to", "of", "in", "for",
+  "on", "with", "at", "by", "from", "as", "into", "about", "between",
+  "through", "during", "and", "but", "or", "not", "no", "so", "if",
+  "than", "that", "this", "it", "its", "what", "which", "who", "whom",
+  "how", "when", "where", "why", "does", "mean", "happens",
+]);
+
+function extractPhrases(text: string): string[] {
+  const words = text.toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .filter(w => w.length > 1 && !STOP_WORDS.has(w));
+
+  const phrases: string[] = [];
+  // Trigrams
+  for (let i = 0; i < words.length - 2; i++) {
+    phrases.push(`${words[i]} ${words[i + 1]} ${words[i + 2]}`);
+  }
+  // Bigrams
+  for (let i = 0; i < words.length - 1; i++) {
+    phrases.push(`${words[i]} ${words[i + 1]}`);
+  }
+  return phrases;
+}
+
+function computeExactPhraseScore(query: string, content: string): number {
+  const queryPhrases = extractPhrases(query);
+  if (queryPhrases.length === 0) return 0.5;
+
+  const contentLower = content.toLowerCase();
+  let hits = 0;
+  let totalWeight = 0;
+
+  for (const phrase of queryPhrases) {
+    const wordCount = phrase.split(" ").length;
+    const weight = wordCount === 3 ? 2.0 : 1.0; // trigrams worth more
+    totalWeight += weight;
+    if (contentLower.includes(phrase)) {
+      hits += weight;
+    }
+  }
+
+  if (totalWeight === 0) return 0.5;
+  return hits / totalWeight;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ *  DIRECTNESS SCORING
+ *
+ *  Measures how "primary-source" a chunk is for the query topic:
+ *  - Does it define/state the concept (vs merely reference it)?
+ *  - Does the heading/section directly name the queried concept?
+ *  - Does the text begin with the relevant provision language?
+ *  - Is it a downstream consequence or appellate mechanism?
+ * ═══════════════════════════════════════════════════════════════ */
+
+const DOWNSTREAM_SIGNALS = [
+  "judicial review", "appeal of", "review of order",
+  "stay of removal", "motion to reopen", "reconsideration",
+  "scope of review", "standard of review",
+];
+
+const DEFINITION_SIGNALS = [
+  "means", "is defined as", "refers to", "shall mean",
+  "for purposes of this", "as used in this",
+];
+
+function computeDirectnessScore(query: string, content: string, metadata: Record<string, unknown>): number {
+  const queryWords = query.toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .filter(w => w.length > 3 && !STOP_WORDS.has(w));
+
+  if (queryWords.length === 0) return 0.5;
+
+  const contentLower = content.toLowerCase();
+  const headingLower = String(metadata.heading_path ?? metadata.section_heading ?? "").toLowerCase();
+
+  let score = 0.5; // neutral baseline
+
+  // 1. Heading directly contains query concept words → strong directness signal
+  const headingWords = headingLower.split(/\s+/).filter(w => w.length > 2);
+  if (headingWords.length > 0) {
+    let headingHits = 0;
+    for (const w of queryWords) {
+      if (headingLower.includes(w)) headingHits++;
+    }
+    const headingCoverage = headingHits / queryWords.length;
+    score += headingCoverage * 0.25;
+  }
+
+  // 2. Content opens with query-relevant language (first 200 chars)
+  const opening = contentLower.slice(0, 200);
+  let openingHits = 0;
+  for (const w of queryWords) {
+    if (opening.includes(w)) openingHits++;
+  }
+  score += (openingHits / queryWords.length) * 0.15;
+
+  // 3. Contains definition/statement language → primary source
+  for (const sig of DEFINITION_SIGNALS) {
+    if (contentLower.includes(sig)) {
+      score += 0.08;
+      break;
+    }
+  }
+
+  // 4. Downstream/appellate content when query is about base concept → penalize
+  let isDownstream = false;
+  for (const sig of DOWNSTREAM_SIGNALS) {
+    if (contentLower.includes(sig)) {
+      isDownstream = true;
+      break;
+    }
+  }
+  // Only penalize if the query doesn't seem to be asking about review/appeal
+  const queryLower = query.toLowerCase();
+  const queryAsksReview = /review|appeal|reopen|reconsider/i.test(queryLower);
+  if (isDownstream && !queryAsksReview) {
+    score -= 0.12;
+  }
+
+  // 5. Exact query phrase appears in content → strong directness
+  const queryPhrase = queryWords.join(" ");
+  if (queryPhrase.length > 6 && contentLower.includes(queryPhrase)) {
+    score += 0.1;
+  }
+
+  return Math.max(0, Math.min(1, score));
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ *  SOURCE TYPE DETECTION
+ *
+ *  Detects whether content is statute-like (exact matching matters
+ *  more) vs handbook-like (semantic relevance can be broader).
+ * ═══════════════════════════════════════════════════════════════ */
+
+function isStatuteLikeContent(content: string, metadata: Record<string, unknown>): boolean {
+  const title = String(metadata.title ?? "").toLowerCase();
+  const source = String(metadata.source_type ?? metadata.source ?? "").toLowerCase();
+  const allMeta = `${title} ${source}`;
+
+  if (/\b(statute|code|u\.?s\.?c|title\s+\d|regulation|cfr|act)\b/i.test(allMeta)) return true;
+  // Content-based detection: high density of section references and "shall"/"must" language
+  const lower = content.toLowerCase();
+  const sectionCount = (lower.match(/§|\bsection\s+\d/g) ?? []).length;
+  const shallCount = (lower.match(/\bshall\b/g) ?? []).length;
+  return sectionCount >= 2 || shallCount >= 3;
+}
+
 /* ── Duplication detection ── */
 
 function tokenize(text: string): Set<string> {
