@@ -190,6 +190,8 @@ interface ScoredChunk {
   exact_phrase_score: number;
   directness_score: number;
   concept_anchor_score: number;
+  collateral_labels: string[];
+  primary_boost: boolean;
   recall_origin: RecallOrigin;
   bucket: "strong_evidence" | "supporting_material" | "excluded";
   admission_reason?: string;
