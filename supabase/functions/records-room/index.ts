@@ -1204,6 +1204,182 @@ function scoreCandidate(
   };
 }
 
+/* ═══════════════════════════════════════════════════════════════
+ *  REFINEMENT SCORING PROFILES
+ *
+ *  Each refinement mode applies a deterministic score adjustment
+ *  to the base composite score. This re-ranks candidates through
+ *  a specific lens without changing the base scoring system.
+ * ═══════════════════════════════════════════════════════════════ */
+
+interface RefinementProfile {
+  directness_multiplier: number;     // boost/reduce directness influence
+  concept_anchor_multiplier: number;
+  section_match_multiplier: number;
+  exact_phrase_multiplier: number;
+  collateral_penalty_multiplier: number; // >1 = penalize more, <1 = relax
+  primary_boost_bonus: number;       // extra bonus for primary_boost=true
+  cleanliness_penalty_multiplier: number;
+  mixed_chunk_penalty_multiplier: number;
+  supporting_admission_bonus: number; // positive = more permissive for supporting
+  content_keyword_boost: { keywords: string[]; weight: number } | null;
+}
+
+const REFINEMENT_PROFILES: Record<RefinementMode, RefinementProfile | null> = {
+  none: null,
+  strong_only: null, // handled as filter, not scoring change
+
+  main_rule: {
+    directness_multiplier: 1.6,
+    concept_anchor_multiplier: 1.4,
+    section_match_multiplier: 1.1,
+    exact_phrase_multiplier: 1.0,
+    collateral_penalty_multiplier: 2.0,
+    primary_boost_bonus: 0.10,
+    cleanliness_penalty_multiplier: 1.8,
+    mixed_chunk_penalty_multiplier: 2.0,
+    supporting_admission_bonus: -0.03,
+    content_keyword_boost: null,
+  },
+
+  direct_matches: {
+    directness_multiplier: 2.0,
+    concept_anchor_multiplier: 1.3,
+    section_match_multiplier: 1.5,
+    exact_phrase_multiplier: 1.5,
+    collateral_penalty_multiplier: 1.3,
+    primary_boost_bonus: 0.04,
+    cleanliness_penalty_multiplier: 1.2,
+    mixed_chunk_penalty_multiplier: 1.3,
+    supporting_admission_bonus: -0.02,
+    content_keyword_boost: null,
+  },
+
+  broader_related: {
+    directness_multiplier: 0.8,
+    concept_anchor_multiplier: 0.9,
+    section_match_multiplier: 0.8,
+    exact_phrase_multiplier: 0.8,
+    collateral_penalty_multiplier: 0.5,
+    primary_boost_bonus: 0.0,
+    cleanliness_penalty_multiplier: 0.5,
+    mixed_chunk_penalty_multiplier: 0.5,
+    supporting_admission_bonus: 0.06,
+    content_keyword_boost: null,
+  },
+
+  procedural: {
+    directness_multiplier: 0.9,
+    concept_anchor_multiplier: 1.0,
+    section_match_multiplier: 1.0,
+    exact_phrase_multiplier: 0.9,
+    collateral_penalty_multiplier: 0.6,
+    primary_boost_bonus: 0.0,
+    cleanliness_penalty_multiplier: 0.7,
+    mixed_chunk_penalty_multiplier: 0.6,
+    supporting_admission_bonus: 0.04,
+    content_keyword_boost: {
+      keywords: ["hearing", "appeal", "file", "submit", "respond", "appear", "motion", "petition", "proceedings", "review", "process", "procedure"],
+      weight: 0.08,
+    },
+  },
+
+  exceptions: {
+    directness_multiplier: 0.9,
+    concept_anchor_multiplier: 1.0,
+    section_match_multiplier: 1.0,
+    exact_phrase_multiplier: 0.9,
+    collateral_penalty_multiplier: 0.4,
+    primary_boost_bonus: 0.0,
+    cleanliness_penalty_multiplier: 0.5,
+    mixed_chunk_penalty_multiplier: 0.5,
+    supporting_admission_bonus: 0.04,
+    content_keyword_boost: {
+      keywords: ["exception", "waiver", "exempt", "unless", "notwithstanding", "provided that", "saving clause", "carveout"],
+      weight: 0.10,
+    },
+  },
+
+  notices_deadlines: {
+    directness_multiplier: 1.0,
+    concept_anchor_multiplier: 1.0,
+    section_match_multiplier: 1.1,
+    exact_phrase_multiplier: 1.0,
+    collateral_penalty_multiplier: 0.7,
+    primary_boost_bonus: 0.0,
+    cleanliness_penalty_multiplier: 0.8,
+    mixed_chunk_penalty_multiplier: 0.7,
+    supporting_admission_bonus: 0.03,
+    content_keyword_boost: {
+      keywords: ["notice", "deadline", "within", "days", "calendar days", "business days", "must file", "time limit", "filing", "period"],
+      weight: 0.10,
+    },
+  },
+
+  eligibility: {
+    directness_multiplier: 1.1,
+    concept_anchor_multiplier: 1.2,
+    section_match_multiplier: 1.1,
+    exact_phrase_multiplier: 1.0,
+    collateral_penalty_multiplier: 0.8,
+    primary_boost_bonus: 0.03,
+    cleanliness_penalty_multiplier: 0.9,
+    mixed_chunk_penalty_multiplier: 0.8,
+    supporting_admission_bonus: 0.02,
+    content_keyword_boost: {
+      keywords: ["eligib", "qualifying", "requirements", "criteria", "entitled", "may apply", "shall be eligible", "condition", "threshold", "standard"],
+      weight: 0.08,
+    },
+  },
+};
+
+/**
+ * Apply refinement profile adjustments to a scored chunk's composite score.
+ * Returns the adjusted composite score.
+ */
+function applyRefinementProfile(chunk: ScoredChunk, profile: RefinementProfile): number {
+  // Start from the raw base composite components and re-weight
+  // Rather than fully recomputing, apply differential adjustments
+  let adjustment = 0;
+
+  // Directness influence adjustment
+  adjustment += chunk.directness_score * W_DIRECTNESS * (profile.directness_multiplier - 1.0);
+  // Concept anchor adjustment
+  adjustment += chunk.concept_anchor_score * W_CONCEPT_ANCHOR * (profile.concept_anchor_multiplier - 1.0);
+  // Section match adjustment
+  adjustment += chunk.section_match_score * W_SECTION_MATCH * (profile.section_match_multiplier - 1.0);
+  // Exact phrase adjustment
+  adjustment += chunk.exact_phrase_score * W_EXACT_PHRASE * (profile.exact_phrase_multiplier - 1.0);
+
+  // Cleanliness penalty adjustment (negative = more penalty)
+  adjustment -= chunk.cleanliness_penalty * (profile.cleanliness_penalty_multiplier - 1.0);
+  // Mixed chunk penalty adjustment
+  adjustment -= chunk.mixed_chunk_penalty * (profile.mixed_chunk_penalty_multiplier - 1.0);
+
+  // Collateral penalty scaling (extra beyond what's already in composite via cleanliness)
+  if (chunk.collateral_labels.length > 0) {
+    adjustment -= chunk.collateral_labels.length * 0.03 * (profile.collateral_penalty_multiplier - 1.0);
+  }
+
+  // Primary boost bonus
+  if (chunk.primary_boost) {
+    adjustment += profile.primary_boost_bonus;
+  }
+
+  // Content keyword boost
+  if (profile.content_keyword_boost) {
+    const lower = chunk.content.toLowerCase();
+    let hits = 0;
+    for (const kw of profile.content_keyword_boost.keywords) {
+      if (lower.includes(kw)) hits++;
+    }
+    const kwScore = Math.min(1, hits / Math.max(3, profile.content_keyword_boost.keywords.length * 0.5));
+    adjustment += kwScore * profile.content_keyword_boost.weight;
+  }
+
+  return chunk.composite_score + adjustment;
+}
+
 /* ── Source access URL builders (signed URLs for private buckets) ── */
 
 async function buildSourceUrls(
