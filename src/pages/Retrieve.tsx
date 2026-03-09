@@ -189,6 +189,7 @@ export default function Retrieve() {
 
   const handleSearch = useCallback(() => {
     if (query.trim()) {
+      setRefinementMode("none");
       search(query);
     }
   }, [query, search]);
