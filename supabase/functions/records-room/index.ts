@@ -2479,6 +2479,7 @@ Deno.serve(async (req) => {
       failure_message,
       diagnostics,
       refinement_hints,
+      refinement_mode: refinementMode,
     };
 
     response = enforcePayloadSize(response, caps);
