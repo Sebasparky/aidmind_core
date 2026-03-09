@@ -1106,6 +1106,15 @@ Deno.serve(async (req) => {
     const documentIds = admitted.map(c => c.document_id);
     const docMap = await lookupDocumentTitles(supabase, documentIds);
 
+    // Pre-generate signed URLs for all unique documents in parallel
+    const uniqueDocIds = [...new Set(admitted.map(c => c.document_id))];
+    const sourceUrlMap = new Map<string, { source_url: string | null; download_url: string | null }>();
+    await Promise.all(uniqueDocIds.map(async (docId) => {
+      const doc = docMap.get(docId);
+      const urls = await buildSourceUrls(supabase, doc ? { ...doc, id: docId } : undefined);
+      sourceUrlMap.set(docId, urls);
+    }));
+
     function buildEvidenceItem(chunk: ScoredChunk): EvidenceItem {
       const doc = docMap.get(chunk.document_id);
       const docTitle = doc?.title ?? "Unknown Document";
@@ -1121,6 +1130,7 @@ Deno.serve(async (req) => {
       }
 
       const citation_label = buildCitationLabel(docTitle, sectionHeading, chunk.chunk_index, LIMITS.MAX_CITATION_LABEL_CHARS);
+      const urls = sourceUrlMap.get(chunk.document_id) ?? { source_url: null, download_url: null };
 
       return {
         document_title: docTitle,
@@ -1135,8 +1145,8 @@ Deno.serve(async (req) => {
         document_id: chunk.document_id,
         similarity: parseFloat(chunk.similarity.toFixed(4)),
         composite_score: parseFloat(chunk.composite_score.toFixed(4)),
-        source_url: buildSourceUrl(supabaseUrl, doc),
-        download_url: buildDownloadUrl(supabaseUrl, doc),
+        source_url: urls.source_url,
+        download_url: urls.download_url,
       };
     }
 
