@@ -427,7 +427,7 @@ Deno.serve(async (req) => {
       // ── Fresh / overwrite path: chunk + initialize ──
       await safeLogEye(supabase, "KB_DOCUMENT_INGEST_STARTED", { tenant_id: doc.tenant_id });
 
-      await updateIngestionMeta(document_id, {
+      await updateIngestionMeta(supabase, document_id, {
         status: "chunking",
         chunking_started_at: new Date().toISOString(),
         attempt_count: (checkpoint?.attempt_count ?? 0) + 1,
