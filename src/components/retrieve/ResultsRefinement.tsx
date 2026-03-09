@@ -169,28 +169,27 @@ export function applyRefinement(
   }
 
   if (mode === "strong_only") {
-    return { strong: strongEvidence, supporting: [] };
+    // Simple filter: show backend strong evidence only, preserve order
+    return { strong: [...strongEvidence], supporting: [] };
   }
 
-  // Merge all items, re-rank, then re-split
-  const all = [...strongEvidence, ...supportingMaterials].map(item => ({
-    item,
-    refinedScore: localRerankScore(item, mode) + contentSignalBoost(item, mode),
-  }));
+  // Re-rank within each bucket independently — never cross-promote
+  const sortByRefined = (items: EvidenceItem[]) =>
+    [...items]
+      .map(item => ({ item, score: localRerankScore(item, mode) + contentSignalBoost(item, mode) }))
+      .sort((a, b) => b.score - a.score)
+      .map(a => a.item);
 
-  all.sort((a, b) => b.refinedScore - a.refinedScore);
+  const strong = sortByRefined(strongEvidence);
 
-  // Re-split: top items that were originally strong stay strong (or promote top items)
-  const sorted = all.map(a => a.item);
-  const strong: EvidenceItem[] = [];
-  const supporting: EvidenceItem[] = [];
-
-  for (const item of sorted) {
-    if (item.bucket === "strong_evidence" || (strong.length < 3 && all.find(a => a.item === item)!.refinedScore >= 0.50)) {
-      strong.push(item);
-    } else {
-      supporting.push(item);
-    }
+  // For supporting, optionally filter out weak items in focused modes
+  let supporting = sortByRefined(supportingMaterials);
+  if (mode === "main_rule" || mode === "direct_matches") {
+    // In focused modes, suppress the weakest supporting items
+    supporting = supporting.filter(item => {
+      const score = localRerankScore(item, mode) + contentSignalBoost(item, mode);
+      return score >= item.composite_score * 0.85; // only keep items that didn't lose value under this lens
+    });
   }
 
   return { strong, supporting };
