@@ -257,6 +257,7 @@ interface RetrieveResponse {
   failure_state: FailureState;
   failure_message: string | null;
   diagnostics: Record<string, unknown>;
+  refinement_hints: RefinementHints | null;
 }
 
 /* ── Scoring constants ── */
