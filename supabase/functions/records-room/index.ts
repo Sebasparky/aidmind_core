@@ -189,8 +189,10 @@ interface ScoredChunk {
   section_match_score: number;
   exact_phrase_score: number;
   directness_score: number;
+  concept_anchor_score: number;
   recall_origin: RecallOrigin;
   bucket: "strong_evidence" | "supporting_material" | "excluded";
+  admission_reason?: string;
 }
 
 interface EvidenceItem {
@@ -233,21 +235,22 @@ interface RetrieveResponse {
 /* ── Scoring constants ── */
 
 const DEFAULT_MIN_SIMILARITY = 0.25;
-const STRONG_EVIDENCE_THRESHOLD = 0.52;
-const SUPPORTING_THRESHOLD = 0.32;
+const STRONG_EVIDENCE_THRESHOLD = 0.48;
+const SUPPORTING_THRESHOLD = 0.36;
 
-/* ── Scoring weights (Records Room v2 — directness-aware) ── */
-const W_SEMANTIC = 0.20;
-const W_LEXICAL = 0.12;
-const W_AUTHORITY = 0.10;
-const W_PROCEDURAL = 0.06;
-const W_EXCERPT_DENSITY = 0.05;
+/* ── Scoring weights (Records Room v3 — concept-anchor-aware) ── */
+const W_SEMANTIC = 0.15;
+const W_LEXICAL = 0.08;
+const W_AUTHORITY = 0.08;
+const W_PROCEDURAL = 0.04;
+const W_EXCERPT_DENSITY = 0.03;
 const W_METADATA = 0.04;
-const W_FRESHNESS = 0.03;
-const W_CONTEXT = 0.03;
-const W_SECTION_MATCH = 0.15;
-const W_EXACT_PHRASE = 0.12;
+const W_FRESHNESS = 0.02;
+const W_CONTEXT = 0.02;
+const W_SECTION_MATCH = 0.14;
+const W_EXACT_PHRASE = 0.10;
 const W_DIRECTNESS = 0.10;
+const W_CONCEPT_ANCHOR = 0.20;
 
 /* ── Low-info detection ── */
 
@@ -574,11 +577,11 @@ function computeSectionMatchScore(query: string, content: string, metadata: Reco
 }
 
 /* ═══════════════════════════════════════════════════════════════
- *  EXACT PHRASE SCORING
+ *  EXACT PHRASE SCORING (v3 — stop-word-preserving for legal phrases)
  *
  *  Rewards candidates containing exact multi-word phrases from
- *  the query. Phrases are extracted as bigrams and trigrams.
- *  Much stronger than bag-of-words overlap.
+ *  the query. Now preserves stop words so legal phrases like
+ *  "notice to appear" are matched as-is.
  * ═══════════════════════════════════════════════════════════════ */
 
 const STOP_WORDS = new Set([
@@ -590,6 +593,75 @@ const STOP_WORDS = new Set([
   "than", "that", "this", "it", "its", "what", "which", "who", "whom",
   "how", "when", "where", "why", "does", "mean", "happens",
 ]);
+
+/**
+ * KNOWN LEGAL CONCEPT PHRASES — matched with stop words intact.
+ * These are the canonical forms caseworkers actually search for.
+ */
+const LEGAL_CONCEPT_PHRASES = [
+  "notice to appear",
+  "removal proceedings",
+  "voluntary departure",
+  "grounds of inadmissibility",
+  "adjustment of status",
+  "cancellation of removal",
+  "asylum application",
+  "credible fear",
+  "reasonable fear",
+  "withholding of removal",
+  "convention against torture",
+  "expedited removal",
+  "aggravated felony",
+  "good moral character",
+  "lawful permanent resident",
+  "temporary protected status",
+  "deferred action",
+  "prosecutorial discretion",
+  "bond hearing",
+  "change of venue",
+  "continuance",
+  "in absentia",
+  "failure to appear",
+  "relief from removal",
+  "suspension of deportation",
+  "registry",
+  "judicial review",
+  "petition for review",
+  "motion to reopen",
+  "motion to reconsider",
+  "alien registration",
+];
+
+/**
+ * Extract concept phrases from query — preserving stop words.
+ * Returns both full legal phrases found in the query AND
+ * n-grams (with stop words) for broader matching.
+ */
+function extractConceptPhrases(query: string): { legal: string[]; ngrams: string[] } {
+  const lower = query.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+
+  // Find known legal phrases present in the query
+  const legal: string[] = [];
+  for (const phrase of LEGAL_CONCEPT_PHRASES) {
+    if (lower.includes(phrase)) {
+      legal.push(phrase);
+    }
+  }
+
+  // Also build n-grams WITH stop words intact for general phrase matching
+  const words = lower.split(" ").filter(w => w.length > 1);
+  const ngrams: string[] = [];
+  // Trigrams (with stop words)
+  for (let i = 0; i < words.length - 2; i++) {
+    ngrams.push(`${words[i]} ${words[i + 1]} ${words[i + 2]}`);
+  }
+  // Bigrams (with stop words)
+  for (let i = 0; i < words.length - 1; i++) {
+    ngrams.push(`${words[i]} ${words[i + 1]}`);
+  }
+
+  return { legal, ngrams };
+}
 
 function extractPhrases(text: string): string[] {
   const words = text.toLowerCase()
@@ -610,24 +682,40 @@ function extractPhrases(text: string): string[] {
 }
 
 function computeExactPhraseScore(query: string, content: string): number {
-  const queryPhrases = extractPhrases(query);
-  if (queryPhrases.length === 0) return 0.5;
-
   const contentLower = content.toLowerCase();
-  let hits = 0;
-  let totalWeight = 0;
+  const concepts = extractConceptPhrases(query);
 
-  for (const phrase of queryPhrases) {
-    const wordCount = phrase.split(" ").length;
-    const weight = wordCount === 3 ? 2.0 : 1.0; // trigrams worth more
-    totalWeight += weight;
-    if (contentLower.includes(phrase)) {
-      hits += weight;
+  // If we found known legal phrases in the query, weight those MUCH more heavily
+  if (concepts.legal.length > 0) {
+    let legalHits = 0;
+    for (const phrase of concepts.legal) {
+      if (contentLower.includes(phrase)) legalHits++;
     }
+    // Legal phrase match is the primary signal
+    const legalScore = legalHits / concepts.legal.length;
+
+    // Also check n-gram overlap as secondary signal
+    let ngramHits = 0;
+    for (const ng of concepts.ngrams) {
+      if (contentLower.includes(ng)) ngramHits++;
+    }
+    const ngramScore = concepts.ngrams.length > 0 ? ngramHits / concepts.ngrams.length : 0;
+
+    // Legal phrase match dominates (70/30 split)
+    return legalScore * 0.7 + ngramScore * 0.3;
   }
 
-  if (totalWeight === 0) return 0.5;
-  return hits / totalWeight;
+  // No known legal phrases — fall back to n-gram matching (with stop words)
+  if (concepts.ngrams.length === 0) return 0.5;
+  let hits = 0;
+  let totalWeight = 0;
+  for (const ng of concepts.ngrams) {
+    const wordCount = ng.split(" ").length;
+    const weight = wordCount === 3 ? 2.0 : 1.0;
+    totalWeight += weight;
+    if (contentLower.includes(ng)) hits += weight;
+  }
+  return totalWeight === 0 ? 0.5 : hits / totalWeight;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -713,6 +801,107 @@ function computeDirectnessScore(query: string, content: string, metadata: Record
   }
 
   return Math.max(0, Math.min(1, score));
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ *  CONCEPT ANCHOR SCORING (v3)
+ *
+ *  Measures how central the query's main concept is to a chunk.
+ *  This is the strongest signal for "is this chunk actually about
+ *  what the user asked for, or merely nearby?"
+ *
+ *  Signals:
+ *    - Does the main concept phrase appear at all?
+ *    - How many times does it appear?
+ *    - Does it appear in the first 300 chars (opening)?
+ *    - Does it appear in heading metadata?
+ *    - Are there close variants present?
+ *
+ *  Also applies an irrelevance penalty: if the chunk matches
+ *  only weak secondary terms but misses the main concept entirely,
+ *  the score is actively penalized.
+ * ═══════════════════════════════════════════════════════════════ */
+
+function computeConceptAnchorScore(query: string, content: string, metadata: Record<string, unknown>): number {
+  const concepts = extractConceptPhrases(query);
+  const contentLower = content.toLowerCase();
+  const headingLower = String(metadata.heading_path ?? metadata.section_heading ?? "").toLowerCase();
+
+  // If we have known legal phrases from the query, use them as anchors
+  if (concepts.legal.length > 0) {
+    let score = 0;
+
+    for (const phrase of concepts.legal) {
+      const phrasePresent = contentLower.includes(phrase);
+      const phraseInHeading = headingLower.includes(phrase);
+      const phraseInOpening = contentLower.slice(0, 300).includes(phrase);
+
+      if (!phrasePresent) {
+        // Main concept phrase completely absent — strong penalty
+        score -= 0.3;
+        continue;
+      }
+
+      // Count occurrences
+      let count = 0;
+      let searchFrom = 0;
+      while (true) {
+        const idx = contentLower.indexOf(phrase, searchFrom);
+        if (idx === -1) break;
+        count++;
+        searchFrom = idx + phrase.length;
+      }
+
+      // Base: present
+      score += 0.4;
+      // In heading: strong signal
+      if (phraseInHeading) score += 0.25;
+      // In opening: strong signal
+      if (phraseInOpening) score += 0.15;
+      // Multiple occurrences: content is focused on this concept
+      if (count >= 3) score += 0.15;
+      else if (count >= 2) score += 0.08;
+    }
+
+    // Normalize by number of legal phrases
+    score = score / concepts.legal.length;
+    return Math.max(0, Math.min(1, score + 0.1)); // slight positive baseline offset
+  }
+
+  // No known legal phrases — use content-word overlap as a weaker concept anchor
+  const queryWords = query.toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .filter(w => w.length > 3 && !STOP_WORDS.has(w));
+
+  if (queryWords.length === 0) return 0.5;
+
+  let hits = 0;
+  let openingHits = 0;
+  let headingHits = 0;
+  const opening = contentLower.slice(0, 300);
+
+  for (const w of queryWords) {
+    if (contentLower.includes(w)) hits++;
+    if (opening.includes(w)) openingHits++;
+    if (headingLower.includes(w)) headingHits++;
+  }
+
+  const coverage = hits / queryWords.length;
+  const openingCoverage = openingHits / queryWords.length;
+  const headingCoverage = headingHits / queryWords.length;
+
+  // If less than half the query words appear, penalize
+  if (coverage < 0.5) {
+    return Math.max(0, coverage * 0.4);
+  }
+
+  return Math.min(1,
+    coverage * 0.45 +
+    openingCoverage * 0.25 +
+    headingCoverage * 0.2 +
+    0.1 // baseline
+  );
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -813,7 +1002,7 @@ function buildCitationLabel(
   return label.length > maxLen ? label.slice(0, maxLen - 1) + "…" : label;
 }
 
-/* ── Records Room composite scoring (v2 — directness-aware) ── */
+/* ── Records Room composite scoring (v3 — concept-anchor-aware) ── */
 
 function scoreCandidate(
   chunk: { similarity: number; content: string; metadata: Record<string, unknown> },
@@ -829,6 +1018,7 @@ function scoreCandidate(
   section_match_score: number;
   exact_phrase_score: number;
   directness_score: number;
+  concept_anchor_score: number;
 } {
   const lexical_score = computeLexicalScore(query, chunk.content);
   const authority_score = computeAuthorityScore(chunk.metadata);
@@ -840,9 +1030,10 @@ function scoreCandidate(
   const section_match_score = computeSectionMatchScore(query, chunk.content, chunk.metadata);
   const exact_phrase_score = computeExactPhraseScore(query, chunk.content);
   const directness_score = computeDirectnessScore(query, chunk.content, chunk.metadata);
+  const concept_anchor_score = computeConceptAnchorScore(query, chunk.content, chunk.metadata);
 
   // Source-type-aware weight adjustment: statute-like content gets
-  // stronger exactness bias (section + phrase weights boosted)
+  // stronger exactness bias (section + phrase + concept anchor boosted)
   const isStatute = isStatuteLikeContent(chunk.content, chunk.metadata);
   const statuteBias = isStatute ? 1.3 : 1.0;
 
@@ -857,12 +1048,13 @@ function scoreCandidate(
     W_CONTEXT * context_quality +
     W_SECTION_MATCH * section_match_score * statuteBias +
     W_EXACT_PHRASE * exact_phrase_score * statuteBias +
-    W_DIRECTNESS * directness_score;
+    W_DIRECTNESS * directness_score +
+    W_CONCEPT_ANCHOR * concept_anchor_score * statuteBias;
 
   return {
     composite_score, lexical_score, authority_score, excerpt_density,
     metadata_match, freshness_score, section_match_score, exact_phrase_score,
-    directness_score,
+    directness_score, concept_anchor_score,
   };
 }
 
@@ -1283,6 +1475,7 @@ Deno.serve(async (req) => {
         section_match_score: scores.section_match_score,
         exact_phrase_score: scores.exact_phrase_score,
         directness_score: scores.directness_score,
+        concept_anchor_score: scores.concept_anchor_score,
         recall_origin: entry.origin,
         bucket: "excluded",
       });
@@ -1334,10 +1527,14 @@ Deno.serve(async (req) => {
         }
       }
 
+      // Concept-anchor gating for supporting materials:
+      // If the concept anchor score is very low, skip even supporting admission
+      const conceptTooWeak = chunk.concept_anchor_score < 0.15;
+
       if (isNeighborOfStronger) {
-        // Neighbor of already-admitted chunk: can only be supporting, not strong
-        if (supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS && chunk.composite_score >= SUPPORTING_THRESHOLD) {
+        if (!conceptTooWeak && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS && chunk.composite_score >= SUPPORTING_THRESHOLD) {
           chunk.bucket = "supporting_material";
+          chunk.admission_reason = "neighbor_demoted_to_supporting";
           supportingCount++;
           neighborSuppressed++;
         } else {
@@ -1346,9 +1543,11 @@ Deno.serve(async (req) => {
         }
       } else if (chunk.composite_score >= STRONG_EVIDENCE_THRESHOLD && strongCount < LIMITS.MAX_STRONG_EVIDENCE) {
         chunk.bucket = "strong_evidence";
+        chunk.admission_reason = `concept_anchor=${chunk.concept_anchor_score.toFixed(2)}`;
         strongCount++;
-      } else if (chunk.composite_score >= SUPPORTING_THRESHOLD && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
+      } else if (!conceptTooWeak && chunk.composite_score >= SUPPORTING_THRESHOLD && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
         chunk.bucket = "supporting_material";
+        chunk.admission_reason = `concept_anchor=${chunk.concept_anchor_score.toFixed(2)},composite=${chunk.composite_score.toFixed(3)}`;
         supportingCount++;
       } else {
         continue;
@@ -1373,7 +1572,7 @@ Deno.serve(async (req) => {
     // Per-candidate scoring diagnostics for top results
     for (let i = 0; i < Math.min(admitted.length, 5); i++) {
       const a = admitted[i];
-      console.log(`[records-room] Rank #${i + 1} [${a.bucket}] chunk=${a.chunk_id.slice(0, 8)} doc=${a.document_id.slice(0, 8)} ci=${a.chunk_index} | sim=${a.similarity.toFixed(3)} lex=${a.lexical_score.toFixed(3)} sec=${a.section_match_score.toFixed(3)} phr=${a.exact_phrase_score.toFixed(3)} dir=${a.directness_score.toFixed(3)} auth=${a.authority_score.toFixed(3)} composite=${a.composite_score.toFixed(4)} origin=${a.recall_origin}`);
+      console.log(`[records-room] Rank #${i + 1} [${a.bucket}] chunk=${a.chunk_id.slice(0, 8)} doc=${a.document_id.slice(0, 8)} ci=${a.chunk_index} | sim=${a.similarity.toFixed(3)} lex=${a.lexical_score.toFixed(3)} sec=${a.section_match_score.toFixed(3)} phr=${a.exact_phrase_score.toFixed(3)} dir=${a.directness_score.toFixed(3)} anc=${a.concept_anchor_score.toFixed(3)} auth=${a.authority_score.toFixed(3)} composite=${a.composite_score.toFixed(4)} origin=${a.recall_origin} reason=${a.admission_reason ?? "n/a"}`);
     }
 
     /* ══════════════════════════════════════════════════════════
@@ -1464,7 +1663,7 @@ Deno.serve(async (req) => {
 
     const diagnostics: Record<string, unknown> = {
       intake,
-      ranking_version: "v2_directness_aware",
+      ranking_version: "v3_concept_anchor",
       // Recall diagnostics
       semantic_recall_count: semanticCandidates.length,
       lexical_recall_count: lexicalCandidates.length,
@@ -1490,6 +1689,7 @@ Deno.serve(async (req) => {
       top_candidates: admitted.slice(0, 5).map((a, i) => ({
         rank: i + 1,
         bucket: a.bucket,
+        admission_reason: a.admission_reason ?? "n/a",
         chunk_id: a.chunk_id,
         chunk_index: a.chunk_index,
         document_id: a.document_id,
@@ -1498,6 +1698,7 @@ Deno.serve(async (req) => {
         section_match_score: parseFloat(a.section_match_score.toFixed(4)),
         exact_phrase_score: parseFloat(a.exact_phrase_score.toFixed(4)),
         directness_score: parseFloat(a.directness_score.toFixed(4)),
+        concept_anchor_score: parseFloat(a.concept_anchor_score.toFixed(4)),
         authority_score: parseFloat(a.authority_score.toFixed(4)),
         metadata_match: parseFloat(a.metadata_match.toFixed(4)),
         composite_score: parseFloat(a.composite_score.toFixed(4)),
