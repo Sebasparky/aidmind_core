@@ -1628,6 +1628,8 @@ Deno.serve(async (req) => {
         failure_state: "clarification_needed",
         failure_message: intake.clarification_question,
         diagnostics: { intake, caps_hit: caps.all, duration_ms: Date.now() - startTime },
+        refinement_hints: null,
+        refinement_mode: refinementMode,
       };
       return jsonResponse(200, response);
     }
