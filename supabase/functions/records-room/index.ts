@@ -1582,7 +1582,14 @@ Deno.serve(async (req) => {
     query: rawQuery,
     tenant_id,
     min_similarity = DEFAULT_MIN_SIMILARITY,
+    refinement_mode: rawRefinementMode,
   } = payload;
+
+  const refinementMode: RefinementMode =
+    rawRefinementMode && typeof rawRefinementMode === "string" && rawRefinementMode in REFINEMENT_PROFILES
+      ? rawRefinementMode as RefinementMode
+      : "none";
+  const activeProfile = REFINEMENT_PROFILES[refinementMode] ?? null;
 
   if (!rawQuery || typeof rawQuery !== "string" || rawQuery.trim().length === 0) {
     return jsonResponse(400, { error: "query is required" });
