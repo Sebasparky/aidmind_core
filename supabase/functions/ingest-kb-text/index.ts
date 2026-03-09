@@ -522,16 +522,25 @@ Deno.serve(async (req) => {
 
     for (let i = 0; i < rows.length; i += DB_INSERT_BATCH_SIZE) {
       const batch = rows.slice(i, i + DB_INSERT_BATCH_SIZE);
-      const { error: insertErr } = await supabase.from("document_chunks").insert(batch);
-      if (insertErr) {
+      const batchStartIdx = nextChunkIndex + i;
+      const batchEndIdx = batchStartIdx + batch.length - 1;
+      console.log(
+        `[ingest-kb-text] doc=${document_id} upserting batch: chunk_index ${batchStartIdx}–${batchEndIdx} ` +
+        `(${batch.length} rows, onConflict=document_id,chunk_index)`
+      );
+      const { error: upsertErr } = await supabase
+        .from("document_chunks")
+        .upsert(batch, { onConflict: "document_id,chunk_index" });
+      if (upsertErr) {
         throw new Error(
-          `Failed to insert chunk batch at absolute index ${nextChunkIndex + i}: ${insertErr.message}`
+          `Failed to upsert chunk batch at absolute index ${batchStartIdx}: ${upsertErr.message}`
         );
       }
+      console.log(`[ingest-kb-text] doc=${document_id} upsert OK for chunk_index ${batchStartIdx}–${batchEndIdx}`);
     }
 
     console.log(
-      `[ingest-kb-text] doc=${document_id} inserted ${rows.length} chunks ` +
+      `[ingest-kb-text] doc=${document_id} upserted ${rows.length} chunks ` +
       `(indices ${nextChunkIndex}–${batchEnd - 1})`
     );
 
