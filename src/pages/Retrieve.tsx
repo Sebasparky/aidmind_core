@@ -172,6 +172,7 @@ export default function Retrieve() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { query: storedQuery, status, result, error, search, reset } = useRetrieve();
   const [query, setQuery] = useState(storedQuery);
+  const [showEval, setShowEval] = useState(false);
 
   const handleExampleClick = useCallback((description: string) => {
     setQuery(description);
