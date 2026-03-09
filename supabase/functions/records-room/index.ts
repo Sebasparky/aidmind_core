@@ -1630,10 +1630,14 @@ Deno.serve(async (req) => {
     const admittedTokenSets: Set<string>[] = [];
     // Track admitted (document_id, chunk_index) for neighbor suppression
     const admittedChunkKeys: { document_id: string; chunk_index: number }[] = [];
+    // v6: Track per-document strong-evidence count for diversity cap
+    const strongPerDoc = new Map<string, number>();
+    const MAX_STRONG_PER_DOC = 2;
     let strongCount = 0;
     let supportingCount = 0;
     let dupeSuppressed = 0;
     let neighborSuppressed = 0;
+    let sameDocCapped = 0;
 
     // ── Query-intent detection for collateral exemptions ──
     // If the query explicitly asks about collateral topics, don't over-penalize them
@@ -1655,13 +1659,11 @@ Deno.serve(async (req) => {
       }
       if (isDupe) continue;
 
-      // Neighbor-chunk suppression: if a chunk from the same document
-      // with adjacent chunk_index is already admitted with a higher score,
-      // demote this one (still allow it as supporting, but not strong)
+      // v6: Neighbor-chunk suppression with wider ±2 window
       let isNeighborOfStronger = false;
       for (const ak of admittedChunkKeys) {
         if (ak.document_id === chunk.document_id &&
-            Math.abs(ak.chunk_index - chunk.chunk_index) <= 1) {
+            Math.abs(ak.chunk_index - chunk.chunk_index) <= 2) {
           isNeighborOfStronger = true;
           break;
         }
