@@ -1716,11 +1716,16 @@ Deno.serve(async (req) => {
           continue;
         }
       } else if (chunk.composite_score >= STRONG_EVIDENCE_THRESHOLD && strongCount < LIMITS.MAX_STRONG_EVIDENCE) {
-        // ── Strong Evidence admission gates (v5 — collateral-burden-aware) ──
-        // Strong Evidence is reserved for primary, central, directly answer-bearing chunks.
-        // Five demotion checks prevent false-positive strong admissions:
+        // ── Strong Evidence admission gates (v6 — cleanliness-in-composite) ──
 
         let strongGateFailReason: string | null = null;
+
+        // v6: Same-document strong cap — prevent one document region from flooding strong
+        const docStrongSoFar = strongPerDoc.get(chunk.document_id) ?? 0;
+        if (docStrongSoFar >= MAX_STRONG_PER_DOC) {
+          strongGateFailReason = "same_doc_strong_cap";
+          sameDocCapped++;
+        }
 
         // Gate 1: Heavy collateral burden — 2+ collateral labels without primary boost
         if (!strongGateFailReason && chunk.collateral_labels.length >= 2 && !chunk.primary_boost) {
@@ -1729,14 +1734,21 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Gate 2: Any collateral labels + no primary boost + weak centrality
+        // Gate 2: Primary boost BUT heavy collateral — mixed chunks need very high directness
+        if (!strongGateFailReason && chunk.collateral_labels.length >= 2 && chunk.primary_boost) {
+          if (chunk.directness_score < 0.65 && chunk.concept_anchor_score < 0.75) {
+            strongGateFailReason = "mixed_primary_heavy_collateral";
+          }
+        }
+
+        // Gate 3: Any collateral labels + no primary boost + weak centrality
         if (!strongGateFailReason && chunk.collateral_labels.length >= 1 && !chunk.primary_boost) {
           if (chunk.concept_anchor_score < 0.5 && chunk.directness_score < 0.5) {
             strongGateFailReason = "collateral_weak_centrality";
           }
         }
 
-        // Gate 3: Lexical-only recall with weak semantic similarity needs strong centrality proof
+        // Gate 4: Lexical-only recall with weak semantic similarity needs strong centrality proof
         if (!strongGateFailReason &&
             (chunk.recall_origin === "lexical" || chunk.similarity < 0.3) &&
             !chunk.primary_boost &&
@@ -1745,7 +1757,7 @@ Deno.serve(async (req) => {
           strongGateFailReason = "lexical_only_weak_centrality";
         }
 
-        // Gate 4: No primary boost AND both centrality signals are middling
+        // Gate 5: No primary boost AND both centrality signals are middling
         if (!strongGateFailReason &&
             !chunk.primary_boost &&
             chunk.concept_anchor_score < 0.55 &&
@@ -1754,7 +1766,7 @@ Deno.serve(async (req) => {
           strongGateFailReason = "insufficient_centrality";
         }
 
-        // Gate 5: High collateral burden even with decent scores
+        // Gate 6: High collateral burden even with decent scores
         if (!strongGateFailReason && collateralBurden >= 0.30 && !chunk.primary_boost) {
           strongGateFailReason = "excessive_collateral_burden";
         }
@@ -1769,10 +1781,7 @@ Deno.serve(async (req) => {
             continue;
           }
         } else {
-          // ── Clean-primary preference (v5) ──
-          // If a cleaner primary chunk is already admitted as strong, and this chunk
-          // is from the same document neighborhood, prefer the cleaner one.
-          // Check: does an already-admitted strong chunk from same doc dominate this one?
+          // ── Clean-primary preference (v6 — enhanced) ──
           let dominatedByCleanerPrimary = false;
           for (const ak of admitted) {
             if (ak.bucket !== "strong_evidence") continue;
@@ -1782,12 +1791,12 @@ Deno.serve(async (req) => {
               ak.concept_anchor_score * 0.3 +
               ak.directness_score * 0.2 +
               ak.similarity * 0.2 -
-              ak.collateral_labels.length * 0.1;
+              ak.collateral_labels.length * 0.15;
             const chunkCleanliness = (chunk.primary_boost ? 0.3 : 0) +
               chunk.concept_anchor_score * 0.3 +
               chunk.directness_score * 0.2 +
               chunk.similarity * 0.2 -
-              chunk.collateral_labels.length * 0.1;
+              chunk.collateral_labels.length * 0.15;
             if (akCleanliness > chunkCleanliness + 0.05) {
               dominatedByCleanerPrimary = true;
               break;
@@ -1806,6 +1815,7 @@ Deno.serve(async (req) => {
             chunk.bucket = "strong_evidence";
             chunk.admission_reason = buildReason("strong");
             strongCount++;
+            strongPerDoc.set(chunk.document_id, docStrongSoFar + 1);
           }
         }
       } else if (!conceptTooWeak && chunk.composite_score >= SUPPORTING_THRESHOLD && supportingCount < LIMITS.MAX_SUPPORTING_MATERIALS) {
