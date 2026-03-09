@@ -233,18 +233,21 @@ interface RetrieveResponse {
 /* ── Scoring constants ── */
 
 const DEFAULT_MIN_SIMILARITY = 0.25;
-const STRONG_EVIDENCE_THRESHOLD = 0.55;
-const SUPPORTING_THRESHOLD = 0.35;
+const STRONG_EVIDENCE_THRESHOLD = 0.52;
+const SUPPORTING_THRESHOLD = 0.32;
 
-/* ── Scoring weights (Records Room v1) ── */
-const W_SEMANTIC = 0.30;
-const W_LEXICAL = 0.20;
-const W_AUTHORITY = 0.15;
-const W_PROCEDURAL = 0.10;
-const W_EXCERPT_DENSITY = 0.10;
-const W_METADATA = 0.05;
-const W_FRESHNESS = 0.05;
-const W_CONTEXT = 0.05;
+/* ── Scoring weights (Records Room v2 — directness-aware) ── */
+const W_SEMANTIC = 0.20;
+const W_LEXICAL = 0.12;
+const W_AUTHORITY = 0.10;
+const W_PROCEDURAL = 0.06;
+const W_EXCERPT_DENSITY = 0.05;
+const W_METADATA = 0.04;
+const W_FRESHNESS = 0.03;
+const W_CONTEXT = 0.03;
+const W_SECTION_MATCH = 0.15;
+const W_EXACT_PHRASE = 0.12;
+const W_DIRECTNESS = 0.10;
 
 /* ── Low-info detection ── */
 
