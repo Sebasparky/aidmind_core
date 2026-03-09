@@ -219,6 +219,26 @@ interface EvidenceItem {
   source_url: string | null;
   /** URL to download the original source document, if available */
   download_url: string | null;
+  /* ── Scoring fields for frontend refinement (no extra AI call) ── */
+  directness_score: number;
+  concept_anchor_score: number;
+  section_match_score: number;
+  exact_phrase_score: number;
+  primary_boost: boolean;
+  collateral_labels: string[];
+  recall_origin: RecallOrigin;
+  chunk_index: number;
+  bucket: "strong_evidence" | "supporting_material";
+}
+
+interface RefinementHints {
+  has_procedural_content: boolean;
+  has_exception_content: boolean;
+  has_notice_deadline_content: boolean;
+  has_review_appeal_content: boolean;
+  has_eligibility_content: boolean;
+  strong_count: number;
+  supporting_count: number;
 }
 
 type FailureState =
