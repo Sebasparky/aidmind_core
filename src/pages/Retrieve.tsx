@@ -391,7 +391,7 @@ export default function Retrieve() {
             />
 
             {/* Trust footer */}
-            {(refinedResults.strong.length > 0 || refinedResults.supporting.length > 0) && (
+            {(strongEvidence.length > 0 || supportingMaterials.length > 0) && (
               <div className="flex items-start gap-3 rounded-lg border border-border bg-secondary/30 px-5 py-4 mt-4">
                 <Quote className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
                 <p className="text-xs text-muted-foreground leading-relaxed">
