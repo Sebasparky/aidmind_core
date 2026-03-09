@@ -1547,7 +1547,7 @@ Deno.serve(async (req) => {
             candidate_count: 0,
             result: "failure",
             reason_code: "no_matching_materials",
-            ranking_version: "v5_collateral_burden",
+            ranking_version: "v6.1_supporting_cleanup",
             failure_state: "no_matching_materials",
             semantic_recall: semanticCandidates.length,
             lexical_recall: lexicalCandidates.length,
