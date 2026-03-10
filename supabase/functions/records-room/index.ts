@@ -1754,16 +1754,16 @@ Deno.serve(async (req) => {
     const mergedCount = candidateMap.size;
     let candidates = Array.from(candidateMap.values());
 
-    // Cap merged pool
-    if (candidates.length > LIMITS.MAX_MERGED_CANDIDATES) {
-      caps.record("MAX_MERGED_CANDIDATES", LIMITS.MAX_MERGED_CANDIDATES, candidates.length, "capped");
+    // Cap merged pool (uses refinement-adjusted cap)
+    if (candidates.length > effectiveMergedCap) {
+      caps.record("MAX_MERGED_CANDIDATES", effectiveMergedCap, candidates.length, "capped");
       // Sort by a quick heuristic: semantic similarity + lexical rank presence
       candidates.sort((a, b) => {
         const scoreA = a.similarity + (a.origin === "both" ? 0.1 : 0);
         const scoreB = b.similarity + (b.origin === "both" ? 0.1 : 0);
         return scoreB - scoreA;
       });
-      candidates = candidates.slice(0, LIMITS.MAX_MERGED_CANDIDATES);
+      candidates = candidates.slice(0, effectiveMergedCap);
     }
 
     // Count origins for diagnostics
