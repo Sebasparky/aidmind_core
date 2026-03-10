@@ -377,6 +377,7 @@ export default function Retrieve() {
                 uiState={refinementUIState}
                 onUIStateChange={setRefinementUIState}
                 onRefine={refine}
+                refinementViewState={refinementViewState}
               />
             )}
 
