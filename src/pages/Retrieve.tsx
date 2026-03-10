@@ -366,7 +366,7 @@ export default function Retrieve() {
             )}
 
             {/* Refinement module — between search and results */}
-            {(result.strong_evidence.length > 0 || result.supporting_materials.length > 0) && (
+            {(result.strong_evidence.length > 0 || result.supporting_materials.length > 0 || refinementViewState === "refined_empty" || refinementViewState === "refined_no_change") && (
               <ResultsRefinement
                 query={storedQuery}
                 strongEvidence={baseResult?.strong_evidence ?? result.strong_evidence}
