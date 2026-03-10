@@ -15,9 +15,9 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { useState, useRef, useCallback, lazy, Suspense } from "react";
+import { useState, useRef, useCallback, useEffect, lazy, Suspense } from "react";
 import { useRetrieve, type EvidenceItem } from "@/hooks/useRetrieve";
-import { ResultsRefinement } from "@/components/retrieve/ResultsRefinement";
+import { ResultsRefinement, type RefinementUIState } from "@/components/retrieve/ResultsRefinement";
 
 const IS_DEV = import.meta.env.VITE_DEV_MODE === "true";
 const RetrieveEvalPanel = IS_DEV ? lazy(() => import("@/components/dev/RetrieveEvalPanel")) : null;
