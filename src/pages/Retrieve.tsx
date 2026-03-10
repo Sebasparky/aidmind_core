@@ -15,9 +15,9 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { useState, useRef, useCallback, lazy, Suspense } from "react";
+import { useState, useRef, useCallback, useEffect, lazy, Suspense } from "react";
 import { useRetrieve, type EvidenceItem } from "@/hooks/useRetrieve";
-import { ResultsRefinement } from "@/components/retrieve/ResultsRefinement";
+import { ResultsRefinement, type RefinementUIState } from "@/components/retrieve/ResultsRefinement";
 
 const IS_DEV = import.meta.env.VITE_DEV_MODE === "true";
 const RetrieveEvalPanel = IS_DEV ? lazy(() => import("@/components/dev/RetrieveEvalPanel")) : null;
@@ -174,6 +174,16 @@ export default function Retrieve() {
   const { query: storedQuery, status, result, error, search, reset, refine, refining, activeRefinementMode, baseResult } = useRetrieve();
   const [query, setQuery] = useState(storedQuery);
   const [showEval, setShowEval] = useState(false);
+  const [refinementUIState, setRefinementUIState] = useState<RefinementUIState>("initial_prompt");
+
+  // Reset refinement UI state when a new base search completes
+  const prevStoredQuery = useRef(storedQuery);
+  useEffect(() => {
+    if (storedQuery !== prevStoredQuery.current) {
+      prevStoredQuery.current = storedQuery;
+      setRefinementUIState("initial_prompt");
+    }
+  }, [storedQuery]);
 
   const handleExampleClick = useCallback((description: string) => {
     setQuery(description);
@@ -368,9 +378,9 @@ export default function Retrieve() {
                 hints={baseResult?.refinement_hints ?? result.refinement_hints ?? null}
                 activeMode={activeRefinementMode}
                 refining={refining}
+                uiState={refinementUIState}
+                onUIStateChange={setRefinementUIState}
                 onRefine={refine}
-                onConfirm={() => {}}
-                onReset={() => refine("none")}
               />
             )}
 
