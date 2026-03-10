@@ -1670,19 +1670,39 @@ Deno.serve(async (req) => {
     }
 
     // Run both recall branches in parallel
+    // Apply refinement-aware recall tuning when a refinement mode is active
+    const recallTuning = REFINEMENT_RECALL_TUNING[refinementMode];
+    const effectiveSemanticRecall = Math.min(
+      60,
+      Math.round(LIMITS.MAX_SEMANTIC_RECALL * (recallTuning?.semantic_recall_multiplier ?? 1.0))
+    );
+    const effectiveLexicalRecall = Math.min(
+      60,
+      Math.round(LIMITS.MAX_LEXICAL_RECALL * (recallTuning?.lexical_recall_multiplier ?? 1.0))
+    );
+    const effectiveMinSimilarity = Math.max(
+      0.15,
+      min_similarity + (recallTuning?.min_similarity_offset ?? 0)
+    );
+    const effectiveMergedCap = LIMITS.MAX_MERGED_CANDIDATES + (recallTuning?.merged_candidates_extra ?? 0);
+
+    if (recallTuning) {
+      console.log(`[records-room] Refinement recall tuning: semantic=${effectiveSemanticRecall} lexical=${effectiveLexicalRecall} min_sim=${effectiveMinSimilarity.toFixed(3)} merged_cap=${effectiveMergedCap}`);
+    }
+
     const queryVec = await embedder.embedQuery(embeddingInput);
 
     const [semanticResult, lexicalResult] = await Promise.all([
       supabase.rpc("match_document_chunks", {
         p_tenant_id: tenant_id,
         p_query_embedding: JSON.stringify(queryVec),
-        p_match_count: LIMITS.MAX_SEMANTIC_RECALL,
-        p_min_similarity: min_similarity,
+        p_match_count: effectiveSemanticRecall,
+        p_min_similarity: effectiveMinSimilarity,
       }),
       supabase.rpc("search_document_chunks_lexical", {
         p_tenant_id: tenant_id,
-        p_search_query: query.slice(0, 500), // keep lexical query reasonable
-        p_match_count: LIMITS.MAX_LEXICAL_RECALL,
+        p_search_query: query.slice(0, 500),
+        p_match_count: effectiveLexicalRecall,
       }),
     ]);
 
