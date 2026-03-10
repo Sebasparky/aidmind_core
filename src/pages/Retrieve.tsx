@@ -193,6 +193,7 @@ export default function Retrieve() {
 
   const handleSearch = useCallback(() => {
     if (query.trim()) {
+      setRefinementUIState("initial_prompt");
       search(query);
     }
   }, [query, search]);
