@@ -171,7 +171,7 @@ function ResultsSection({
 
 export default function Retrieve() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { query: storedQuery, status, result, error, search, reset, refine, refining, activeRefinementMode, baseResult } = useRetrieve();
+  const { query: storedQuery, status, result, error, search, reset, refine, refining, activeRefinementMode, baseResult, refinementViewState } = useRetrieve();
   const [query, setQuery] = useState(storedQuery);
   const [showEval, setShowEval] = useState(false);
   // Hydrate refinement UI state: if we already have results from sessionStorage,
