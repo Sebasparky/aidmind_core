@@ -1225,6 +1225,24 @@ interface RefinementProfile {
   content_keyword_boost: { keywords: string[]; weight: number } | null;
 }
 
+/** Per-mode recall tuning — lets focused modes widen the candidate pool */
+interface RefinementRecallTuning {
+  semantic_recall_multiplier: number;   // 1.0 = same as base, 1.25 = 25% more
+  lexical_recall_multiplier: number;
+  min_similarity_offset: number;        // negative = lower threshold = wider net
+  merged_candidates_extra: number;      // extra slots in merged pool
+}
+
+const REFINEMENT_RECALL_TUNING: Partial<Record<RefinementMode, RefinementRecallTuning>> = {
+  main_rule:        { semantic_recall_multiplier: 1.15, lexical_recall_multiplier: 1.15, min_similarity_offset: -0.02, merged_candidates_extra: 10 },
+  direct_matches:   { semantic_recall_multiplier: 1.10, lexical_recall_multiplier: 1.25, min_similarity_offset: -0.02, merged_candidates_extra: 8 },
+  broader_related:  { semantic_recall_multiplier: 1.30, lexical_recall_multiplier: 1.30, min_similarity_offset: -0.05, merged_candidates_extra: 15 },
+  procedural:       { semantic_recall_multiplier: 1.20, lexical_recall_multiplier: 1.30, min_similarity_offset: -0.03, merged_candidates_extra: 12 },
+  exceptions:       { semantic_recall_multiplier: 1.20, lexical_recall_multiplier: 1.30, min_similarity_offset: -0.03, merged_candidates_extra: 12 },
+  notices_deadlines:{ semantic_recall_multiplier: 1.15, lexical_recall_multiplier: 1.30, min_similarity_offset: -0.03, merged_candidates_extra: 10 },
+  eligibility:      { semantic_recall_multiplier: 1.15, lexical_recall_multiplier: 1.25, min_similarity_offset: -0.02, merged_candidates_extra: 10 },
+};
+
 const REFINEMENT_PROFILES: Record<RefinementMode, RefinementProfile | null> = {
   none: null,
   strong_only: null, // handled as filter, not scoring change
