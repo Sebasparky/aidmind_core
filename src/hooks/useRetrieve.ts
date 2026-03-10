@@ -63,6 +63,16 @@ export interface RefinementHints {
 
 export type RetrieveStatus = "idle" | "loading" | "success" | "no_results" | "clarification_needed" | "error";
 
+/**
+ * Describes the relationship between refined and base results.
+ * Used by the UI to decide what state to show.
+ */
+export type RefinementViewState =
+  | "original"           // viewing base results
+  | "refined"            // refined results differ meaningfully from base
+  | "refined_empty"      // refined search returned no results
+  | "refined_no_change"; // refined results are substantially the same as base
+
 export interface RetrieveResult {
   status: "success" | "no_results" | "clarification_needed" | "error";
   query_type: string;
@@ -109,6 +119,69 @@ function clearStoredState() {
   try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ok */ }
 }
 
+/* ── Overlap detection ── */
+
+const OVERLAP_THRESHOLD = 0.80; // 80%+ overlap = "no meaningful change"
+
+/**
+ * Computes evidence identity overlap between two result sets.
+ * Uses document_id + chunk_index as stable identity.
+ */
+function computeResultOverlap(base: RetrieveResult, refined: RetrieveResult): number {
+  const baseIds = new Set<string>();
+  for (const item of [...base.strong_evidence, ...base.supporting_materials]) {
+    baseIds.add(`${item.document_id}:${item.chunk_index}`);
+  }
+  if (baseIds.size === 0) return 0;
+
+  const refinedIds = new Set<string>();
+  for (const item of [...refined.strong_evidence, ...refined.supporting_materials]) {
+    refinedIds.add(`${item.document_id}:${item.chunk_index}`);
+  }
+  if (refinedIds.size === 0) return 0;
+
+  let intersection = 0;
+  for (const id of refinedIds) {
+    if (baseIds.has(id)) intersection++;
+  }
+
+  // Overlap = fraction of refined items that were already in base
+  return intersection / refinedIds.size;
+}
+
+/**
+ * Determine the refinement view state by comparing refined results to base.
+ */
+function classifyRefinementResult(base: RetrieveResult | null, refined: RetrieveResult): RefinementViewState {
+  const refinedTotal = refined.strong_evidence.length + refined.supporting_materials.length;
+
+  // Empty refined results
+  if (refinedTotal === 0) return "refined_empty";
+
+  // No base to compare against
+  if (!base) return "refined";
+
+  const overlap = computeResultOverlap(base, refined);
+
+  // Check both overlap AND order — if same items but different order, still counts as meaningful
+  if (overlap >= OVERLAP_THRESHOLD) {
+    // Also check if the order materially changed by comparing top 3
+    const baseTopIds = [...base.strong_evidence, ...base.supporting_materials]
+      .slice(0, 3)
+      .map(i => `${i.document_id}:${i.chunk_index}`);
+    const refinedTopIds = [...refined.strong_evidence, ...refined.supporting_materials]
+      .slice(0, 3)
+      .map(i => `${i.document_id}:${i.chunk_index}`);
+
+    const sameTopOrder = baseTopIds.length === refinedTopIds.length &&
+      baseTopIds.every((id, idx) => id === refinedTopIds[idx]);
+
+    if (sameTopOrder) return "refined_no_change";
+  }
+
+  return "refined";
+}
+
 export function useRetrieve() {
   const { tenant } = useTenant();
   const hydrated = useRef(false);
@@ -131,6 +204,9 @@ export function useRetrieve() {
 
   // Refinement loading state
   const [refining, setRefining] = useState(false);
+
+  // Refinement view state — describes how refined results compare to base
+  const [refinementViewState, setRefinementViewState] = useState<RefinementViewState>("original");
 
   useEffect(() => { hydrated.current = true; }, []);
 
@@ -155,6 +231,7 @@ export function useRetrieve() {
     setResult(null);
     setBaseResult(null);
     setActiveRefinementMode("none");
+    setRefinementViewState("original");
     refinementCache.current = new Map();
 
     try {
@@ -183,8 +260,7 @@ export function useRetrieve() {
   /**
    * Refine the current search with a specific mode.
    * "none" = reset to base results (instant, no network call).
-   * "confirmed" = keep current results, no action.
-   * Other modes = trigger backend refinement request.
+   * Other modes = trigger backend refinement request with wider recall.
    */
   const refine = useCallback(async (mode: RefinementMode) => {
     if (!tenant?.tenantId || !query.trim()) return;
@@ -192,6 +268,7 @@ export function useRetrieve() {
     // "none" = instant reset to base
     if (mode === "none") {
       setActiveRefinementMode("none");
+      setRefinementViewState("original");
       if (baseResult) {
         setResult(baseResult);
       }
@@ -202,11 +279,15 @@ export function useRetrieve() {
     if (mode === "strong_only") {
       setActiveRefinementMode("strong_only");
       if (baseResult) {
-        setResult({
+        const filtered: RetrieveResult = {
           ...baseResult,
           supporting_materials: [],
           refinement_mode: "strong_only",
-        });
+        };
+        setResult(filtered);
+        // Classify: if base had no supporting, it's no_change; otherwise it's a real filter
+        const viewState = baseResult.supporting_materials.length === 0 ? "refined_no_change" : "refined";
+        setRefinementViewState(viewState);
       }
       return;
     }
@@ -216,10 +297,11 @@ export function useRetrieve() {
     if (cached) {
       setActiveRefinementMode(mode);
       setResult(cached);
+      setRefinementViewState(classifyRefinementResult(baseResult, cached));
       return;
     }
 
-    // Real backend refinement request
+    // Real backend refinement request — this is a true second-pass retrieval
     setRefining(true);
     setActiveRefinementMode(mode);
 
@@ -238,13 +320,19 @@ export function useRetrieve() {
       refinementCache.current.set(mode, res);
       setResult(res);
 
+      // Classify the refinement result
+      const viewState = classifyRefinementResult(baseResult, res);
+      setRefinementViewState(viewState);
+
       // Log refinement event
       console.log("[retrieve-refinement]", JSON.stringify({
         action: "backend_refined",
         query: query.slice(0, 200),
         mode,
+        view_state: viewState,
         strong_count: res.strong_evidence.length,
         supporting_count: res.supporting_materials.length,
+        overlap: baseResult ? computeResultOverlap(baseResult, res).toFixed(2) : "n/a",
         timestamp: new Date().toISOString(),
       }));
     } catch (err) {
@@ -252,6 +340,7 @@ export function useRetrieve() {
       // On error, fall back to base results
       if (baseResult) setResult(baseResult);
       setActiveRefinementMode("none");
+      setRefinementViewState("original");
     } finally {
       setRefining(false);
     }
@@ -264,6 +353,7 @@ export function useRetrieve() {
     setBaseResult(null);
     setError(null);
     setActiveRefinementMode("none");
+    setRefinementViewState("original");
     refinementCache.current = new Map();
     clearStoredState();
   }, []);
@@ -279,5 +369,6 @@ export function useRetrieve() {
     refining,
     activeRefinementMode,
     baseResult,
+    refinementViewState,
   };
 }

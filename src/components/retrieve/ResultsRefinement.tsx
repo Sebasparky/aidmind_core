@@ -3,12 +3,21 @@
  *
  * UI state is owned by the parent (Retrieve page) so it persists across
  * chip switches and only resets on a brand-new search.
+ *
+ * Supports four refinement view states:
+ *   - original: viewing base search results
+ *   - refined: meaningfully different refined results
+ *   - refined_empty: refinement returned no results
+ *   - refined_no_change: refinement didn't materially change results
  */
 
 import { useCallback, useMemo } from "react";
-import { Check, SlidersHorizontal, RotateCcw, Loader2, ArrowLeft } from "lucide-react";
+import {
+  Check, SlidersHorizontal, Loader2, ArrowLeft,
+  SearchX, Info,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { EvidenceItem, RefinementHints, RefinementMode } from "@/hooks/useRetrieve";
+import type { EvidenceItem, RefinementHints, RefinementMode, RefinementViewState } from "@/hooks/useRetrieve";
 
 /* ── Public UI-state type ── */
 
@@ -27,17 +36,17 @@ interface RefinementChip {
 }
 
 const CORE_CHIPS: RefinementChip[] = [
-  { mode: "main_rule", label: "Show the main rule", description: "Prioritize clean governing provisions" },
-  { mode: "direct_matches", label: "Most direct matches", description: "Surface the most directly relevant results" },
-  { mode: "broader_related", label: "Broader related materials", description: "Keep all relevant related content visible" },
-  { mode: "strong_only", label: "Strong evidence only", description: "Hide supporting materials" },
+  { mode: "main_rule", label: "Show the main rule", description: "Re-search with focus on clean governing provisions" },
+  { mode: "direct_matches", label: "Most direct matches", description: "Re-search with focus on the most directly relevant results" },
+  { mode: "broader_related", label: "Broader related materials", description: "Re-search with a wider net for related content" },
+  { mode: "strong_only", label: "Strong evidence only", description: "Filter to only show strong evidence" },
 ];
 
 const CONDITIONAL_CHIPS: RefinementChip[] = [
-  { mode: "procedural", label: "Procedural details", description: "Focus on procedural requirements and steps" },
-  { mode: "exceptions", label: "Exceptions & waivers", description: "Surface exceptions and waiver provisions" },
-  { mode: "notices_deadlines", label: "Notices & deadlines", description: "Focus on notice requirements and time limits" },
-  { mode: "eligibility", label: "Eligibility & requirements", description: "Focus on eligibility criteria and qualifications" },
+  { mode: "procedural", label: "Procedural details", description: "Re-search with focus on procedural requirements and steps" },
+  { mode: "exceptions", label: "Exceptions & waivers", description: "Re-search with focus on exception and waiver provisions" },
+  { mode: "notices_deadlines", label: "Notices & deadlines", description: "Re-search with focus on notice requirements and time limits" },
+  { mode: "eligibility", label: "Eligibility & requirements", description: "Re-search with focus on eligibility criteria and qualifications" },
 ];
 
 const REFINEMENT_LABELS: Record<string, string> = {
@@ -63,6 +72,7 @@ interface ResultsRefinementProps {
   uiState: RefinementUIState;
   onUIStateChange: (state: RefinementUIState) => void;
   onRefine: (mode: RefinementMode) => void;
+  refinementViewState: RefinementViewState;
 }
 
 /* ── Component ── */
@@ -77,6 +87,7 @@ export function ResultsRefinement({
   uiState,
   onUIStateChange,
   onRefine,
+  refinementViewState,
 }: ResultsRefinementProps) {
   const totalResults = strongEvidence.length + supportingMaterials.length;
 
@@ -128,7 +139,8 @@ export function ResultsRefinement({
     }));
   }, [query, onRefine, onUIStateChange]);
 
-  if (totalResults === 0) return null;
+  // Don't show when there are no results at all in original
+  if (totalResults === 0 && refinementViewState === "original") return null;
 
   /* ── Confirmed state ── */
   if (uiState === "confirmed") {
@@ -148,13 +160,38 @@ export function ResultsRefinement({
     );
   }
 
-  /* ── Refined active state or chips_open with active mode ── */
+  /* ── Chips row (reused across states) ── */
+  const chipsRow = (
+    <div className="flex flex-wrap gap-2">
+      {availableChips.map(chip => (
+        <button
+          key={chip.mode}
+          onClick={() => handleChipClick(chip.mode)}
+          disabled={refining}
+          className={`inline-flex items-center rounded-md border px-3 py-1.5 text-xs transition-colors ${
+            chip.mode === activeMode
+              ? "border-primary/30 bg-primary/10 text-primary font-medium"
+              : "border-border bg-secondary/50 text-muted-foreground hover:bg-secondary hover:text-foreground"
+          } ${refining ? "opacity-50 cursor-not-allowed" : ""}`}
+          title={chip.description}
+        >
+          {chip.mode === activeMode && refining && (
+            <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+          )}
+          {chip.label}
+        </button>
+      ))}
+    </div>
+  );
+
+  /* ── Refined active state with view-state-aware messaging ── */
   if (uiState === "refined_active" || (uiState === "chips_open" && activeMode !== "none")) {
     const isRefined = activeMode !== "none";
     const activeLabel = REFINEMENT_LABELS[activeMode] ?? activeMode;
 
     return (
       <div className="rounded-lg border border-border bg-card px-5 py-4 mb-6">
+        {/* Header */}
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             {refining ? (
@@ -164,7 +201,7 @@ export function ResultsRefinement({
             )}
             <span className="text-xs text-muted-foreground">
               {refining ? (
-                <>Narrowing results…</>
+                <>Re-searching with a narrower focus…</>
               ) : isRefined ? (
                 <>Viewing: <span className="font-medium text-foreground">{activeLabel}</span></>
               ) : (
@@ -172,40 +209,51 @@ export function ResultsRefinement({
               )}
             </span>
           </div>
-          {isRefined && (
+          {isRefined && !refining && (
             <Button
               variant="ghost"
               size="sm"
               onClick={handleBackToOriginal}
               className="h-7 text-xs text-muted-foreground gap-1.5"
-              disabled={refining}
             >
               <ArrowLeft className="h-3 w-3" />
               Back to original results
             </Button>
           )}
         </div>
+
+        {/* Refined empty state */}
+        {!refining && isRefined && refinementViewState === "refined_empty" && (
+          <div className="flex items-start gap-3 rounded-md border border-border bg-secondary/30 px-4 py-3 mb-3">
+            <SearchX className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="text-sm text-foreground mb-0.5">
+                No results matched this narrower view.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Try another narrowing option or return to the original results.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Refined no-change state */}
+        {!refining && isRefined && refinementViewState === "refined_no_change" && (
+          <div className="flex items-start gap-3 rounded-md border border-border bg-secondary/20 px-4 py-3 mb-3">
+            <Info className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="text-sm text-foreground mb-0.5">
+                This lens did not materially change the results.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                The most relevant material is likely already in your original set. You can try another lens or return to the original results.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Chip row */}
-        <div className="flex flex-wrap gap-2">
-          {availableChips.map(chip => (
-            <button
-              key={chip.mode}
-              onClick={() => handleChipClick(chip.mode)}
-              disabled={refining}
-              className={`inline-flex items-center rounded-md border px-3 py-1.5 text-xs transition-colors ${
-                chip.mode === activeMode
-                  ? "border-primary/30 bg-primary/10 text-primary font-medium"
-                  : "border-border bg-secondary/50 text-muted-foreground hover:bg-secondary hover:text-foreground"
-              } ${refining ? "opacity-50 cursor-not-allowed" : ""}`}
-              title={chip.description}
-            >
-              {chip.mode === activeMode && refining && (
-                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-              )}
-              {chip.label}
-            </button>
-          ))}
-        </div>
+        {chipsRow}
       </div>
     );
   }
@@ -218,7 +266,7 @@ export function ResultsRefinement({
           <div>
             <p className="text-sm font-medium text-foreground mb-0.5">Narrow these results</p>
             <p className="text-xs text-muted-foreground">
-              Each option re-searches with a focused lens — no new AI call.
+              Each option re-runs retrieval with a more focused lens.
             </p>
           </div>
           <Button
@@ -230,21 +278,7 @@ export function ResultsRefinement({
             Keep as-is
           </Button>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {availableChips.map(chip => (
-            <button
-              key={chip.mode}
-              onClick={() => handleChipClick(chip.mode)}
-              disabled={refining}
-              className={`inline-flex items-center rounded-md border border-border bg-secondary/50 px-3 py-1.5 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors ${
-                refining ? "opacity-50 cursor-not-allowed" : ""
-              }`}
-              title={chip.description}
-            >
-              {chip.label}
-            </button>
-          ))}
-        </div>
+        {chipsRow}
       </div>
     );
   }

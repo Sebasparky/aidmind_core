@@ -171,7 +171,7 @@ function ResultsSection({
 
 export default function Retrieve() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { query: storedQuery, status, result, error, search, reset, refine, refining, activeRefinementMode, baseResult } = useRetrieve();
+  const { query: storedQuery, status, result, error, search, reset, refine, refining, activeRefinementMode, baseResult, refinementViewState } = useRetrieve();
   const [query, setQuery] = useState(storedQuery);
   const [showEval, setShowEval] = useState(false);
   // Hydrate refinement UI state: if we already have results from sessionStorage,
@@ -366,7 +366,7 @@ export default function Retrieve() {
             )}
 
             {/* Refinement module — between search and results */}
-            {(result.strong_evidence.length > 0 || result.supporting_materials.length > 0) && (
+            {(result.strong_evidence.length > 0 || result.supporting_materials.length > 0 || refinementViewState === "refined_empty" || refinementViewState === "refined_no_change") && (
               <ResultsRefinement
                 query={storedQuery}
                 strongEvidence={baseResult?.strong_evidence ?? result.strong_evidence}
@@ -377,6 +377,7 @@ export default function Retrieve() {
                 uiState={refinementUIState}
                 onUIStateChange={setRefinementUIState}
                 onRefine={refine}
+                refinementViewState={refinementViewState}
               />
             )}
 

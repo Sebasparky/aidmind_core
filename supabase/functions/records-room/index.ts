@@ -1225,6 +1225,24 @@ interface RefinementProfile {
   content_keyword_boost: { keywords: string[]; weight: number } | null;
 }
 
+/** Per-mode recall tuning — lets focused modes widen the candidate pool */
+interface RefinementRecallTuning {
+  semantic_recall_multiplier: number;   // 1.0 = same as base, 1.25 = 25% more
+  lexical_recall_multiplier: number;
+  min_similarity_offset: number;        // negative = lower threshold = wider net
+  merged_candidates_extra: number;      // extra slots in merged pool
+}
+
+const REFINEMENT_RECALL_TUNING: Partial<Record<RefinementMode, RefinementRecallTuning>> = {
+  main_rule:        { semantic_recall_multiplier: 1.15, lexical_recall_multiplier: 1.15, min_similarity_offset: -0.02, merged_candidates_extra: 10 },
+  direct_matches:   { semantic_recall_multiplier: 1.10, lexical_recall_multiplier: 1.25, min_similarity_offset: -0.02, merged_candidates_extra: 8 },
+  broader_related:  { semantic_recall_multiplier: 1.30, lexical_recall_multiplier: 1.30, min_similarity_offset: -0.05, merged_candidates_extra: 15 },
+  procedural:       { semantic_recall_multiplier: 1.20, lexical_recall_multiplier: 1.30, min_similarity_offset: -0.03, merged_candidates_extra: 12 },
+  exceptions:       { semantic_recall_multiplier: 1.20, lexical_recall_multiplier: 1.30, min_similarity_offset: -0.03, merged_candidates_extra: 12 },
+  notices_deadlines:{ semantic_recall_multiplier: 1.15, lexical_recall_multiplier: 1.30, min_similarity_offset: -0.03, merged_candidates_extra: 10 },
+  eligibility:      { semantic_recall_multiplier: 1.15, lexical_recall_multiplier: 1.25, min_similarity_offset: -0.02, merged_candidates_extra: 10 },
+};
+
 const REFINEMENT_PROFILES: Record<RefinementMode, RefinementProfile | null> = {
   none: null,
   strong_only: null, // handled as filter, not scoring change
@@ -1652,19 +1670,39 @@ Deno.serve(async (req) => {
     }
 
     // Run both recall branches in parallel
+    // Apply refinement-aware recall tuning when a refinement mode is active
+    const recallTuning = REFINEMENT_RECALL_TUNING[refinementMode];
+    const effectiveSemanticRecall = Math.min(
+      60,
+      Math.round(LIMITS.MAX_SEMANTIC_RECALL * (recallTuning?.semantic_recall_multiplier ?? 1.0))
+    );
+    const effectiveLexicalRecall = Math.min(
+      60,
+      Math.round(LIMITS.MAX_LEXICAL_RECALL * (recallTuning?.lexical_recall_multiplier ?? 1.0))
+    );
+    const effectiveMinSimilarity = Math.max(
+      0.15,
+      min_similarity + (recallTuning?.min_similarity_offset ?? 0)
+    );
+    const effectiveMergedCap = LIMITS.MAX_MERGED_CANDIDATES + (recallTuning?.merged_candidates_extra ?? 0);
+
+    if (recallTuning) {
+      console.log(`[records-room] Refinement recall tuning: semantic=${effectiveSemanticRecall} lexical=${effectiveLexicalRecall} min_sim=${effectiveMinSimilarity.toFixed(3)} merged_cap=${effectiveMergedCap}`);
+    }
+
     const queryVec = await embedder.embedQuery(embeddingInput);
 
     const [semanticResult, lexicalResult] = await Promise.all([
       supabase.rpc("match_document_chunks", {
         p_tenant_id: tenant_id,
         p_query_embedding: JSON.stringify(queryVec),
-        p_match_count: LIMITS.MAX_SEMANTIC_RECALL,
-        p_min_similarity: min_similarity,
+        p_match_count: effectiveSemanticRecall,
+        p_min_similarity: effectiveMinSimilarity,
       }),
       supabase.rpc("search_document_chunks_lexical", {
         p_tenant_id: tenant_id,
-        p_search_query: query.slice(0, 500), // keep lexical query reasonable
-        p_match_count: LIMITS.MAX_LEXICAL_RECALL,
+        p_search_query: query.slice(0, 500),
+        p_match_count: effectiveLexicalRecall,
       }),
     ]);
 
@@ -1716,16 +1754,16 @@ Deno.serve(async (req) => {
     const mergedCount = candidateMap.size;
     let candidates = Array.from(candidateMap.values());
 
-    // Cap merged pool
-    if (candidates.length > LIMITS.MAX_MERGED_CANDIDATES) {
-      caps.record("MAX_MERGED_CANDIDATES", LIMITS.MAX_MERGED_CANDIDATES, candidates.length, "capped");
+    // Cap merged pool (uses refinement-adjusted cap)
+    if (candidates.length > effectiveMergedCap) {
+      caps.record("MAX_MERGED_CANDIDATES", effectiveMergedCap, candidates.length, "capped");
       // Sort by a quick heuristic: semantic similarity + lexical rank presence
       candidates.sort((a, b) => {
         const scoreA = a.similarity + (a.origin === "both" ? 0.1 : 0);
         const scoreB = b.similarity + (b.origin === "both" ? 0.1 : 0);
         return scoreB - scoreA;
       });
-      candidates = candidates.slice(0, LIMITS.MAX_MERGED_CANDIDATES);
+      candidates = candidates.slice(0, effectiveMergedCap);
     }
 
     // Count origins for diagnostics
