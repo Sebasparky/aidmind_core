@@ -378,9 +378,9 @@ export default function Retrieve() {
                 hints={baseResult?.refinement_hints ?? result.refinement_hints ?? null}
                 activeMode={activeRefinementMode}
                 refining={refining}
+                uiState={refinementUIState}
+                onUIStateChange={setRefinementUIState}
                 onRefine={refine}
-                onConfirm={() => {}}
-                onReset={() => refine("none")}
               />
             )}
 
