@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { useState, useRef, useCallback, useEffect, lazy, Suspense } from "react";
+import { useState, useRef, useCallback, lazy, Suspense } from "react";
 import { useRetrieve, type EvidenceItem } from "@/hooks/useRetrieve";
 import { ResultsRefinement, type RefinementUIState } from "@/components/retrieve/ResultsRefinement";
 
@@ -174,16 +174,11 @@ export default function Retrieve() {
   const { query: storedQuery, status, result, error, search, reset, refine, refining, activeRefinementMode, baseResult } = useRetrieve();
   const [query, setQuery] = useState(storedQuery);
   const [showEval, setShowEval] = useState(false);
-  const [refinementUIState, setRefinementUIState] = useState<RefinementUIState>("initial_prompt");
-
-  // Reset refinement UI state when a new base search completes
-  const prevStoredQuery = useRef(storedQuery);
-  useEffect(() => {
-    if (storedQuery !== prevStoredQuery.current) {
-      prevStoredQuery.current = storedQuery;
-      setRefinementUIState("initial_prompt");
-    }
-  }, [storedQuery]);
+  // Hydrate refinement UI state: if we already have results from sessionStorage,
+  // don't show the initial prompt again — treat as confirmed.
+  const [refinementUIState, setRefinementUIState] = useState<RefinementUIState>(
+    () => (status === "success" || status === "no_results") && result ? "confirmed" : "initial_prompt"
+  );
 
   const handleExampleClick = useCallback((description: string) => {
     setQuery(description);
@@ -198,6 +193,7 @@ export default function Retrieve() {
 
   const handleSearch = useCallback(() => {
     if (query.trim()) {
+      setRefinementUIState("initial_prompt");
       search(query);
     }
   }, [query, search]);
