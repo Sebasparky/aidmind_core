@@ -144,7 +144,9 @@ Return JSON only in the following format:
       "supporting_excerpt": "string or null"
     }
   ]
-}`;
+}
+
+If the supporting_excerpt text does not appear in the interview notes, the answer is invalid.`;
 
   const userPrompt = `INTERVIEW NOTES
 ---------------
@@ -330,7 +332,9 @@ Deno.serve(async (req) => {
           error: llmErr instanceof Error ? llmErr.message : "Unknown LLM error",
         },
       });
-    } catch { /* never break on eye */ }
+    } catch {
+      /* never break on eye */
+    }
 
     return json(502, {
       success: false,
@@ -347,9 +351,8 @@ Deno.serve(async (req) => {
     answers,
   };
 
-  const existingMetadata = (session.metadata && typeof session.metadata === "object")
-    ? session.metadata as Record<string, unknown>
-    : {};
+  const existingMetadata =
+    session.metadata && typeof session.metadata === "object" ? (session.metadata as Record<string, unknown>) : {};
 
   const mergedMetadata = {
     ...existingMetadata,
@@ -384,7 +387,9 @@ Deno.serve(async (req) => {
         model,
       },
     });
-  } catch { /* never break on eye */ }
+  } catch {
+    /* never break on eye */
+  }
 
   return json(200, {
     success: true,
