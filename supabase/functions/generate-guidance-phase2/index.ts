@@ -196,17 +196,22 @@ Return the JSON response now.`;
     throw new Error("OpenAI response missing 'answers' array");
   }
 
-  // Validate and normalise each answer
-  const answers: FieldAnswer[] = parsed.answers.map((a: Record<string, unknown>) => ({
-    field_key: String(a.field_key ?? ""),
-    label: String(a.label ?? ""),
-    question: String(a.question ?? ""),
-    answer: a.answer != null ? String(a.answer) : null,
-    confidence: (["high", "medium", "low"].includes(a.confidence as string)
-      ? a.confidence
-      : "low") as "high" | "medium" | "low",
-    supporting_excerpt: a.supporting_excerpt != null ? String(a.supporting_excerpt) : null,
-  }));
+  // Build a lookup from factFields so we can reattach label/question
+  const fieldLookup = new Map(factFields.map((f) => [f.field_key, f]));
+
+  // Validate, normalise, and reattach metadata from factFields
+  const answers: FieldAnswer[] = parsed.answers.map((a: Record<string, unknown>) => {
+    const key = String(a.field_key ?? "");
+    const meta = fieldLookup.get(key);
+    return {
+      field_key: key,
+      label: meta?.label ?? key,
+      question: meta?.question ?? "",
+      answer: a.answer != null ? String(a.answer) : null,
+      confidence: (a.answer != null ? "high" : "low") as "high" | "medium" | "low",
+      supporting_excerpt: a.supporting_excerpt != null ? String(a.supporting_excerpt) : null,
+    };
+  });
 
   return { answers, model };
 }
