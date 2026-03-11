@@ -36,7 +36,7 @@ interface UseSessionHeartbeatOptions {
 }
 
 export function useSessionHeartbeat({ sessionId, isActive }: UseSessionHeartbeatOptions) {
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastHeartbeatRef = useRef<number>(0);
 
   const emitHeartbeat = useCallback(async () => {
