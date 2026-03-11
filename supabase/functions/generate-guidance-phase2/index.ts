@@ -95,52 +95,67 @@ async function generatePhase2FieldMappings(
   const fieldsJson = JSON.stringify(
     factFields.map((f) => ({
       field_key: f.field_key,
-      label: f.label,
-      type: f.type,
       question: f.question,
     })),
   );
 
-  const systemPrompt = `You are a precise fact-extraction assistant for social services casework.
+  const systemPrompt = `You are a factual information extraction assistant for social services casework.
 
-Your task:
-- You are given interview notes and a list of fact-based fields.
-- For each field, determine if the interview notes contain a clear, factual answer.
-- Only answer if the notes directly support the answer. Do NOT guess, infer, or combine unrelated details.
-- If the notes do not support an answer, set "answer" to null and "confidence" to "low".
-- "supporting_excerpt" must be a verbatim or near-verbatim quote from the interview notes that supports the answer.
+Your task is to extract factual answers from interview notes.
 
-Return ONLY valid JSON matching this schema exactly:
+You will receive:
+
+1. Interview notes from a caseworker interview
+2. A list of template fields that require factual answers
+
+The template fields have already been filtered to include ONLY fact-based questions.
+
+This means:
+- Every field is valid.
+- You do NOT need to determine whether a field is opinionated or appropriate.
+- Your only task is to determine whether the interview notes contain the answer.
+
+For each field:
+• If the interview notes clearly contain the information needed to answer the question, extract the answer.
+• The answer must come directly from the notes.
+• Provide a supporting_excerpt that is an exact or near-exact quote from the notes that proves the answer.
+
+If the notes do NOT contain the information needed:
+• Set "answer": null
+• Set "supporting_excerpt": null
+
+STRICT RULES:
+- Do NOT guess.
+- Do NOT infer.
+- Do NOT interpret.
+- Do NOT summarize the notes.
+- Do NOT combine unrelated statements to form an answer.
+- Do NOT generate opinions, risk judgments, or recommendations.
+
+Answers must be short factual phrases taken from the notes.
+If the supporting_excerpt text does not appear in the interview notes, the answer is invalid.
+
+Return JSON only in the following format:
 {
   "answers": [
     {
-      "field_key": "<string>",
-      "label": "<string>",
-      "question": "<string>",
-      "answer": "<string or null>",
-      "confidence": "high" | "medium" | "low",
-      "supporting_excerpt": "<string or null>"
+      "field_key": "string",
+      "answer": "string or null",
+      "supporting_excerpt": "string or null"
     }
   ]
-}
+}`;
 
-Rules:
-- Only answer the fields provided. Do not add extra fields.
-- Do not invent facts.
-- Do not summarize the interview.
-- Do not draft narrative sections.
-- Keep answers factual and concise.
-- Return one entry per field provided, even if the answer is null.`;
-
-  const userPrompt = `INTERVIEW NOTES:
----
+  const userPrompt = `INTERVIEW NOTES
+---------------
 ${interviewNotes}
----
 
-FACT-BASED FIELDS TO ANSWER:
+FIELDS TO ANSWER
+----------------
 ${fieldsJson}
 
-Return the JSON output now.`;
+For each field determine whether the interview notes contain the factual answer.
+Return the JSON response now.`;
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -181,17 +196,22 @@ Return the JSON output now.`;
     throw new Error("OpenAI response missing 'answers' array");
   }
 
-  // Validate and normalise each answer
-  const answers: FieldAnswer[] = parsed.answers.map((a: Record<string, unknown>) => ({
-    field_key: String(a.field_key ?? ""),
-    label: String(a.label ?? ""),
-    question: String(a.question ?? ""),
-    answer: a.answer != null ? String(a.answer) : null,
-    confidence: (["high", "medium", "low"].includes(a.confidence as string)
-      ? a.confidence
-      : "low") as "high" | "medium" | "low",
-    supporting_excerpt: a.supporting_excerpt != null ? String(a.supporting_excerpt) : null,
-  }));
+  // Build a lookup from factFields so we can reattach label/question
+  const fieldLookup = new Map(factFields.map((f) => [f.field_key, f]));
+
+  // Validate, normalise, and reattach metadata from factFields
+  const answers: FieldAnswer[] = parsed.answers.map((a: Record<string, unknown>) => {
+    const key = String(a.field_key ?? "");
+    const meta = fieldLookup.get(key);
+    return {
+      field_key: key,
+      label: meta?.label ?? key,
+      question: meta?.question ?? "",
+      answer: a.answer != null ? String(a.answer) : null,
+      confidence: (a.answer != null ? "high" : "low") as "high" | "medium" | "low",
+      supporting_excerpt: a.supporting_excerpt != null ? String(a.supporting_excerpt) : null,
+    };
+  });
 
   return { answers, model };
 }
