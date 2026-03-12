@@ -24,16 +24,8 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   Tooltip,
   TooltipContent,
@@ -83,16 +75,12 @@ interface UploadedFile {
 
 interface CaseNotesFormState {
   rawNotes: string;
-  clientIdentifier: string;
-  meetingDate: string;
-  contactType: string;
-  programDomain: string;
   permissionConfirmed: boolean;
 }
 
 interface SessionContext {
-  id: string;        // UUID — used for edge function calls
-  sessionId: string; // text — used for display/routing
+  id: string;
+  sessionId: string;
   caseLabel: string | null;
   templateId: string | null;
   templateName: string | null;
@@ -102,10 +90,6 @@ interface SessionContext {
 
 const INITIAL_FORM: CaseNotesFormState = {
   rawNotes: "",
-  clientIdentifier: "",
-  meetingDate: "",
-  contactType: "",
-  programDomain: "",
   permissionConfirmed: false,
 };
 
@@ -117,6 +101,35 @@ const ACCEPTED_MIMES = [
   "application/pdf",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ];
+
+// ─── Session-scoped persistence helpers ──────────────────
+function storageKey(sessionId: string) {
+  return `aidmind:case-notes:${sessionId}`;
+}
+
+interface PersistedState {
+  rawNotes: string;
+  permissionConfirmed: boolean;
+  inputMode: InputMode;
+  uploadedFile: UploadedFile | null;
+  notesStatus: NotesStatus;
+  lastSavedAt: string | null;
+}
+
+function persistState(sessionId: string, state: PersistedState) {
+  try {
+    sessionStorage.setItem(storageKey(sessionId), JSON.stringify(state));
+  } catch { /* quota exceeded — non-critical */ }
+}
+
+function loadPersistedState(sessionId: string): PersistedState | null {
+  try {
+    const raw = sessionStorage.getItem(storageKey(sessionId));
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
 
 // ─── Helpers ─────────────────────────────────────────────
 function formatFileSize(bytes: number): string {
@@ -230,7 +243,7 @@ export default function CaseNotes() {
   const { sessionId: routeSessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
 
-  // Session context — includes the UUID `id` needed for edge function calls
+  // Session context
   const [session, setSession] = useState<SessionContext | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
 
@@ -238,7 +251,7 @@ export default function CaseNotes() {
   const [inputMode, setInputMode] = useState<InputMode>("paste");
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null);
 
-  // Distinct state tracks
+  // State tracks
   const [notesStatus, setNotesStatus] = useState<NotesStatus>("clean");
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [generationStatus, setGenerationStatus] = useState<GenerationStatus>("idle");
@@ -249,10 +262,9 @@ export default function CaseNotes() {
     answeredFieldCount: number;
     model: string;
   } | null>(null);
-  const [permissionError, setPermissionError] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // Track the saved notes content to detect dirty state
   const savedNotesRef = useRef<string>("");
+  const initialLoadDone = useRef(false);
 
   // PDF extraction hook
   const pdfExtractor = usePdfTextExtractor();
@@ -261,10 +273,22 @@ export default function CaseNotes() {
   const [searchFilter, setSearchFilter] = useState("");
   const [showFilter, setShowFilter] = useState<"all" | "answered" | "missing">("all");
 
+  // ─── Persist state to sessionStorage on change ─────────
+  useEffect(() => {
+    if (!routeSessionId || !initialLoadDone.current) return;
+    persistState(routeSessionId, {
+      rawNotes: form.rawNotes,
+      permissionConfirmed: form.permissionConfirmed,
+      inputMode,
+      uploadedFile,
+      notesStatus,
+      lastSavedAt,
+    });
+  }, [routeSessionId, form.rawNotes, form.permissionConfirmed, inputMode, uploadedFile, notesStatus, lastSavedAt]);
+
   const updateField = useCallback(
     <K extends keyof CaseNotesFormState>(key: K, value: CaseNotesFormState[K]) => {
       setForm((prev) => ({ ...prev, [key]: value }));
-      if (key === "permissionConfirmed" && value) setPermissionError(false);
       if (key === "rawNotes") {
         setNotesStatus("dirty");
       }
@@ -280,7 +304,6 @@ export default function CaseNotes() {
     }
     (async () => {
       try {
-        // Query by session_id (text) to get the UUID id
         const { data, error } = await supabase
           .from("sessions")
           .select("id, session_id, case_label, template_id, interview_notes, metadata, tenant_id")
@@ -293,7 +316,6 @@ export default function CaseNotes() {
           return;
         }
 
-        // Load template name if assigned
         let templateName: string | null = null;
         if (data.template_id) {
           const { data: tmpl } = await supabase
@@ -314,32 +336,33 @@ export default function CaseNotes() {
           tenantId: data.tenant_id,
         });
 
-        // Preload existing notes into editor
-        if (data.interview_notes) {
-          setForm((prev) => ({ ...prev, rawNotes: data.interview_notes! }));
-          savedNotesRef.current = data.interview_notes;
-          setNotesStatus("clean");
-        }
-
         // Load existing phase 2 results
         const meta = data.metadata as Record<string, unknown> | null;
         if (meta?.guidance_phase2) {
           setResult(meta.guidance_phase2 as Phase2Result);
           setGenerationStatus("success");
         }
-        // Restore case context
-        if (meta?.case_context) {
-          const cc = meta.case_context as Record<string, string>;
-          setForm((prev) => ({
-            ...prev,
-            clientIdentifier: cc.client_identifier || "",
-            meetingDate: cc.meeting_date || "",
-            contactType: cc.contact_type || "",
-            programDomain: cc.program_domain || "",
-          }));
+
+        // Restore persisted UI state if available (tab navigation case)
+        const persisted = loadPersistedState(routeSessionId);
+        if (persisted) {
+          setForm({ rawNotes: persisted.rawNotes, permissionConfirmed: persisted.permissionConfirmed });
+          setInputMode(persisted.inputMode);
+          setUploadedFile(persisted.uploadedFile);
+          setNotesStatus(persisted.notesStatus === "saving" ? "dirty" : persisted.notesStatus);
+          setLastSavedAt(persisted.lastSavedAt);
+          savedNotesRef.current = data.interview_notes || "";
+        } else {
+          // First load — use DB values
+          if (data.interview_notes) {
+            setForm((prev) => ({ ...prev, rawNotes: data.interview_notes! }));
+            savedNotesRef.current = data.interview_notes;
+            setNotesStatus("clean");
+          }
         }
       } finally {
         setSessionLoading(false);
+        initialLoadDone.current = true;
       }
     })();
   }, [routeSessionId]);
@@ -353,10 +376,9 @@ export default function CaseNotes() {
   const sessionReady = !!session;
   const templateReady = !!session?.templateId;
   const notesSaved = notesStatus === "saved" || notesStatus === "clean";
-  const allReady = sessionReady && templateReady && notesReady && notesSaved;
 
   const canSaveNotes = notesReady && notesStatus === "dirty" && !!session;
-  // Allow generate even with dirty notes — we'll auto-save first
+  // CTA requires ALL conditions including permission
   const canGenerate =
     sessionReady &&
     templateReady &&
@@ -373,8 +395,6 @@ export default function CaseNotes() {
 
     try {
       const notesText = form.rawNotes.trim();
-
-      // Call upload-interview-notes-text edge function with the UUID id
       const { data: response, error } = await supabase.functions.invoke(
         "upload-interview-notes-text",
         { body: { session_id: session.id, notes_text: notesText } }
@@ -383,31 +403,6 @@ export default function CaseNotes() {
       if (error) throw new Error(error.message || "Failed to save notes");
       if (response && !response.success) {
         throw new Error(response.error || "Failed to save notes");
-      }
-
-      // Also merge case context metadata
-      const caseContext: Record<string, string> = {};
-      if (form.clientIdentifier) caseContext.client_identifier = form.clientIdentifier;
-      if (form.meetingDate) caseContext.meeting_date = form.meetingDate;
-      if (form.contactType) caseContext.contact_type = form.contactType;
-      if (form.programDomain) caseContext.program_domain = form.programDomain;
-
-      if (Object.keys(caseContext).length > 0) {
-        // Read current metadata and merge
-        const { data: current } = await supabase
-          .from("sessions")
-          .select("metadata")
-          .eq("id", session.id)
-          .maybeSingle();
-
-        const existingMeta = (current?.metadata as Record<string, unknown>) || {};
-        await supabase
-          .from("sessions")
-          .update({
-            metadata: { ...existingMeta, case_context: caseContext } as unknown as import("@/integrations/supabase/types").Json,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", session.id);
       }
 
       savedNotesRef.current = notesText;
@@ -420,7 +415,7 @@ export default function CaseNotes() {
       setErrorMessage(msg);
       toast({ title: "Save failed", description: msg, variant: "destructive" });
     }
-  }, [session, form, notesReady]);
+  }, [session, form.rawNotes, notesReady]);
 
   // ─── File handling ─────────────────────────────────────
   const handleFileSelect = useCallback(
@@ -434,96 +429,55 @@ export default function CaseNotes() {
       const isPdf = file.type === "application/pdf" || file.name.endsWith(".pdf");
 
       if (isText) {
-        // Client-side text extraction
         setUploadedFile({
-          name: file.name,
-          size: file.size,
-          mime: file.type || "text/plain",
-          extractedText: null,
-          storagePath: null,
-          status: "extracting",
+          name: file.name, size: file.size, mime: file.type || "text/plain",
+          extractedText: null, storagePath: null, status: "extracting",
         });
         const text = await file.text();
-        setUploadedFile((prev) =>
-          prev ? { ...prev, extractedText: text, status: "extracted" } : null
-        );
-        // Populate editor
+        setUploadedFile((prev) => prev ? { ...prev, extractedText: text, status: "extracted" } : null);
         setForm((prev) => ({ ...prev, rawNotes: text }));
         setNotesStatus("dirty");
       } else if (isPdf) {
-        // Client-side PDF extraction using pdf.js
         setUploadedFile({
-          name: file.name,
-          size: file.size,
-          mime: file.type,
-          extractedText: null,
-          storagePath: null,
-          status: "extracting",
+          name: file.name, size: file.size, mime: file.type,
+          extractedText: null, storagePath: null, status: "extracting",
         });
-
         try {
           await pdfExtractor.extractText(file);
-          // pdfExtractor.fullText will be populated — we use an effect to pick it up
         } catch {
-          setUploadedFile((prev) =>
-            prev ? { ...prev, status: "extraction_error" } : null
-          );
+          setUploadedFile((prev) => prev ? { ...prev, status: "extraction_error" } : null);
           toast({ title: "PDF extraction failed", variant: "destructive" });
         }
       } else {
-        // DOCX or other binary — upload to storage, then extract via edge function
         setUploadedFile({
-          name: file.name,
-          size: file.size,
-          mime: file.type,
-          extractedText: null,
-          storagePath: null,
-          status: "uploading",
+          name: file.name, size: file.size, mime: file.type,
+          extractedText: null, storagePath: null, status: "uploading",
         });
-
         try {
           const path = `case-notes/${routeSessionId}/${Date.now()}-${file.name}`;
           const { error: uploadErr } = await supabase.storage
             .from("review-documents")
             .upload(path, file, { upsert: true });
-
           if (uploadErr) throw uploadErr;
 
-          setUploadedFile((prev) =>
-            prev ? { ...prev, storagePath: path, status: "extracting" } : null
-          );
+          setUploadedFile((prev) => prev ? { ...prev, storagePath: path, status: "extracting" } : null);
 
-          // Call extraction edge function
           const { data: extractResult, error: extractErr } = await supabase.functions.invoke(
             "extract-case-note-text",
-            {
-              body: {
-                storage_path: path,
-                mime_type: file.type,
-                session_id: session?.id || null,
-              },
-            }
+            { body: { storage_path: path, mime_type: file.type, session_id: session?.id || null } }
           );
-
           if (extractErr) throw new Error(extractErr.message || "Extraction failed");
-          if (extractResult && !extractResult.success) {
-            throw new Error(extractResult.error || "Extraction failed");
-          }
+          if (extractResult && !extractResult.success) throw new Error(extractResult.error || "Extraction failed");
 
           const extractedText = extractResult?.text || "";
-          setUploadedFile((prev) =>
-            prev ? { ...prev, extractedText, status: "extracted" } : null
-          );
-
+          setUploadedFile((prev) => prev ? { ...prev, extractedText, status: "extracted" } : null);
           if (extractedText) {
             setForm((prev) => ({ ...prev, rawNotes: extractedText }));
             setNotesStatus("dirty");
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : "Extraction failed";
-          setUploadedFile((prev) =>
-            prev ? { ...prev, status: "extraction_error" } : null
-          );
+          setUploadedFile((prev) => prev ? { ...prev, status: "extraction_error" } : null);
           setErrorMessage(msg);
           toast({ title: "File extraction failed", description: msg, variant: "destructive" });
         }
@@ -535,16 +489,12 @@ export default function CaseNotes() {
   // Sync PDF extractor results
   useEffect(() => {
     if (pdfExtractor.fullText && uploadedFile?.status === "extracting") {
-      setUploadedFile((prev) =>
-        prev ? { ...prev, extractedText: pdfExtractor.fullText, status: "extracted" } : null
-      );
+      setUploadedFile((prev) => prev ? { ...prev, extractedText: pdfExtractor.fullText, status: "extracted" } : null);
       setForm((prev) => ({ ...prev, rawNotes: pdfExtractor.fullText }));
       setNotesStatus("dirty");
     }
     if (pdfExtractor.error && uploadedFile?.status === "extracting") {
-      setUploadedFile((prev) =>
-        prev ? { ...prev, status: "extraction_error" } : null
-      );
+      setUploadedFile((prev) => prev ? { ...prev, status: "extraction_error" } : null);
     }
   }, [pdfExtractor.fullText, pdfExtractor.error, uploadedFile?.status]);
 
@@ -565,15 +515,10 @@ export default function CaseNotes() {
 
   // ─── Generate handler ──────────────────────────────────
   const handleGenerate = useCallback(async () => {
-    if (!form.permissionConfirmed) {
-      setPermissionError(true);
-      return;
-    }
     if (!canGenerate || !session) return;
 
-    // If notes are dirty, save first
+    // Auto-save dirty notes first
     if (notesStatus === "dirty") {
-      // Save notes inline before generating
       setNotesStatus("saving");
       try {
         const notesText = form.rawNotes.trim();
@@ -595,7 +540,7 @@ export default function CaseNotes() {
       }
     }
 
-    // Save permission & source metadata
+    // Save permission metadata
     try {
       const { data: current } = await supabase
         .from("sessions")
@@ -604,38 +549,24 @@ export default function CaseNotes() {
         .maybeSingle();
 
       const existingMeta = (current?.metadata as Record<string, unknown>) || {};
-
       const sourceInfo: { mode: string; file?: { name: string; size: number; mime: string; path: string | null } } = { mode: inputMode };
       if (inputMode === "upload" && uploadedFile) {
-        sourceInfo.file = {
-          name: uploadedFile.name,
-          size: uploadedFile.size,
-          mime: uploadedFile.mime,
-          path: uploadedFile.storagePath,
-        };
+        sourceInfo.file = { name: uploadedFile.name, size: uploadedFile.size, mime: uploadedFile.mime, path: uploadedFile.storagePath };
       }
-
-      const mergedMeta = {
-        ...existingMeta,
-        case_notes_permission: {
-          confirmed: true,
-          confirmed_at: new Date().toISOString(),
-        },
-        case_notes_source: sourceInfo,
-      };
-
       await supabase
         .from("sessions")
         .update({
-          metadata: mergedMeta as unknown as import("@/integrations/supabase/types").Json,
+          metadata: {
+            ...existingMeta,
+            case_notes_permission: { confirmed: true, confirmed_at: new Date().toISOString() },
+            case_notes_source: sourceInfo,
+          } as unknown as import("@/integrations/supabase/types").Json,
           updated_at: new Date().toISOString(),
         })
         .eq("id", session.id);
-    } catch {
-      // Non-critical metadata save
-    }
+    } catch { /* Non-critical */ }
 
-    // Call generate-guidance-phase2 with UUID id
+    // Call generate-guidance-phase2
     setGenerationStatus("generating");
     setErrorMessage(null);
     setGenerationSummary(null);
@@ -645,30 +576,22 @@ export default function CaseNotes() {
         "generate-guidance-phase2",
         { body: { session_id: session.id } }
       );
-
       if (genError) throw new Error(genError.message || "Fact extraction failed");
-      if (genResponse && !genResponse.success) {
-        throw new Error(genResponse.error || "Fact extraction failed");
-      }
+      if (genResponse && !genResponse.success) throw new Error(genResponse.error || "Fact extraction failed");
 
-      // Capture generation summary from backend response
       setGenerationSummary({
         factFieldCount: genResponse?.fact_field_count ?? 0,
         answeredFieldCount: genResponse?.answered_field_count ?? 0,
         model: genResponse?.model ?? "unknown",
       });
 
-      // Reload session metadata to get the full answers
       const { data: refreshed } = await supabase
         .from("sessions")
         .select("metadata")
         .eq("id", session.id)
         .maybeSingle();
-
       const meta = refreshed?.metadata as Record<string, unknown> | null;
-      if (meta?.guidance_phase2) {
-        setResult(meta.guidance_phase2 as Phase2Result);
-      }
+      if (meta?.guidance_phase2) setResult(meta.guidance_phase2 as Phase2Result);
 
       setGenerationStatus("success");
       toast({
@@ -690,11 +613,11 @@ export default function CaseNotes() {
     setGenerationStatus("idle");
     setGenerationSummary(null);
     setErrorMessage(null);
-    setPermissionError(false);
     setNotesStatus("dirty");
     pdfExtractor.clearText();
     if (fileInputRef.current) fileInputRef.current.value = "";
-  }, [pdfExtractor]);
+    if (routeSessionId) sessionStorage.removeItem(storageKey(routeSessionId));
+  }, [pdfExtractor, routeSessionId]);
 
   // ─── Filtered answers ──────────────────────────────────
   const filteredAnswers = useMemo(() => {
@@ -747,6 +670,8 @@ export default function CaseNotes() {
   const notesReadiness: ReadinessState = notesReady
     ? notesSaved ? "ready" : "attention"
     : notesEmpty ? "missing" : "attention";
+  const permissionReadiness: ReadinessState = form.permissionConfirmed ? "ready" : "missing";
+  const allReady = sessionReady && templateReady && notesReady && form.permissionConfirmed;
   const phase2Readiness: ReadinessState = allReady ? "ready" : "missing";
 
   const disabledReason = !sessionReady
@@ -754,11 +679,11 @@ export default function CaseNotes() {
     : !templateReady
     ? "Assign a template to this session first."
     : !notesReady
-    ? "Add at least 20 characters of case notes."
-    : !notesSaved
-    ? "Save your notes before running extraction."
+    ? notesEmpty
+      ? "Add case notes to continue."
+      : "Notes are too short — add at least 20 characters."
     : !form.permissionConfirmed
-    ? "Confirm permission to process these notes."
+    ? "Confirm permission before extraction."
     : null;
 
   // ─── Loading state ─────────────────────────────────────
@@ -818,12 +743,10 @@ export default function CaseNotes() {
         {/* ─── Two-column layout ─── */}
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-6">
 
-          {/* ═══════════════════════════════════════════════
-              LEFT COLUMN — Note input workspace
-              ═══════════════════════════════════════════════ */}
+          {/* ═══ LEFT COLUMN — Note input workspace ═══ */}
           <div className="space-y-4">
 
-            {/* Input mode toggle + Source notes */}
+            {/* Source Notes card */}
             <Card className="border border-border shadow-none">
               <CardHeader className="pb-2 pt-4 px-5">
                 <div className="flex items-center justify-between">
@@ -867,24 +790,15 @@ export default function CaseNotes() {
                         onDrop={handleDrop}
                       >
                         <Upload className="h-6 w-6 mx-auto text-muted-foreground/60 mb-2" />
-                        <p className="text-sm text-muted-foreground">
-                          Drag & drop or choose a file
-                        </p>
-                        <p className="text-xs text-muted-foreground/70 mt-1">
-                          Case notes, interview notes, or exported documents
-                        </p>
-                        <p className="text-xs text-muted-foreground/50 mt-0.5">
-                          .txt, .md, .pdf, .docx
-                        </p>
+                        <p className="text-sm text-muted-foreground">Drag & drop or choose a file</p>
+                        <p className="text-xs text-muted-foreground/70 mt-1">Case notes, interview notes, or exported documents</p>
+                        <p className="text-xs text-muted-foreground/50 mt-0.5">.txt, .md, .pdf, .docx</p>
                         <input
                           ref={fileInputRef}
                           type="file"
                           accept={ACCEPTED_EXTENSIONS}
                           className="hidden"
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            if (f) handleFileSelect(f);
-                          }}
+                          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileSelect(f); }}
                         />
                       </div>
                     ) : (
@@ -893,34 +807,22 @@ export default function CaseNotes() {
                           <div className="flex items-center gap-2 min-w-0">
                             <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                             <div className="min-w-0">
-                              <p className="text-sm font-medium text-foreground truncate">
-                                {uploadedFile.name}
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                {formatFileSize(uploadedFile.size)}
-                              </p>
+                              <p className="text-sm font-medium text-foreground truncate">{uploadedFile.name}</p>
+                              <p className="text-xs text-muted-foreground">{formatFileSize(uploadedFile.size)}</p>
                             </div>
                           </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 shrink-0"
-                            onClick={removeFile}
-                          >
+                          <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={removeFile}>
                             <X className="h-3.5 w-3.5" />
                           </Button>
                         </div>
-
                         {uploadedFile.status === "uploading" && (
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            Uploading to storage…
+                            <Loader2 className="h-3 w-3 animate-spin" /> Uploading to storage…
                           </div>
                         )}
                         {uploadedFile.status === "extracting" && (
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            Extracting text from document…
+                            <Loader2 className="h-3 w-3 animate-spin" /> Extracting text from document…
                           </div>
                         )}
                         {uploadedFile.status === "extracted" && (
@@ -962,28 +864,20 @@ export default function CaseNotes() {
                           : "Paste interview notes, observations, or transcript excerpts."}
                       </p>
                       {notesStatus === "dirty" && notesReady && (
-                        <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 text-[hsl(var(--status-warning))]">
-                          Unsaved
-                        </Badge>
+                        <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 text-[hsl(var(--status-warning))]">Unsaved</Badge>
                       )}
                       {notesStatus === "saved" && (
-                        <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 text-[hsl(var(--status-success))]">
-                          Saved
-                        </Badge>
+                        <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 text-[hsl(var(--status-success))]">Saved</Badge>
                       )}
                       {notesStatus === "saving" && (
-                        <Badge variant="outline" className="text-xs px-1.5 py-0 h-5">
-                          Saving…
-                        </Badge>
+                        <Badge variant="outline" className="text-xs px-1.5 py-0 h-5">Saving…</Badge>
                       )}
                     </div>
                     <span
                       className={cn(
                         "text-xs tabular-nums",
-                        notesTooShort
-                          ? "text-[hsl(var(--status-warning))]"
-                          : notesReady
-                          ? "text-muted-foreground"
+                        notesTooShort ? "text-[hsl(var(--status-warning))]"
+                          : notesReady ? "text-muted-foreground"
                           : "text-muted-foreground/50"
                       )}
                     >
@@ -1026,8 +920,7 @@ export default function CaseNotes() {
                 {!notesReady && (
                   <div className="rounded-lg bg-muted/40 p-3 space-y-1">
                     <p className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
-                      <Info className="h-3 w-3" />
-                      Tips for better extraction
+                      <Info className="h-3 w-3" /> Tips for better extraction
                     </p>
                     <ul className="text-xs text-muted-foreground space-y-0.5 pl-5">
                       {NOTE_HINTS.map((hint, i) => (
@@ -1036,73 +929,6 @@ export default function CaseNotes() {
                     </ul>
                   </div>
                 )}
-              </CardContent>
-            </Card>
-
-            {/* Case Context */}
-            <Card className="border border-border shadow-none">
-              <CardHeader className="pb-2 pt-4 px-5">
-                <CardTitle className="text-sm font-medium text-foreground">
-                  Case Context
-                  <span className="text-xs font-normal text-muted-foreground ml-2">Optional</span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="px-5 pb-5">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">Client Name / ID</Label>
-                    <Input
-                      placeholder="Optional"
-                      className="text-sm h-9"
-                      value={form.clientIdentifier}
-                      onChange={(e) => updateField("clientIdentifier", e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">Meeting Date</Label>
-                    <Input
-                      type="date"
-                      className="text-sm h-9"
-                      value={form.meetingDate}
-                      onChange={(e) => updateField("meetingDate", e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">Contact Type</Label>
-                    <Select value={form.contactType} onValueChange={(v) => updateField("contactType", v)}>
-                      <SelectTrigger className="h-9 text-sm">
-                        <SelectValue placeholder="Select…" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="home-visit">Home visit</SelectItem>
-                        <SelectItem value="phone">Phone</SelectItem>
-                        <SelectItem value="court">Court</SelectItem>
-                        <SelectItem value="office">Office</SelectItem>
-                        <SelectItem value="school">School</SelectItem>
-                        <SelectItem value="video">Video</SelectItem>
-                        <SelectItem value="other">Other</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">Program / Domain</Label>
-                    <Select value={form.programDomain} onValueChange={(v) => updateField("programDomain", v)}>
-                      <SelectTrigger className="h-9 text-sm">
-                        <SelectValue placeholder="Select…" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="snap">SNAP</SelectItem>
-                        <SelectItem value="medicaid">Medicaid</SelectItem>
-                        <SelectItem value="housing">Housing</SelectItem>
-                        <SelectItem value="child-welfare">Child Welfare</SelectItem>
-                        <SelectItem value="disability">Disability</SelectItem>
-                        <SelectItem value="benefits">Benefits</SelectItem>
-                        <SelectItem value="general">General</SelectItem>
-                        <SelectItem value="other">Other</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
               </CardContent>
             </Card>
 
@@ -1123,9 +949,6 @@ export default function CaseNotes() {
                     <p className="text-xs text-muted-foreground">
                       Required before extraction. Logged for audit.
                     </p>
-                    {permissionError && !form.permissionConfirmed && (
-                      <p className="text-xs text-destructive">Confirmation required.</p>
-                    )}
                   </div>
                 </div>
               </CardContent>
@@ -1181,7 +1004,6 @@ export default function CaseNotes() {
                         </div>
                       )}
                     </div>
-
                     {result && (
                       <div className="flex items-center gap-1">
                         <TooltipProvider>
@@ -1218,8 +1040,6 @@ export default function CaseNotes() {
                     )}
                   </div>
                 </CardHeader>
-
-                {/* Filters */}
                 {result && (
                   <div className="px-5 pb-2 flex items-center gap-2 flex-wrap">
                     <div className="relative flex-1 min-w-[140px] max-w-[220px]">
@@ -1244,9 +1064,7 @@ export default function CaseNotes() {
                     ))}
                   </div>
                 )}
-
                 <Separator />
-
                 <CardContent className="px-5 py-0">
                   {generationStatus === "generating" ? (
                     <div className="flex flex-col items-center justify-center py-16 gap-3">
@@ -1270,9 +1088,7 @@ export default function CaseNotes() {
             )}
           </div>
 
-          {/* ═══════════════════════════════════════════════
-              RIGHT COLUMN — Session readiness + CTA
-              ═══════════════════════════════════════════════ */}
+          {/* ═══ RIGHT COLUMN — Session readiness + CTA ═══ */}
           <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
 
             {/* Session readiness card */}
@@ -1288,7 +1104,6 @@ export default function CaseNotes() {
                   state={sessionReadiness}
                   detail={session.caseLabel || session.sessionId}
                 />
-
                 <ReadinessRow
                   label="Template assigned"
                   state={templateReadiness}
@@ -1298,9 +1113,8 @@ export default function CaseNotes() {
                       : "A template must be selected before fact extraction can run."
                   }
                 />
-
                 <ReadinessRow
-                  label="Notes saved"
+                  label="Notes present"
                   state={notesReadiness}
                   detail={
                     notesReady && notesSaved
@@ -1312,9 +1126,16 @@ export default function CaseNotes() {
                       : `${notesLength} characters — too short to extract from`
                   }
                 />
-
+                <ReadinessRow
+                  label="Permission confirmed"
+                  state={permissionReadiness}
+                  detail={
+                    form.permissionConfirmed
+                      ? "Confirmed"
+                      : "Confirm permission before extraction"
+                  }
+                />
                 <Separator className="my-2" />
-
                 <ReadinessRow
                   label={allReady ? "Ready to extract fact-based answers" : "Missing required inputs"}
                   state={phase2Readiness}
@@ -1327,7 +1148,7 @@ export default function CaseNotes() {
               <CardContent className="px-5 py-4 space-y-3">
                 <Button
                   className="w-full gap-2"
-                  disabled={!canGenerate && notesStatus !== "dirty"}
+                  disabled={!canGenerate}
                   onClick={handleGenerate}
                 >
                   {generationStatus === "generating" ? (
