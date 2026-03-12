@@ -15,6 +15,8 @@ import {
   ChevronRight,
   Upload,
   X,
+  Circle,
+  Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -72,7 +74,7 @@ interface UploadedFile {
   mime: string;
   extractedText: string | null;
   storagePath: string | null;
-  status: "reading" | "ready" | "uploaded" | "error";
+  status: "reading" | "ready" | "uploaded" | "extracting" | "error";
 }
 
 interface CaseNotesFormState {
@@ -111,9 +113,9 @@ function formatFileSize(bytes: number): string {
 
 function ConfidenceBadge({ level }: { level: string }) {
   const styles: Record<string, string> = {
-    high: "bg-primary/10 text-primary",
+    high: "bg-[hsl(var(--status-success-muted))] text-[hsl(var(--status-success-muted-foreground))]",
     medium: "bg-muted text-muted-foreground",
-    low: "bg-destructive/10 text-destructive",
+    low: "bg-[hsl(var(--status-danger-muted))] text-[hsl(var(--status-danger-muted-foreground))]",
   };
   return (
     <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", styles[level] || styles.low)}>
@@ -162,6 +164,53 @@ function AnswerRow({ answer }: { answer: FieldAnswer }) {
   );
 }
 
+// ─── Readiness check row ─────────────────────────────────
+type ReadinessState = "ready" | "attention" | "missing";
+
+function ReadinessRow({
+  label,
+  state,
+  detail,
+}: {
+  label: string;
+  state: ReadinessState;
+  detail?: string;
+}) {
+  const icon =
+    state === "ready" ? (
+      <CheckCircle2 className="h-3.5 w-3.5 text-[hsl(var(--status-success))]" />
+    ) : state === "attention" ? (
+      <AlertCircle className="h-3.5 w-3.5 text-[hsl(var(--status-warning))]" />
+    ) : (
+      <Circle className="h-3.5 w-3.5 text-muted-foreground/40" />
+    );
+
+  return (
+    <div className="flex items-start gap-2 py-1.5">
+      <div className="mt-0.5 shrink-0">{icon}</div>
+      <div className="min-w-0">
+        <p className={cn(
+          "text-sm",
+          state === "ready" ? "text-foreground" : "text-muted-foreground"
+        )}>
+          {label}
+        </p>
+        {detail && (
+          <p className="text-xs text-muted-foreground mt-0.5">{detail}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Note quality hints ──────────────────────────────────
+const NOTE_HINTS = [
+  "Include factual details: dates, names, roles, events.",
+  "Mention living situation, safety concerns, services discussed.",
+  "Include deadlines, referrals, and next steps discussed.",
+  "Avoid summary-only shorthand if detail matters for the template.",
+];
+
 // ─── Main Page ───────────────────────────────────────────
 export default function CaseNotes() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -174,11 +223,12 @@ export default function CaseNotes() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [result, setResult] = useState<Phase2Result | null>(null);
   const [sessionLabel, setSessionLabel] = useState<string>("");
+  const [templateName, setTemplateName] = useState<string | null>(null);
   const [hasTemplate, setHasTemplate] = useState<boolean | null>(null);
   const [permissionError, setPermissionError] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Filters
+  // Filters for results
   const [searchFilter, setSearchFilter] = useState("");
   const [showFilter, setShowFilter] = useState<"all" | "answered" | "missing">("all");
 
@@ -205,6 +255,16 @@ export default function CaseNotes() {
       setSessionLabel(data.case_label || sessionId);
       setHasTemplate(!!data.template_id);
 
+      // Load template name if assigned
+      if (data.template_id) {
+        const { data: tmpl } = await supabase
+          .from("kb_templates")
+          .select("name")
+          .eq("id", data.template_id)
+          .maybeSingle();
+        if (tmpl) setTemplateName(tmpl.name);
+      }
+
       if (data.interview_notes) {
         setForm((prev) => ({ ...prev, rawNotes: data.interview_notes! }));
       }
@@ -214,7 +274,6 @@ export default function CaseNotes() {
         setResult(meta.guidance_phase2 as Phase2Result);
         setStatus("success");
       }
-      // Restore case context
       if (meta?.case_context) {
         const cc = meta.case_context as Record<string, string>;
         setForm((prev) => ({
@@ -228,22 +287,29 @@ export default function CaseNotes() {
     })();
   }, [sessionId]);
 
-  // The effective notes text (from paste or uploaded file)
+  // The effective notes text — both modes converge here
   const effectiveNotes = useMemo(() => {
     if (inputMode === "upload" && uploadedFile?.extractedText) {
+      // If user switched to upload and extracted text, use that in the editor
       return uploadedFile.extractedText;
     }
     return form.rawNotes;
   }, [inputMode, uploadedFile, form.rawNotes]);
 
-  const notesReady = effectiveNotes.trim().length >= MIN_NOTES_LENGTH;
-  const notesTooShort = effectiveNotes.length > 0 && !notesReady;
+  const notesLength = effectiveNotes.trim().length;
+  const notesReady = notesLength >= MIN_NOTES_LENGTH;
+  const notesTooShort = notesLength > 0 && !notesReady;
+  const notesEmpty = notesLength === 0;
+
+  // Readiness derivation
+  const sessionReady = !!sessionId;
+  const templateReady = hasTemplate === true;
+  const allReady = sessionReady && templateReady && notesReady;
 
   const canGenerate =
-    notesReady &&
+    allReady &&
     form.permissionConfirmed &&
-    status !== "generating" &&
-    hasTemplate !== false;
+    status !== "generating";
 
   // ─── File handling ─────────────────────────────────────
   const handleFileSelect = useCallback(
@@ -268,8 +334,9 @@ export default function CaseNotes() {
         setUploadedFile((prev) =>
           prev ? { ...prev, extractedText: text, status: "ready" } : null
         );
+        // Also populate the main editor
+        setForm((prev) => ({ ...prev, rawNotes: text }));
       } else {
-        // PDF / DOCX — upload to storage
         setUploadedFile({
           name: file.name,
           size: file.size,
@@ -288,9 +355,7 @@ export default function CaseNotes() {
           if (uploadErr) throw uploadErr;
 
           setUploadedFile((prev) =>
-            prev
-              ? { ...prev, storagePath: path, status: "uploaded" }
-              : null
+            prev ? { ...prev, storagePath: path, status: "uploaded" } : null
           );
         } catch {
           setUploadedFile((prev) =>
@@ -317,6 +382,14 @@ export default function CaseNotes() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
 
+  // When extracted text from upload is available, populate the editor
+  const handleUseExtractedText = useCallback(() => {
+    if (uploadedFile?.extractedText) {
+      setForm((prev) => ({ ...prev, rawNotes: uploadedFile.extractedText! }));
+      setInputMode("paste"); // Switch to paste so user sees the unified editor
+    }
+  }, [uploadedFile]);
+
   // ─── Generate handler ──────────────────────────────────
   const handleGenerate = useCallback(async () => {
     if (!form.permissionConfirmed) {
@@ -329,7 +402,6 @@ export default function CaseNotes() {
     setErrorMessage(null);
 
     try {
-      // Step 1: Save notes
       const notesText = effectiveNotes.trim();
       const { error: uploadError } = await supabase.functions.invoke(
         "upload-interview-notes-text",
@@ -337,7 +409,7 @@ export default function CaseNotes() {
       );
       if (uploadError) throw new Error(uploadError.message || "Failed to save notes");
 
-      // Step 1b: Merge metadata (case_context + permission + source info)
+      // Merge metadata
       const { data: current } = await supabase
         .from("sessions")
         .select("metadata")
@@ -380,14 +452,14 @@ export default function CaseNotes() {
         })
         .eq("session_id", sessionId);
 
-      // Step 2: Call generate-guidance-phase2
+      // Call generate-guidance-phase2
       const { error: genError } = await supabase.functions.invoke(
         "generate-guidance-phase2",
         { body: { session_id: sessionId } }
       );
-      if (genError) throw new Error(genError.message || "Phase 2 generation failed");
+      if (genError) throw new Error(genError.message || "Fact extraction failed");
 
-      // Step 3: Poll for results
+      // Poll for results
       let attempts = 0;
       const maxAttempts = 8;
       let phase2Data: Phase2Result | null = null;
@@ -414,12 +486,12 @@ export default function CaseNotes() {
 
       setResult(phase2Data);
       setStatus("success");
-      toast({ title: "Case notes generated", description: "Review extracted facts below." });
+      toast({ title: "Fact extraction complete", description: "Review extracted answers below." });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Something went wrong";
       setErrorMessage(msg);
       setStatus("error");
-      toast({ title: "Generation failed", description: msg, variant: "destructive" });
+      toast({ title: "Extraction failed", description: msg, variant: "destructive" });
     }
   }, [canGenerate, sessionId, form, effectiveNotes, inputMode, uploadedFile]);
 
@@ -478,52 +550,63 @@ export default function CaseNotes() {
     URL.revokeObjectURL(url);
   }, [result, sessionLabel]);
 
+  // ─── Readiness derivations ─────────────────────────────
+  const sessionReadiness: ReadinessState = sessionReady ? "ready" : "missing";
+  const templateReadiness: ReadinessState = hasTemplate === null ? "missing" : hasTemplate ? "ready" : "attention";
+  const notesReadiness: ReadinessState = notesReady ? "ready" : notesEmpty ? "missing" : "attention";
+  const phase2Readiness: ReadinessState = allReady ? "ready" : "missing";
+
+  const disabledReason = !sessionReady
+    ? "No session context available."
+    : !templateReady
+    ? "Assign a template to this session first."
+    : !notesReady
+    ? "Add at least 20 characters of case notes."
+    : !form.permissionConfirmed
+    ? "Confirm permission to process these notes."
+    : null;
+
   return (
     <DashboardLayout>
       <div className="max-w-6xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4">
+        {/* ─── Page Header ─── */}
+        <div className="space-y-1">
           <div className="flex items-center gap-3">
             <Button
               variant="ghost"
               size="icon"
               className="h-8 w-8 shrink-0"
-              onClick={() => navigate("/dashboard")}
+              onClick={() => navigate(-1)}
             >
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <div>
-              <h1 className="text-lg font-semibold text-foreground">Generate Case Notes</h1>
+              <h1 className="text-lg font-semibold text-foreground">Case Notes</h1>
               <p className="text-sm text-muted-foreground">
-                Phase 2 — Turn raw notes into structured documentation
+                Paste or upload interview notes, then extract fact-based answers for the selected template.
               </p>
             </div>
           </div>
-          <Badge variant="outline" className="text-xs shrink-0 mt-1">
-            Session: {sessionLabel || sessionId}
-          </Badge>
+          <p className="text-xs text-muted-foreground pl-11">
+            Only fact-based template fields will be answered from the notes.
+          </p>
         </div>
 
-        {/* No template warning */}
-        {hasTemplate === false && (
-          <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/5 border border-destructive/20">
-            <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
-            <p className="text-sm text-destructive/90">
-              This session has no template assigned. Choose a template before generating case notes.
-            </p>
-          </div>
-        )}
+        {/* ─── Two-column layout ─── */}
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-6">
 
-        {/* Two-column layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* ─── Left: Inputs ─── */}
+          {/* ═══════════════════════════════════════════════
+              LEFT COLUMN — Note input workspace
+              ═══════════════════════════════════════════════ */}
           <div className="space-y-4">
-            {/* Source Notes */}
+
+            {/* Input mode toggle + Source notes */}
             <Card className="border border-border shadow-none">
-              <CardHeader className="pb-2 pt-4 px-4">
+              <CardHeader className="pb-2 pt-4 px-5">
                 <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm font-medium text-foreground">Source Notes</CardTitle>
-                  {/* Segmented toggle */}
+                  <CardTitle className="text-sm font-medium text-foreground">
+                    Source Notes
+                  </CardTitle>
                   <div className="flex items-center rounded-md border border-border overflow-hidden">
                     <button
                       className={cn(
@@ -550,37 +633,9 @@ export default function CaseNotes() {
                   </div>
                 </div>
               </CardHeader>
-              <CardContent className="px-4 pb-4 space-y-3">
-                {inputMode === "paste" ? (
-                  <div>
-                    <Textarea
-                      placeholder="Paste raw notes, bullets, or transcript excerpts…"
-                      className="min-h-[160px] text-sm resize-y"
-                      value={form.rawNotes}
-                      onChange={(e) => updateField("rawNotes", e.target.value)}
-                    />
-                    <div className="flex items-center justify-between mt-1.5">
-                      <p className="text-xs text-muted-foreground">
-                        Paste unstructured notes. We'll extract factual answers for the template.
-                      </p>
-                      <span
-                        className={cn(
-                          "text-xs tabular-nums",
-                          notesTooShort ? "text-destructive" : "text-muted-foreground"
-                        )}
-                      >
-                        {form.rawNotes.trim().length}
-                      </span>
-                    </div>
-                    {notesTooShort && inputMode === "paste" && (
-                      <p className="text-xs text-destructive mt-1">
-                        Minimum {MIN_NOTES_LENGTH} characters required
-                      </p>
-                    )}
-                  </div>
-                ) : (
-                  /* Upload mode */
-                  <div>
+              <CardContent className="px-5 pb-5 space-y-3">
+                {inputMode === "upload" && (
+                  <div className="space-y-3">
                     {!uploadedFile ? (
                       <div
                         className="border-2 border-dashed border-border rounded-lg p-8 text-center hover:border-primary/40 transition-colors cursor-pointer"
@@ -593,6 +648,9 @@ export default function CaseNotes() {
                           Drag & drop or choose a file
                         </p>
                         <p className="text-xs text-muted-foreground/70 mt-1">
+                          Case notes, interview notes, or exported documents
+                        </p>
+                        <p className="text-xs text-muted-foreground/50 mt-0.5">
                           .txt, .md, .pdf, .docx
                         </p>
                         <input
@@ -639,16 +697,29 @@ export default function CaseNotes() {
                           </div>
                         )}
                         {uploadedFile.status === "ready" && (
-                          <p className="text-xs text-primary">
-                            <CheckCircle2 className="h-3 w-3 inline mr-1" />
-                            Text extracted — ready to generate
-                          </p>
+                          <div className="space-y-1.5">
+                            <p className="text-xs text-[hsl(var(--status-success))]">
+                              <CheckCircle2 className="h-3 w-3 inline mr-1" />
+                              Text extracted successfully
+                            </p>
+                            {uploadedFile.extractedText && !form.rawNotes && (
+                              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={handleUseExtractedText}>
+                                Use extracted text in editor
+                              </Button>
+                            )}
+                          </div>
                         )}
                         {uploadedFile.status === "uploaded" && (
                           <p className="text-xs text-muted-foreground">
-                            <CheckCircle2 className="h-3 w-3 inline mr-1 text-primary" />
-                            Uploaded — text extraction will run server-side
+                            <CheckCircle2 className="h-3 w-3 inline mr-1 text-[hsl(var(--status-success))]" />
+                            Uploaded — server-side text extraction pending
                           </p>
+                        )}
+                        {uploadedFile.status === "extracting" && (
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Extracting text from document…
+                          </div>
                         )}
                         {uploadedFile.status === "error" && (
                           <p className="text-xs text-destructive">
@@ -657,9 +728,62 @@ export default function CaseNotes() {
                         )}
                       </div>
                     )}
-                    <p className="text-xs text-muted-foreground mt-2">
-                      We'll extract text and use it as your source notes.
+                    <p className="text-xs text-muted-foreground">
+                      Extracted text will populate the notes editor below. You can review and edit before continuing.
                     </p>
+                  </div>
+                )}
+
+                {/* ─── Unified notes editor ─── */}
+                <div>
+                  <Textarea
+                    placeholder={
+                      inputMode === "upload"
+                        ? "Extracted text will appear here, or paste additional notes…"
+                        : "Client reported they are currently facing eviction from their apartment. The lease expires on April 30. They have two children enrolled at Lincoln Elementary. They applied for emergency housing assistance last week but have not received a response…"
+                    }
+                    className="min-h-[200px] text-sm resize-y"
+                    value={form.rawNotes}
+                    onChange={(e) => updateField("rawNotes", e.target.value)}
+                  />
+                  <div className="flex items-center justify-between mt-1.5">
+                    <p className="text-xs text-muted-foreground">
+                      {inputMode === "upload"
+                        ? "Review and edit extracted text before running extraction."
+                        : "Paste interview notes, observations, or transcript excerpts."}
+                    </p>
+                    <span
+                      className={cn(
+                        "text-xs tabular-nums",
+                        notesTooShort
+                          ? "text-[hsl(var(--status-warning))]"
+                          : notesReady
+                          ? "text-muted-foreground"
+                          : "text-muted-foreground/50"
+                      )}
+                    >
+                      {notesLength} chars
+                    </span>
+                  </div>
+                  {notesTooShort && (
+                    <p className="text-xs text-[hsl(var(--status-warning))] mt-1">
+                      Too short to extract from — minimum {MIN_NOTES_LENGTH} characters.
+                    </p>
+                  )}
+                </div>
+
+                {/* Note quality hints */}
+                {!notesReady && (
+                  <div className="rounded-lg bg-muted/40 p-3 space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                      <Info className="h-3 w-3" />
+                      Tips for better extraction
+                    </p>
+                    <ul className="text-xs text-muted-foreground space-y-0.5 pl-5">
+                      {NOTE_HINTS.map((hint, i) => (
+                        <li key={i} className="list-disc">{hint}</li>
+                      ))}
+                    </ul>
                   </div>
                 )}
               </CardContent>
@@ -667,10 +791,13 @@ export default function CaseNotes() {
 
             {/* Case Context */}
             <Card className="border border-border shadow-none">
-              <CardHeader className="pb-2 pt-4 px-4">
-                <CardTitle className="text-sm font-medium text-foreground">Case Context</CardTitle>
+              <CardHeader className="pb-2 pt-4 px-5">
+                <CardTitle className="text-sm font-medium text-foreground">
+                  Case Context
+                  <span className="text-xs font-normal text-muted-foreground ml-2">Optional</span>
+                </CardTitle>
               </CardHeader>
-              <CardContent className="px-4 pb-4">
+              <CardContent className="px-5 pb-5">
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <Label className="text-xs text-muted-foreground">Client Name / ID</Label>
@@ -702,6 +829,7 @@ export default function CaseNotes() {
                         <SelectItem value="court">Court</SelectItem>
                         <SelectItem value="office">Office</SelectItem>
                         <SelectItem value="school">School</SelectItem>
+                        <SelectItem value="video">Video</SelectItem>
                         <SelectItem value="other">Other</SelectItem>
                       </SelectContent>
                     </Select>
@@ -714,9 +842,12 @@ export default function CaseNotes() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="snap">SNAP</SelectItem>
+                        <SelectItem value="medicaid">Medicaid</SelectItem>
                         <SelectItem value="housing">Housing</SelectItem>
                         <SelectItem value="child-welfare">Child Welfare</SelectItem>
+                        <SelectItem value="disability">Disability</SelectItem>
                         <SelectItem value="benefits">Benefits</SelectItem>
+                        <SelectItem value="general">General</SelectItem>
                         <SelectItem value="other">Other</SelectItem>
                       </SelectContent>
                     </Select>
@@ -727,7 +858,7 @@ export default function CaseNotes() {
 
             {/* Permission & Compliance */}
             <Card className="border border-border shadow-none bg-muted/30">
-              <CardContent className="px-4 py-3">
+              <CardContent className="px-5 py-3">
                 <div className="flex items-start gap-2.5">
                   <ShieldCheck className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                   <div className="space-y-2 flex-1">
@@ -740,19 +871,17 @@ export default function CaseNotes() {
                       I confirm I have permission to process these notes.
                     </label>
                     <p className="text-xs text-muted-foreground">
-                      Required to generate notes. Logged for audit.
+                      Required before extraction. Logged for audit.
                     </p>
                     {permissionError && !form.permissionConfirmed && (
-                      <p className="text-xs text-destructive">
-                        Confirmation required.
-                      </p>
+                      <p className="text-xs text-destructive">Confirmation required.</p>
                     )}
                   </div>
                 </div>
               </CardContent>
             </Card>
 
-            {/* Error */}
+            {/* Error banner */}
             {status === "error" && errorMessage && (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/5 border border-destructive/20">
                 <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
@@ -760,180 +889,244 @@ export default function CaseNotes() {
               </div>
             )}
 
-            {/* Actions */}
-            <div className="flex items-center justify-between gap-3 pt-2">
-              <Button variant="outline" size="sm" onClick={handleClear} disabled={status === "generating"}>
-                Clear
-              </Button>
-              <Button
-                size="sm"
-                className="gap-1.5"
-                disabled={!canGenerate}
-                onClick={handleGenerate}
-              >
-                {status === "generating" ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Extracting facts…
-                  </>
-                ) : status === "success" ? (
-                  <>
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    Regenerate
-                  </>
-                ) : (
-                  "Generate Case Notes"
-                )}
-              </Button>
-            </div>
-            {!canGenerate && status !== "generating" && (
-              <p className="text-xs text-muted-foreground mt-1.5">
-                {!notesReady
-                  ? "Enter at least 20 characters of source notes."
-                  : !form.permissionConfirmed
-                  ? "Confirm permission above."
-                  : hasTemplate === false
-                  ? "Assign a template to this session first."
-                  : null}
-              </p>
-            )}
-          </div>
-
-          {/* ─── Right: Results ─── */}
-          <div className="space-y-0">
-            <Card className="border border-border shadow-none h-full flex flex-col">
-              <CardHeader className="pb-2 pt-4 px-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="text-sm font-medium text-foreground">
-                      Extracted Facts
-                    </CardTitle>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="text-xs text-muted-foreground">
-                        Last generated:{" "}
-                        {result?.generated_at
-                          ? new Date(result.generated_at).toLocaleString()
-                          : "—"}
-                      </span>
+            {/* ─── Results panel (shown below workspace on mobile, but also in left col on desktop for full width) ─── */}
+            {(status === "success" || status === "generating") && (
+              <Card className="border border-border shadow-none">
+                <CardHeader className="pb-2 pt-4 px-5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-sm font-medium text-foreground">
+                        Extracted Fact-Based Answers
+                      </CardTitle>
                       {result && (
-                        <Badge variant="secondary" className="text-xs">Draft</Badge>
+                        <div className="flex items-center gap-3 mt-1 flex-wrap">
+                          <span className="text-xs text-muted-foreground">
+                            {answeredCount} of {totalCount} fields answered
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            Generated {new Date(result.generated_at).toLocaleString()}
+                          </span>
+                          <Badge variant="secondary" className="text-xs">Draft</Badge>
+                        </div>
                       )}
                     </div>
+
                     {result && (
-                      <div className="flex items-center gap-3 mt-1">
-                        <span className="text-xs text-muted-foreground">
-                          Model: {result.model}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          Answered: {answeredCount} / {totalCount}
-                        </span>
+                      <div className="flex items-center gap-1">
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleCopy}>
+                                <Copy className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Copy all</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleDownload}>
+                                <Download className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Download .txt</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8" disabled>
+                                <Send className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Send to Reviewer — coming soon</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                       </div>
                     )}
                   </div>
+                </CardHeader>
 
-                  {result && (
-                    <div className="flex items-center gap-1">
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleCopy}>
-                              <Copy className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>Copy</TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleDownload}>
-                              <Download className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>Download .txt</TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8" disabled>
-                              <Send className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>Send to Reviewer — coming soon</TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
+                {/* Filters */}
+                {result && (
+                  <div className="px-5 pb-2 flex items-center gap-2 flex-wrap">
+                    <div className="relative flex-1 min-w-[140px] max-w-[220px]">
+                      <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        placeholder="Search fields…"
+                        className="h-8 text-xs pl-8"
+                        value={searchFilter}
+                        onChange={(e) => setSearchFilter(e.target.value)}
+                      />
                     </div>
-                  )}
-                </div>
-              </CardHeader>
-
-              {/* Filters */}
-              {result && (
-                <div className="px-4 pb-2 flex items-center gap-2 flex-wrap">
-                  <div className="relative flex-1 min-w-[140px] max-w-[220px]">
-                    <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      placeholder="Search fields…"
-                      className="h-8 text-xs pl-8"
-                      value={searchFilter}
-                      onChange={(e) => setSearchFilter(e.target.value)}
-                    />
-                  </div>
-                  {(["all", "answered", "missing"] as const).map((f) => (
-                    <Button
-                      key={f}
-                      variant={showFilter === f ? "secondary" : "ghost"}
-                      size="sm"
-                      className="h-7 text-xs px-2.5"
-                      onClick={() => setShowFilter(f)}
-                    >
-                      {f === "all" ? "All" : f === "answered" ? "Answered" : "Missing"}
-                    </Button>
-                  ))}
-                </div>
-              )}
-
-              <Separator />
-
-              <CardContent className="px-4 py-0 flex-1 overflow-y-auto">
-                {status === "generating" ? (
-                  <div className="flex flex-col items-center justify-center py-16 gap-3">
-                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                    <p className="text-sm text-muted-foreground">Extracting facts…</p>
-                  </div>
-                ) : result && filteredAnswers.length > 0 ? (
-                  <div className="divide-y divide-border">
-                    {filteredAnswers.map((answer) => (
-                      <AnswerRow key={answer.field_key} answer={answer} />
+                    {(["all", "answered", "missing"] as const).map((f) => (
+                      <Button
+                        key={f}
+                        variant={showFilter === f ? "secondary" : "ghost"}
+                        size="sm"
+                        className="h-7 text-xs px-2.5"
+                        onClick={() => setShowFilter(f)}
+                      >
+                        {f === "all" ? "All" : f === "answered" ? "Answered" : "Missing"}
+                      </Button>
                     ))}
                   </div>
-                ) : result && filteredAnswers.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-16 gap-2">
-                    <p className="text-sm text-muted-foreground">No matching fields</p>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center justify-center py-16 gap-3">
-                    <div className="w-10 h-10 rounded-full bg-muted/50 flex items-center justify-center">
-                      <FileText className="h-5 w-5 text-muted-foreground/50" />
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      Generated notes will appear here
-                    </p>
-                  </div>
                 )}
+
+                <Separator />
+
+                <CardContent className="px-5 py-0">
+                  {status === "generating" ? (
+                    <div className="flex flex-col items-center justify-center py-16 gap-3">
+                      <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                      <p className="text-sm text-muted-foreground">Extracting fact-based answers…</p>
+                      <p className="text-xs text-muted-foreground">This may take a few seconds.</p>
+                    </div>
+                  ) : result && filteredAnswers.length > 0 ? (
+                    <div className="divide-y divide-border">
+                      {filteredAnswers.map((answer) => (
+                        <AnswerRow key={answer.field_key} answer={answer} />
+                      ))}
+                    </div>
+                  ) : result && filteredAnswers.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 gap-2">
+                      <p className="text-sm text-muted-foreground">No matching fields</p>
+                    </div>
+                  ) : null}
+                </CardContent>
+              </Card>
+            )}
+          </div>
+
+          {/* ═══════════════════════════════════════════════
+              RIGHT COLUMN — Session readiness + CTA
+              ═══════════════════════════════════════════════ */}
+          <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
+
+            {/* Session readiness card */}
+            <Card className="border border-border shadow-none">
+              <CardHeader className="pb-3 pt-4 px-5">
+                <CardTitle className="text-sm font-medium text-foreground">
+                  Extraction Setup
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-5 pb-5 space-y-1">
+                <ReadinessRow
+                  label="Session context"
+                  state={sessionReadiness}
+                  detail={sessionReady ? (sessionLabel || sessionId) : "No active session"}
+                />
+
+                <ReadinessRow
+                  label="Template assigned"
+                  state={templateReadiness}
+                  detail={
+                    hasTemplate === null
+                      ? "Loading…"
+                      : hasTemplate
+                      ? templateName || "Template ready"
+                      : "A template must be selected before fact extraction can run."
+                  }
+                />
+
+                <ReadinessRow
+                  label="Notes present"
+                  state={notesReadiness}
+                  detail={
+                    notesReady
+                      ? `${notesLength} characters — looks ready`
+                      : notesEmpty
+                      ? "No notes entered yet"
+                      : `${notesLength} characters — too short to extract from`
+                  }
+                />
+
+                <Separator className="my-2" />
+
+                <ReadinessRow
+                  label={allReady ? "Ready to extract fact-based answers" : "Missing required inputs"}
+                  state={phase2Readiness}
+                />
               </CardContent>
             </Card>
-          </div>
-        </div>
 
-        {/* Pipeline hint */}
-        <div className="flex items-center justify-center gap-6 pt-2 pb-4">
-          <span className="text-xs text-muted-foreground">Before meeting: <strong>Guidance</strong></span>
-          <Separator orientation="vertical" className="h-3" />
-          <span className="text-xs text-muted-foreground">After meeting: <strong>Case Notes</strong></span>
-          <Separator orientation="vertical" className="h-3" />
-          <span className="text-xs text-muted-foreground">Before submitting: <strong>Reviewer</strong></span>
+            {/* Primary CTA */}
+            <Card className="border border-border shadow-none">
+              <CardContent className="px-5 py-4 space-y-3">
+                <Button
+                  className="w-full gap-2"
+                  disabled={!canGenerate}
+                  onClick={handleGenerate}
+                >
+                  {status === "generating" ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Extracting…
+                    </>
+                  ) : status === "success" ? (
+                    <>
+                      <CheckCircle2 className="h-4 w-4" />
+                      Re-extract answers
+                    </>
+                  ) : (
+                    <>
+                      <FileText className="h-4 w-4" />
+                      Extract fact-based answers
+                    </>
+                  )}
+                </Button>
+
+                {disabledReason && status !== "generating" && (
+                  <p className="text-xs text-muted-foreground text-center">
+                    {disabledReason}
+                  </p>
+                )}
+
+                {status === "success" && (
+                  <p className="text-xs text-muted-foreground text-center">
+                    Re-running will replace existing extracted answers.
+                  </p>
+                )}
+
+                <div className="flex items-center justify-center">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs text-muted-foreground h-7"
+                    onClick={handleClear}
+                    disabled={status === "generating"}
+                  >
+                    Clear all
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Idle empty state for results */}
+            {status === "idle" && (
+              <Card className="border border-border shadow-none bg-muted/20">
+                <CardContent className="px-5 py-8 flex flex-col items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-muted/50 flex items-center justify-center">
+                    <FileText className="h-5 w-5 text-muted-foreground/40" />
+                  </div>
+                  <p className="text-sm text-muted-foreground text-center">
+                    Extracted answers will appear here after running fact extraction.
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Pipeline hint */}
+            <div className="rounded-lg bg-muted/30 p-3 space-y-1.5">
+              <p className="text-xs font-medium text-muted-foreground">Workflow</p>
+              <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+                <span>1. Before meeting → <strong>Guidance</strong></span>
+                <span>2. After meeting → <strong>Case Notes</strong> (you are here)</span>
+                <span>3. Before submitting → <strong>Reviewer</strong></span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </DashboardLayout>
