@@ -355,9 +355,12 @@ export default function CaseNotes() {
   const notesSaved = notesStatus === "saved" || notesStatus === "clean";
   const allReady = sessionReady && templateReady && notesReady && notesSaved;
 
-  const canSaveNotes = notesReady && notesStatus === "dirty" && session;
+  const canSaveNotes = notesReady && notesStatus === "dirty" && !!session;
+  // Allow generate even with dirty notes — we'll auto-save first
   const canGenerate =
-    allReady &&
+    sessionReady &&
+    templateReady &&
+    notesReady &&
     form.permissionConfirmed &&
     generationStatus !== "generating";
 
