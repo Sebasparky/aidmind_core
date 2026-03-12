@@ -50,3 +50,6 @@ verify_jwt = false
 
 [functions.records-room]
 verify_jwt = false
+
+[functions.extract-case-note-text]
+verify_jwt = false
