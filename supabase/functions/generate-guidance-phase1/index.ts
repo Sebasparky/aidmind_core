@@ -1405,7 +1405,12 @@ Rules:
 
     for (const tc of rawTimelines) {
       // Structural validation
-      if (!tc.timeline || typeof tc.timeline !== "string" || !Array.isArray(tc.citations) || tc.citations.length === 0) {
+      if (
+        !tc.timeline ||
+        typeof tc.timeline !== "string" ||
+        !Array.isArray(tc.citations) ||
+        tc.citations.length === 0
+      ) {
         timelineDropped++;
         continue;
       }
@@ -1452,7 +1457,7 @@ Rules:
         guidance_scope: guidanceScope,
         ...(guidanceScope === "other" && guidanceScopeOther ? { guidance_scope_other: guidanceScopeOther } : {}),
         questions: validatedQuestions,
-        ...(validatedTimelines.length > 0 ? { timeline_considerations: validatedTimelines } : {}),
+        timeline_considerations: validatedTimelines,
         grounding_status: "insufficient" as const,
         grounding_reason: reasonCode,
         total_generated: parsed.questions.length,
