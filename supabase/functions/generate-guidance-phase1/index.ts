@@ -1513,6 +1513,7 @@ Rules:
       guidance_scope: guidanceScope,
       ...(guidanceScope === "other" && guidanceScopeOther ? { guidance_scope_other: guidanceScopeOther } : {}),
       questions: validatedQuestions,
+      ...(validatedTimelines.length > 0 ? { timeline_considerations: validatedTimelines } : {}),
       grounding_status: "sufficient" as const,
       total_generated: parsed.questions.length,
       total_grounded: validatedQuestions.length,
