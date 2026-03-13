@@ -1392,6 +1392,46 @@ Rules:
       }
     }
 
+    // ── 7b. Validate timeline_considerations ──────────────────────────
+    const TIMELINE_LANGUAGE_RE =
+      /\b(within\s+\d+\s+(hours?|days?|business\s+days?|calendar\s+days?|weeks?|months?|years?)|within\s+the\s+past\s+(\d+\s+)?(months?|years?|days?)|during\s+the\s+past\s+(\d+\s+)?(months?|years?)|no\s+later\s+than\s+\d+\s+(days?|hours?|business\s+days?)|immediately)\b/i;
+
+    const rawTimelines: { timeline: string; citations: string[] }[] = Array.isArray(parsed.timeline_considerations)
+      ? parsed.timeline_considerations
+      : [];
+
+    const validatedTimelines: { timeline: string; citations: string[] }[] = [];
+    let timelineDropped = 0;
+
+    for (const tc of rawTimelines) {
+      // Structural validation
+      if (!tc.timeline || typeof tc.timeline !== "string" || !Array.isArray(tc.citations) || tc.citations.length === 0) {
+        timelineDropped++;
+        continue;
+      }
+
+      // Citation existence validation
+      const allCitationsValid = tc.citations.every((cid: string) => snippetIdSet.has(cid));
+      if (!allCitationsValid) {
+        timelineDropped++;
+        continue;
+      }
+
+      // Check cited snippet text contains explicit timeline language
+      const citedTexts = tc.citations.map((cid: string) => snippetMap.get(cid)).filter(Boolean) as string[];
+      const combinedCited = citedTexts.join(" ");
+      if (!TIMELINE_LANGUAGE_RE.test(combinedCited)) {
+        timelineDropped++;
+        continue;
+      }
+
+      validatedTimelines.push({ timeline: tc.timeline, citations: tc.citations });
+    }
+
+    console.log(
+      `[generate-guidance-phase1] TIMELINE_CONSIDERATIONS: generated=${rawTimelines.length} validated=${validatedTimelines.length} dropped=${timelineDropped}`,
+    );
+
     // ── 8. Check if we have enough grounded questions ──
     if (validatedQuestions.length < MIN_GROUNDED_QUESTIONS) {
       const reasonCode: GroundingCode =
