@@ -636,8 +636,8 @@ export default function Guidance() {
                     );
                   })}
 
-                  {/* Timeline Considerations — only if present */}
-                  {output.timeline_considerations && output.timeline_considerations.length > 0 && (
+                  {/* Timeline Considerations — rendered when present in guidance payload */}
+                  {Array.isArray(output.timeline_considerations) && output.timeline_considerations.length > 0 && (
                     <Card>
                       <CardHeader className="pb-2">
                         <CardTitle className="text-sm font-medium flex items-center gap-2">
