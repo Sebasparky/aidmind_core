@@ -47,10 +47,16 @@ export interface GuidanceQuestion {
   review_flags?: string[];
 }
 
+export interface TimelineConsideration {
+  timeline: string;
+  citations: string[];
+}
+
 export interface GuidanceOutput {
   generated_at: string; // ISO timestamp
   model: string;
   questions: GuidanceQuestion[];
+  timeline_considerations?: TimelineConsideration[];
   grounding_status?: "sufficient" | "insufficient";
   grounding_reason?: string;
   total_generated?: number;

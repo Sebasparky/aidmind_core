@@ -12,6 +12,7 @@ import {
   Pencil,
   ExternalLink,
   ShieldAlert,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -24,6 +25,7 @@ import { cn } from "@/lib/utils";
 import {
   type GuidanceQuestion,
   type GuidanceCategory,
+  type TimelineConsideration,
   GUIDANCE_CATEGORIES,
 } from "@/lib/tools/guidance-types";
 import { useGuidanceSession } from "@/hooks/useGuidanceSession";
@@ -633,6 +635,55 @@ export default function Guidance() {
                       </Card>
                     );
                   })}
+
+                  {/* Timeline Considerations — only if present */}
+                  {output.timeline_considerations && output.timeline_considerations.length > 0 && (
+                    <Card>
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-sm font-medium flex items-center gap-2">
+                          <Clock className="h-4 w-4 text-muted-foreground" />
+                          Timeline Considerations
+                        </CardTitle>
+                        <CardDescription className="text-xs">
+                          Time-sensitive policy requirements relevant to this session.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        {output.timeline_considerations.map((tc, i) => (
+                          <div key={i} className="flex gap-3">
+                            <span className="text-xs font-mono text-muted-foreground mt-0.5 shrink-0 w-5 text-right">
+                              {i + 1}.
+                            </span>
+                            <div className="flex-1">
+                              <p className="text-sm text-foreground leading-relaxed">{tc.timeline}</p>
+                              {tc.citations.length > 0 && (
+                                <div className="flex items-center gap-1 mt-1.5 flex-wrap">
+                                  <BookOpen className="h-3 w-3 text-muted-foreground" />
+                                  {tc.citations.slice(0, 2).map((cit) => (
+                                    <Badge key={cit} variant="outline" className="text-[10px] font-mono px-1.5 py-0">
+                                      {cit.length > 12 ? cit.slice(0, 12) + "…" : cit}
+                                    </Badge>
+                                  ))}
+                                  {tc.citations.length > 2 && (
+                                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                                      +{tc.citations.length - 2}
+                                    </Badge>
+                                  )}
+                                  <button
+                                    onClick={() => setCitationsModal({ citations: tc.citations, question: tc.timeline })}
+                                    className="text-[10px] text-primary hover:underline flex items-center gap-0.5"
+                                  >
+                                    <ExternalLink className="h-2.5 w-2.5" />
+                                    View sources
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </CardContent>
+                    </Card>
+                  )}
                 </div>
               )}
             </div>
