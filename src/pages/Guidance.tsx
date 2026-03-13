@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import {
   type GuidanceQuestion,
   type GuidanceCategory,
+  type TimelineConsideration,
   GUIDANCE_CATEGORIES,
 } from "@/lib/tools/guidance-types";
 import { useGuidanceSession } from "@/hooks/useGuidanceSession";
