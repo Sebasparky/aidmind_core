@@ -44,12 +44,53 @@ const LOW_INFO_PHRASES = [
 ];
 
 const GENERIC_WORDS = new Set([
-  "what", "when", "where", "which", "does", "have", "been", "this", "that",
-  "with", "from", "your", "about", "into", "they", "their", "there", "were",
-  "will", "would", "could", "should", "other", "first", "last", "most",
-  "more", "than", "each", "some", "also", "currently", "specific", "please",
-  "describe", "explain", "provide", "information", "details", "related",
-  "involved", "during", "before", "after", "between", "through", "under",
+  "what",
+  "when",
+  "where",
+  "which",
+  "does",
+  "have",
+  "been",
+  "this",
+  "that",
+  "with",
+  "from",
+  "your",
+  "about",
+  "into",
+  "they",
+  "their",
+  "there",
+  "were",
+  "will",
+  "would",
+  "could",
+  "should",
+  "other",
+  "first",
+  "last",
+  "most",
+  "more",
+  "than",
+  "each",
+  "some",
+  "also",
+  "currently",
+  "specific",
+  "please",
+  "describe",
+  "explain",
+  "provide",
+  "information",
+  "details",
+  "related",
+  "involved",
+  "during",
+  "before",
+  "after",
+  "between",
+  "through",
+  "under",
 ]);
 
 /**
@@ -109,17 +150,21 @@ type ReviewFlag =
   | "low_overlap_but_high_quality_source";
 
 /** Final outcome for each question (3-tier) */
-type QuestionOutcome =
-  | "pass"
-  | "warning"
-  | "dropped_hard";
+type QuestionOutcome = "pass" | "warning" | "dropped_hard";
 
 /** Per-question diagnostic trace */
 interface QuestionTrace {
   original_question: string;
   support_result: { supported: boolean; reason?: string; details?: Record<string, unknown> };
   style_result: { clientFacing: boolean; reason?: string; details?: Record<string, unknown> };
-  specificity_result: { preserved: boolean; score: number; lost_qualifiers: string[]; concept_family: string; considered: string[]; ignored: string[] };
+  specificity_result: {
+    preserved: boolean;
+    score: number;
+    lost_qualifiers: string[];
+    concept_family: string;
+    considered: string[];
+    ignored: string[];
+  };
   final_outcome: QuestionOutcome;
 }
 
@@ -138,7 +183,10 @@ function computeSnippetSupportQuality(text: string): number {
     if (lower.includes(phrase)) return 0.05;
   }
 
-  const lines = trimmed.split("\n").map((l) => l.trim()).filter(Boolean);
+  const lines = trimmed
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
   if (lines.length === 0) return 0;
 
   const headingPattern = /^(\d+[\.\d]*\s|[-•]\s|[A-Z][A-Z\s]{2,}$|#{1,6}\s|section\s+\d)/i;
@@ -195,7 +243,7 @@ function extractRawTerms(text: string): Set<string> {
       .toLowerCase()
       .replace(/[^a-z0-9\s]/g, "")
       .split(/\s+/)
-      .filter((w) => w.length > 3 && !GENERIC_WORDS.has(w))
+      .filter((w) => w.length > 3 && !GENERIC_WORDS.has(w)),
   );
 }
 
@@ -254,7 +302,7 @@ function validateQuestionSupport(
   const isHighQuality = maxQuality >= 0.8 && avgQuality >= 0.6;
   const isMediumQuality = maxQuality >= 0.5;
 
-  const conceptCoverageThreshold = isHighQuality ? 0.10 : isMediumQuality ? 0.15 : 0.20;
+  const conceptCoverageThreshold = isHighQuality ? 0.1 : isMediumQuality ? 0.15 : 0.2;
   const conceptFailed = coverageRatio < conceptCoverageThreshold;
 
   const overlapThreshold = isHighQuality ? 0.08 : isMediumQuality ? 0.12 : 0.18;
@@ -468,9 +516,12 @@ function validateClientFacingStyle(
   ];
   for (const p of CLASSIFICATION_PATTERNS) {
     if (p.test(qLower)) {
-      if (docOnlyHits >= 1 || combinedSnippets.includes("reasons for not using") ||
-          combinedSnippets.includes("must explain why") ||
-          combinedSnippets.includes("justify")) {
+      if (
+        docOnlyHits >= 1 ||
+        combinedSnippets.includes("reasons for not using") ||
+        combinedSnippets.includes("must explain why") ||
+        combinedSnippets.includes("justify")
+      ) {
         return {
           clientFacing: false,
           reason: "classification_or_justification_prompt",
@@ -499,11 +550,15 @@ type ConceptFamily =
 function classifyQuestionConcept(question: string): ConceptFamily {
   const q = question.toLowerCase();
   if (/\b(substance|drug|alcohol|addiction|intoxicat|sober|sobriety|drinking|using)\b/.test(q)) return "substance_use";
-  if (/\b(homeless|homelessness|eviction|evicted|facing\s+eviction|unhoused|shelter)\b/.test(q)) return "housing_instability";
-  if (/\b(physically\s+unsafe|unsafe\s+housing|unsafe.*\bhome|housing.*\bunsafe|structurally\s+unsound)\b/.test(q)) return "unsafe_housing_conditions";
-  if (/\b(ability|able|unable|capable|capacity)\b.{0,30}\b(protect|supervis|care|nurtur|provide|parent)/i.test(q)) return "caregiver_capacity";
+  if (/\b(homeless|homelessness|eviction|evicted|facing\s+eviction|unhoused|shelter)\b/.test(q))
+    return "housing_instability";
+  if (/\b(physically\s+unsafe|unsafe\s+housing|unsafe.*\bhome|housing.*\bunsafe|structurally\s+unsound)\b/.test(q))
+    return "unsafe_housing_conditions";
+  if (/\b(ability|able|unable|capable|capacity)\b.{0,30}\b(protect|supervis|care|nurtur|provide|parent)/i.test(q))
+    return "caregiver_capacity";
   if (/\b(injur|harm|wound|bruise|fracture|burn|most\s+serious)\b/.test(q)) return "injury_severity";
-  if (/\bimmediate\s+safety\s+resource/.test(q) || /\bcommunity\s+service.*\bsafety\s+resource/.test(q)) return "immediate_safety_resources";
+  if (/\bimmediate\s+safety\s+resource/.test(q) || /\bcommunity\s+service.*\bsafety\s+resource/.test(q))
+    return "immediate_safety_resources";
   if (/\b(prior|previous|past)\b.{0,20}\b(report|referral|involvement|history)\b/.test(q)) return "prior_history";
   if (/\b(safe|danger|risk|threat|concern|protective)\b/.test(q)) return "general_safety";
   return "other";
@@ -511,17 +566,17 @@ function classifyQuestionConcept(question: string): ConceptFamily {
 
 /** Which concept families each qualifier is relevant to */
 const QUALIFIER_CONCEPT_RELEVANCE: Record<string, ConceptFamily[]> = {
-  time_window:                        ["substance_use", "prior_history"],
-  immediate_safety:                   ["general_safety", "immediate_safety_resources"],
-  imminent_risk:                      ["general_safety", "injury_severity"],
-  severity_most_serious:              ["injury_severity"],
+  time_window: ["substance_use", "prior_history"],
+  immediate_safety: ["general_safety", "immediate_safety_resources"],
+  imminent_risk: ["general_safety", "injury_severity"],
+  severity_most_serious: ["injury_severity"],
   purpose_immediate_safety_resources: ["immediate_safety_resources"],
-  caregiver_capacity:                 ["caregiver_capacity", "substance_use"],
-  physically_unsafe:                  ["unsafe_housing_conditions"],
-  homeless_or_eviction:               ["housing_instability"],
-  facing_eviction:                    ["housing_instability"],
-  prior_reports:                      ["prior_history", "general_safety"],
-  medication_assisted_treatment:      ["substance_use"],
+  caregiver_capacity: ["caregiver_capacity", "substance_use"],
+  physically_unsafe: ["unsafe_housing_conditions"],
+  homeless_or_eviction: ["housing_instability"],
+  facing_eviction: ["housing_instability"],
+  prior_reports: ["prior_history", "general_safety"],
+  medication_assisted_treatment: ["substance_use"],
 };
 
 /* ── Specificity-preservation validator (concept-scoped) ── */
@@ -597,10 +652,7 @@ interface SpecificityResult {
   ignoredQualifiers: string[];
 }
 
-function validateSpecificityPreservation(
-  question: string,
-  citedSnippetTexts: string[],
-): SpecificityResult {
+function validateSpecificityPreservation(question: string, citedSnippetTexts: string[]): SpecificityResult {
   const combinedSnippet = citedSnippetTexts.join(" ");
   const conceptFamily = classifyQuestionConcept(question);
 
@@ -619,7 +671,14 @@ function validateSpecificityPreservation(
   }
 
   if (allDetected.length === 0) {
-    return { preserved: true, lostQualifiers: [], score: 1.0, conceptFamily, consideredQualifiers: [], ignoredQualifiers: [] };
+    return {
+      preserved: true,
+      lostQualifiers: [],
+      score: 1.0,
+      conceptFamily,
+      consideredQualifiers: [],
+      ignoredQualifiers: [],
+    };
   }
 
   // Filter to only qualifiers relevant to this question's concept family
@@ -657,18 +716,14 @@ function validateSpecificityPreservation(
     lostQualifiers: lost.map((l) => ({ label: l.label, snippetEvidence: l.snippetEvidence })),
     score,
     conceptFamily,
-    consideredQualifiers: relevant.map(r => r.label),
+    consideredQualifiers: relevant.map((r) => r.label),
     ignoredQualifiers: ignored,
   };
 }
 
 /* ── (Rewrite-before-drop layer removed — single-pass validation only) ── */
 
-
-type GroundingCode =
-  | "INSUFFICIENT_GROUNDED_SUPPORT"
-  | "LOW_INFORMATION_POLICY_PACK"
-  | "WEAK_CITATION_SUPPORT";
+type GroundingCode = "INSUFFICIENT_GROUNDED_SUPPORT" | "LOW_INFORMATION_POLICY_PACK" | "WEAK_CITATION_SUPPORT";
 
 const MIN_GROUNDED_QUESTIONS = 3;
 
@@ -697,10 +752,7 @@ Deno.serve(async (req) => {
     return json(400, { error: "Invalid session_id format", code: "INVALID_SESSION_ID" });
   }
 
-  const supabase = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-  );
+  const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
   await logEyeEvent(supabase, {
     session_id: sessionIdResult.value,
@@ -748,9 +800,7 @@ Deno.serve(async (req) => {
     });
 
     if (!snippetResponse || snippetResponse.error) {
-      throw new Error(
-        `Snippet RPC failed: ${snippetResponse?.error?.message ?? "Unknown RPC error"}`
-      );
+      throw new Error(`Snippet RPC failed: ${snippetResponse?.error?.message ?? "Unknown RPC error"}`);
     }
 
     const snippets = snippetResponse.data;
@@ -769,7 +819,10 @@ Deno.serve(async (req) => {
       snippetMap.set(s.snippet_id, s.chunk_text);
       const lower = (s.chunk_text || "").toLowerCase();
       const isLowInfo = LOW_INFO_PHRASES.some((p) => lower.includes(p));
-      const lines = (s.chunk_text || "").split("\n").map((l: string) => l.trim()).filter(Boolean);
+      const lines = (s.chunk_text || "")
+        .split("\n")
+        .map((l: string) => l.trim())
+        .filter(Boolean);
       const proseLines = lines.filter((l: string) => l.length > 50 && /[.,;:?!]/.test(l));
       if (isLowInfo || (lines.length > 3 && proseLines.length === 0)) {
         lowInfoCount++;
@@ -777,7 +830,9 @@ Deno.serve(async (req) => {
     }
 
     if (lowInfoCount > snippets.length * 0.8) {
-      console.warn(`[generate-guidance-phase1] Policy pack is ${Math.round((lowInfoCount/snippets.length)*100)}% low-info snippets`);
+      console.warn(
+        `[generate-guidance-phase1] Policy pack is ${Math.round((lowInfoCount / snippets.length) * 100)}% low-info snippets`,
+      );
     }
 
     // ── 3. Format snippets for LLM ──
@@ -964,6 +1019,44 @@ Each question must:
 Prefer questions that produce concise, extractable answers that can be directly mapped into structured fields.
 
 ------------------------------------------------------------
+TIMELINE CONSIDERATIONS (CRITICAL)
+
+In addition to generating client-facing interview questions, extract explicit timeline-related policy requirements from the provided policy excerpts.
+
+A timeline consideration is a time-bound requirement that affects when a caseworker must act, complete a task, or evaluate a condition.
+
+Only include timeline considerations when the timeframe is explicitly stated in the policy text.
+
+Examples of valid timeline language include:
+
+- within 24 hours
+- within 7 days
+- within 30 calendar days
+- no later than 5 business days
+- during the past 12 months
+- within the past year
+- immediately
+
+Examples of valid timeline considerations:
+
+- "Initial safety assessment must be completed within 24 hours."
+- "Follow-up contact must occur within 7 days."
+- "Substance abuse history within the past 12 months should be considered."
+
+CRITICAL RULES:
+
+- ONLY include a timeline consideration if the timeframe is explicitly stated in the snippet text.
+- DO NOT infer or estimate timelines.
+- DO NOT invent deadlines.
+- DO NOT convert vague language into a specific timeline.
+- If the policy only says things like "promptly", "timely", or "as soon as possible", do NOT treat that as a timeline consideration.
+- Each timeline consideration must cite at least one valid snippet_id from the provided excerpts.
+- Keep each timeline consideration short, clear, and directly grounded in the policy text.
+
+Return timeline considerations even if there are no questions.
+
+If no explicit timeline language exists in the provided excerpts, return an empty timeline_considerations array.
+------------------------------------------------------------
 CITATION REQUIREMENTS
 
 - Each question MUST cite at least one valid snippet_id from the provided policy excerpts.
@@ -1024,7 +1117,8 @@ No text outside JSON.
     }
 
     // ── 6b. Pre-validation diagnostics: log raw generated questions ──
-    const HOUSING_TERMS = /\b(homeless|homelessness|eviction|evicted|housing|unhoused|shelter|unsheltered|facing\s+eviction)\b/i;
+    const HOUSING_TERMS =
+      /\b(homeless|homelessness|eviction|evicted|housing|unhoused|shelter|unsheltered|facing\s+eviction)\b/i;
 
     function classifyQuestionTopic(qText: string): string {
       const lower = qText.toLowerCase();
@@ -1046,17 +1140,26 @@ No text outside JSON.
       citations: (q.citations ?? []).map((c: string) => c.slice(0, 12)),
     }));
 
-    console.log(`[generate-guidance-phase1] RAW_QUESTIONS (${parsed.questions.length}): ${JSON.stringify(rawQuestionDiagnostics)}`);
+    console.log(
+      `[generate-guidance-phase1] RAW_QUESTIONS (${parsed.questions.length}): ${JSON.stringify(rawQuestionDiagnostics)}`,
+    );
 
     const housingRaw = rawQuestionDiagnostics.filter((d: any) => d.topic === "housing");
-    console.log(`[generate-guidance-phase1] HOUSING_DIAGNOSTIC: generated=${housingRaw.length > 0}${housingRaw.length > 0 ? ` questions=${JSON.stringify(housingRaw.map((h: any) => h.question))}` : ""}`);
+    console.log(
+      `[generate-guidance-phase1] HOUSING_DIAGNOSTIC: generated=${housingRaw.length > 0}${housingRaw.length > 0 ? ` questions=${JSON.stringify(housingRaw.map((h: any) => h.question))}` : ""}`,
+    );
 
     // ── 7. Post-generation validation (single-pass, no rewrite) ──
-    const validatedQuestions: (typeof parsed.questions[0] & {
+    const validatedQuestions: ((typeof parsed.questions)[0] & {
       validation_status: QuestionOutcome;
       review_flags?: ReviewFlag[];
     })[] = [];
-    const droppedQuestions: { question: string; reason: string; citationCount: number; details?: Record<string, unknown> }[] = [];
+    const droppedQuestions: {
+      question: string;
+      reason: string;
+      citationCount: number;
+      details?: Record<string, unknown>;
+    }[] = [];
     const dropReasonCounts: Record<string, number> = {};
     const softFailCounts: Record<string, number> = {};
     const questionTraces: QuestionTrace[] = [];
@@ -1067,9 +1170,7 @@ No text outside JSON.
     };
 
     for (const q of parsed.questions) {
-      const citedTexts = q.citations
-        .map((cid: string) => snippetMap.get(cid))
-        .filter(Boolean) as string[];
+      const citedTexts = q.citations.map((cid: string) => snippetMap.get(cid)).filter(Boolean) as string[];
 
       const signals: ValidationSignal[] = [];
       const reviewFlags: ReviewFlag[] = [];
@@ -1147,7 +1248,7 @@ No text outside JSON.
         specificity_result: {
           preserved: specResult.preserved,
           score: +specResult.score.toFixed(2),
-          lost_qualifiers: specResult.lostQualifiers.map(lq => lq.label),
+          lost_qualifiers: specResult.lostQualifiers.map((lq) => lq.label),
           concept_family: specResult.conceptFamily,
           considered: specResult.consideredQualifiers,
           ignored: specResult.ignoredQualifiers,
@@ -1180,7 +1281,7 @@ No text outside JSON.
       if (softFails.length >= 2) {
         const qualities = citedTexts.map(computeSnippetSupportQuality);
         const maxQuality = qualities.length > 0 ? Math.max(...qualities) : 0;
-        
+
         // If snippet quality is decent (>= 0.5), keep with warning instead of dropping
         if (maxQuality < 0.4) {
           const primary = softFails[0];
@@ -1190,7 +1291,7 @@ No text outside JSON.
           finalStatusDistribution.dropped_hard++;
           droppedQuestions.push({
             question: q.question.slice(0, 120),
-            reason: `stacked_soft_fails:${softFails.map(s => s.reason).join("+")}`,
+            reason: `stacked_soft_fails:${softFails.map((s) => s.reason).join("+")}`,
             citationCount: q.citations.length,
           });
           questionTraces.push(trace);
@@ -1207,13 +1308,12 @@ No text outside JSON.
       // Warning only for genuinely significant concerns:
       // - 2+ soft fails (but kept because snippet quality saved them)
       // - specificity_soft_fail (material qualifier loss, score < 0.4)
-      const hasSignificantConcern = softFails.length >= 2 ||
-        reviewFlags.includes("specificity_soft_fail");
+      const hasSignificantConcern = softFails.length >= 2 || reviewFlags.includes("specificity_soft_fail");
       const validationStatus: QuestionOutcome = hasSignificantConcern ? "warning" : "pass";
-      
+
       trace.final_outcome = validationStatus;
       finalStatusDistribution[validationStatus]++;
-      
+
       const enrichedQ = {
         ...q,
         validation_status: validationStatus,
@@ -1222,7 +1322,7 @@ No text outside JSON.
 
       if (validationStatus === "warning") {
         console.log(
-          `[generate-guidance-phase1] WARNING_KEPT: flags=[${reviewFlags.join(",")}] soft_fails=${softFails.length} q="${q.question.slice(0, 100)}"`
+          `[generate-guidance-phase1] WARNING_KEPT: flags=[${reviewFlags.join(",")}] soft_fails=${softFails.length} q="${q.question.slice(0, 100)}"`,
         );
       }
 
@@ -1230,23 +1330,19 @@ No text outside JSON.
       questionTraces.push(trace);
     }
 
-    const strongCount = validatedQuestions.filter((q) => 
-      q.validation_status === "pass"
-    ).length;
-    const warningCount = validatedQuestions.filter((q) => 
-      q.validation_status === "warning"
-    ).length;
+    const strongCount = validatedQuestions.filter((q) => q.validation_status === "pass").length;
+    const warningCount = validatedQuestions.filter((q) => q.validation_status === "warning").length;
 
     // ── Question lifecycle log ──
     const lifecycleLog = parsed.questions.map((q: any) => {
-      const trace = questionTraces.find(t => t.original_question === q.question.slice(0, 200));
+      const trace = questionTraces.find((t) => t.original_question === q.question.slice(0, 200));
       const topic = classifyQuestionTopic(q.question);
       return {
         q: q.question.slice(0, 100),
         topic,
         status: trace?.final_outcome ?? "unknown",
-        support: trace?.support_result.supported ? "pass" : trace?.support_result.reason ?? "fail",
-        style: trace?.style_result.clientFacing ? "pass" : trace?.style_result.reason ?? "fail",
+        support: trace?.support_result.supported ? "pass" : (trace?.support_result.reason ?? "fail"),
+        style: trace?.style_result.clientFacing ? "pass" : (trace?.style_result.reason ?? "fail"),
         specificity_score: trace?.specificity_result.score ?? "?",
         concept_family: trace?.specificity_result.concept_family ?? "?",
         spec_considered: (trace?.specificity_result.considered ?? []).join(",") || "none",
@@ -1260,18 +1356,18 @@ No text outside JSON.
     const housingLifecycle = lifecycleLog.filter((l: any) => l.topic === "housing");
     if (housingLifecycle.length > 0) {
       for (const hl of housingLifecycle) {
-        console.log(`[generate-guidance-phase1] HOUSING_OUTCOME: status=${hl.status} support=${hl.support} style=${hl.style} specificity=${hl.specificity} q="${hl.q}"`);
+        console.log(
+          `[generate-guidance-phase1] HOUSING_OUTCOME: status=${hl.status} support=${hl.support} style=${hl.style} specificity=${hl.specificity} q="${hl.q}"`,
+        );
       }
     } else {
       console.log(`[generate-guidance-phase1] HOUSING_OUTCOME: no housing question was generated by model`);
     }
 
     console.log(
-      `[generate-guidance-phase1] Validation: ${parsed.questions.length} generated → ${strongCount} pass, ${warningCount} warning, ${droppedQuestions.length} dropped`
+      `[generate-guidance-phase1] Validation: ${parsed.questions.length} generated → ${strongCount} pass, ${warningCount} warning, ${droppedQuestions.length} dropped`,
     );
-    console.log(
-      `[generate-guidance-phase1] Final status distribution: ${JSON.stringify(finalStatusDistribution)}`
-    );
+    console.log(`[generate-guidance-phase1] Final status distribution: ${JSON.stringify(finalStatusDistribution)}`);
     if (Object.keys(dropReasonCounts).length > 0) {
       console.log(`[generate-guidance-phase1] Drop reason distribution: ${JSON.stringify(dropReasonCounts)}`);
     }
@@ -1280,18 +1376,23 @@ No text outside JSON.
     }
     if (droppedQuestions.length > 0) {
       for (const dq of droppedQuestions) {
-        console.log(`[generate-guidance-phase1] DROPPED: reason=${dq.reason} citations=${dq.citationCount} q="${dq.question}"${dq.details ? " details=" + JSON.stringify(dq.details) : ""}`);
+        console.log(
+          `[generate-guidance-phase1] DROPPED: reason=${dq.reason} citations=${dq.citationCount} q="${dq.question}"${dq.details ? " details=" + JSON.stringify(dq.details) : ""}`,
+        );
       }
     }
 
     // ── 8. Check if we have enough grounded questions ──
     if (validatedQuestions.length < MIN_GROUNDED_QUESTIONS) {
-      const reasonCode: GroundingCode = validatedQuestions.length === 0
-        ? (lowInfoCount > snippets.length * 0.5 ? "LOW_INFORMATION_POLICY_PACK" : "INSUFFICIENT_GROUNDED_SUPPORT")
-        : "WEAK_CITATION_SUPPORT";
+      const reasonCode: GroundingCode =
+        validatedQuestions.length === 0
+          ? lowInfoCount > snippets.length * 0.5
+            ? "LOW_INFORMATION_POLICY_PACK"
+            : "INSUFFICIENT_GROUNDED_SUPPORT"
+          : "WEAK_CITATION_SUPPORT";
 
       console.warn(
-        `[generate-guidance-phase1] Insufficient grounded questions: ${validatedQuestions.length}/${parsed.questions.length}. Reason: ${reasonCode}`
+        `[generate-guidance-phase1] Insufficient grounded questions: ${validatedQuestions.length}/${parsed.questions.length}. Reason: ${reasonCode}`,
       );
 
       const insufficientPayload = {
@@ -1312,10 +1413,18 @@ No text outside JSON.
         soft_fail_distribution: softFailCounts,
         final_status_distribution: finalStatusDistribution,
         _diagnostics: {
-          raw_questions: rawQuestionDiagnostics.map((d: any) => ({ q: d.question, topic: d.topic, category: d.category })),
+          raw_questions: rawQuestionDiagnostics.map((d: any) => ({
+            q: d.question,
+            topic: d.topic,
+            category: d.category,
+          })),
           kept: validatedQuestions.map((q: any) => ({ q: q.question.slice(0, 120), status: q.validation_status })),
-          dropped: droppedQuestions.map(dq => ({ q: dq.question, reason: dq.reason })),
-          housing: { generated: housingRaw.length > 0, outcome: housingLifecycle[0]?.status ?? null, raw: housingRaw[0]?.question ?? null },
+          dropped: droppedQuestions.map((dq) => ({ q: dq.question, reason: dq.reason })),
+          housing: {
+            generated: housingRaw.length > 0,
+            outcome: housingLifecycle[0]?.status ?? null,
+            raw: housingRaw[0]?.question ?? null,
+          },
         },
       };
 
@@ -1363,10 +1472,18 @@ No text outside JSON.
       soft_fail_distribution: softFailCounts,
       final_status_distribution: finalStatusDistribution,
       _diagnostics: {
-        raw_questions: rawQuestionDiagnostics.map((d: any) => ({ q: d.question, topic: d.topic, category: d.category })),
+        raw_questions: rawQuestionDiagnostics.map((d: any) => ({
+          q: d.question,
+          topic: d.topic,
+          category: d.category,
+        })),
         kept: validatedQuestions.map((q: any) => ({ q: q.question.slice(0, 120), status: q.validation_status })),
-        dropped: droppedQuestions.map(dq => ({ q: dq.question, reason: dq.reason })),
-        housing: { generated: housingRaw.length > 0, outcome: housingLifecycle[0]?.status ?? null, raw: housingRaw[0]?.question ?? null },
+        dropped: droppedQuestions.map((dq) => ({ q: dq.question, reason: dq.reason })),
+        housing: {
+          generated: housingRaw.length > 0,
+          outcome: housingLifecycle[0]?.status ?? null,
+          raw: housingRaw[0]?.question ?? null,
+        },
       },
     };
 
@@ -1377,9 +1494,7 @@ No text outside JSON.
     });
 
     if (!updateResponse || updateResponse.error) {
-      throw new Error(
-        `Update RPC failed: ${updateResponse?.error?.message ?? "Unknown RPC error"}`
-      );
+      throw new Error(`Update RPC failed: ${updateResponse?.error?.message ?? "Unknown RPC error"}`);
     }
 
     // ── Eye: tool.run.completed ──
