@@ -1075,11 +1075,21 @@ Return STRICT JSON only in this format:
       "question": "...",
       "citations": ["snippet_id_1"]
     }
+  ],
+  "timeline_considerations": [
+    {
+      "timeline": "...",
+      "citations": ["snippet_id_1"]
+    }
   ]
 }
 
-Return 0 to 12 questions. An empty array is valid if evidence is insufficient.
-No text outside JSON.
+Rules:
+- questions: 0–12 items
+- timeline_considerations: any number of items (including 0)
+- Do not invent snippet IDs
+- Return an empty array if no timeline considerations exist
+- No text outside JSON
 `,
         },
         {
