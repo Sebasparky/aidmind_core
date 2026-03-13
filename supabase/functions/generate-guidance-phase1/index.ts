@@ -1564,6 +1564,8 @@ Rules:
         snippet_count: snippetIdSet.size,
         total_generated: parsed.questions.length,
         total_dropped: droppedQuestions.length,
+        timeline_generated: rawTimelines.length,
+        timeline_validated: validatedTimelines.length,
         result: "success",
       },
     });
