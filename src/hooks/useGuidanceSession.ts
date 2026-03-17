@@ -288,6 +288,29 @@ export function useGuidanceSession(sessionId: string | undefined) {
       const message = err instanceof Error ? err.message : "Unknown error";
       const step = (err as { step?: string })?.step === "compile" ? "compile" : 
                    (err as { step?: string })?.step === "generate" ? "generate" : "invoke";
+
+      // ── Recovery check: the backend may have succeeded despite a transient
+      //    invoke error (e.g. timeout). Poll the session to see if guidance
+      //    was actually persisted before declaring failure. ──
+      console.warn("[useGuidanceSession] Invoke error caught, checking if backend succeeded despite error…", message);
+      const recoveredOutput = await pollForGuidance(session.id, 5, 2000);
+      if (recoveredOutput) {
+        console.log("[useGuidanceSession] Recovery succeeded — guidance_phase1 found in session after transient error");
+        setSession((prev) => prev ? { ...prev, guidanceOutput: recoveredOutput } : prev);
+        setRunState("success");
+        setRunError(null);
+
+        await logEvent({
+          eventType: "tool.run.completed",
+          sessionId: session.sessionId,
+          requestId,
+          result: "success",
+          toolName: "generate_guidance_phase1",
+          metadata: { question_count: recoveredOutput.questions.length, recovered_from: "INVOKE_ERROR" },
+        });
+        return;
+      }
+
       setRunState("error");
       setRunError({ message, code: "INVOKE_ERROR", step });
 
