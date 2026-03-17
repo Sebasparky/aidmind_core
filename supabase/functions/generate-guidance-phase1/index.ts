@@ -794,6 +794,80 @@ Deno.serve(async (req) => {
     const guidanceScope: string = session.guidance_scope;
     const guidanceScopeOther: string | null = session.guidance_scope_other;
 
+    // ── 1b. Ensure Phase 2 schema exists for template (BLOCKING) ──
+    // This is the server-side guarantee that the session will have a valid
+    // linked Phase 2 schema when Phase 1 completes. The frontend no longer
+    // orchestrates this — the backend owns the invariant.
+    {
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const ensureUrl = `${supabaseUrl}/functions/v1/ensure-phase2-schema`;
+
+      console.log(`[generate-guidance-phase1] Ensuring Phase 2 schema for template ${templateId}…`);
+
+      let ensureOk = false;
+      let ensureAction = "unknown";
+      let ensureSchemaId = "";
+      let ensureErrorMsg = "";
+
+      try {
+        const ensureRes = await fetch(ensureUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${serviceKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            session_id: sessionIdResult.value,
+            template_id: templateId,
+          }),
+        });
+
+        const ensureBody = await ensureRes.json().catch(() => ({}));
+
+        if (ensureRes.ok && ensureBody.success) {
+          ensureOk = true;
+          ensureAction = ensureBody.action ?? "unknown";
+          ensureSchemaId = ensureBody.schema_id ?? "";
+          console.log(
+            `[generate-guidance-phase1] Phase 2 schema ensured: ${ensureSchemaId} (${ensureAction})`,
+          );
+        } else {
+          ensureErrorMsg = ensureBody.error ?? `HTTP ${ensureRes.status}`;
+          console.error(
+            `[generate-guidance-phase1] Phase 2 schema ensure FAILED: ${ensureErrorMsg}`,
+          );
+        }
+      } catch (fetchErr) {
+        ensureErrorMsg = fetchErr instanceof Error ? fetchErr.message : "Network error";
+        console.error(
+          `[generate-guidance-phase1] Phase 2 schema ensure fetch error: ${ensureErrorMsg}`,
+        );
+      }
+
+      if (!ensureOk) {
+        // Hard fail — do not proceed without schema guarantee
+        await logEyeEvent(supabase, {
+          session_id: sessionIdResult.value,
+          event_type: "phase2_schema.ensure_failed",
+          serviceName: "generate-guidance-phase1",
+          payload: {
+            request_id: requestId,
+            template_id: templateId,
+            result: "failure",
+            severity: "WARN",
+            reason_code: ensureErrorMsg.slice(0, 200),
+          },
+        });
+
+        return json(500, {
+          success: false,
+          error: `Failed to ensure Phase 2 schema for template: ${ensureErrorMsg}`,
+          code: "PHASE2_SCHEMA_ENSURE_FAILED",
+        });
+      }
+    }
+
     // ── 2. Retrieve policy snippets ──
     const snippetResponse = await supabase.rpc("get_policy_snippets_for_session", {
       session_id_input: sessionIdResult.value,
