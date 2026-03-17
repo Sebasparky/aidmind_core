@@ -798,12 +798,12 @@ export default function CaseNotes() {
             </Card>
 
             {/* Error banner */}
-            {errorMessage && (generationStatus === "error" || notesStatus === "save_error") && (
+            {errorMessage && generationStatus === "error" && (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/5 border border-destructive/20">
                 <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
                 <div>
                   <p className="text-xs font-medium text-destructive">
-                    {generationStatus === "error" ? "Fact extraction failed" : "Save failed"}
+                    Fact extraction failed
                   </p>
                   <p className="text-xs text-destructive/80 mt-0.5">{errorMessage}</p>
                 </div>
