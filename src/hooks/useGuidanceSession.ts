@@ -214,6 +214,28 @@ export function useGuidanceSession(sessionId: string | undefined) {
         console.log("[useGuidanceSession] Policy pack already exists, skipping compile step");
       }
 
+      // ── Step A2: Ensure Phase 2 schema exists for template ────
+      if (session.templateId) {
+        console.log("[useGuidanceSession] Ensuring Phase 2 schema for template…");
+        const { data: schemaResponse, error: schemaError } = await supabase.functions.invoke(
+          "ensure-phase2-schema",
+          {
+            body: {
+              session_id: session.id,
+              template_id: session.templateId,
+            },
+          }
+        );
+
+        if (schemaError) {
+          console.warn("[useGuidanceSession] Phase 2 schema ensure failed (non-blocking):", schemaError.message);
+        } else if (schemaResponse && !schemaResponse.success) {
+          console.warn("[useGuidanceSession] Phase 2 schema ensure returned error (non-blocking):", schemaResponse.error);
+        } else {
+          console.log("[useGuidanceSession] Phase 2 schema ensured:", schemaResponse?.schema_id, schemaResponse?.action);
+        }
+      }
+
       // ── Step B: Generate guidance phase 1 ──────────────────────
       setRunState("generating");
 
