@@ -110,8 +110,6 @@ interface PersistedState {
   permissionConfirmed: boolean;
   inputMode: InputMode;
   uploadedFile: UploadedFile | null;
-  notesStatus: NotesStatus;
-  lastSavedAt: string | null;
 }
 
 function persistState(sessionId: string, state: PersistedState) {
