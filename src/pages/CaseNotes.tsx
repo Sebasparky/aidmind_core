@@ -1092,10 +1092,8 @@ export default function CaseNotes() {
                   label="Notes present"
                   state={notesReadiness}
                   detail={
-                    notesReady && notesSaved
-                      ? `${notesLength} characters — saved and ready`
-                      : notesReady && !notesSaved
-                      ? `${notesLength} characters — save notes before extraction`
+                    notesReady
+                      ? `${notesLength} characters — ready`
                       : notesEmpty
                       ? "No notes entered yet"
                       : `${notesLength} characters — too short to extract from`
