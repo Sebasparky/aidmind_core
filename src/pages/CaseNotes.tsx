@@ -515,30 +515,7 @@ export default function CaseNotes() {
   const handleGenerate = useCallback(async () => {
     if (!canGenerate || !session) return;
 
-    // Auto-save dirty notes first
-    if (notesStatus === "dirty") {
-      setNotesStatus("saving");
-      try {
-        const notesText = form.rawNotes.trim();
-        const { data: saveResp, error: saveErr } = await supabase.functions.invoke(
-          "upload-interview-notes-text",
-          { body: { session_id: session.id, notes_text: notesText } }
-        );
-        if (saveErr) throw new Error(saveErr.message || "Failed to save notes");
-        if (saveResp && !saveResp.success) throw new Error(saveResp.error || "Failed to save notes");
-        savedNotesRef.current = notesText;
-        setNotesStatus("saved");
-        setLastSavedAt(new Date().toISOString());
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Failed to save notes";
-        setNotesStatus("save_error");
-        setErrorMessage(msg);
-        toast({ title: "Save failed", description: msg, variant: "destructive" });
-        return;
-      }
-    }
-
-    // Save permission metadata
+    // Save permission metadata (non-blocking context)
     try {
       const { data: current } = await supabase
         .from("sessions")
@@ -564,7 +541,7 @@ export default function CaseNotes() {
         .eq("id", session.id);
     } catch { /* Non-critical */ }
 
-    // Call generate-guidance-phase2
+    // Call generate-guidance-phase2 with transient notes
     setGenerationStatus("generating");
     setErrorMessage(null);
     setGenerationSummary(null);
