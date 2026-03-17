@@ -266,7 +266,7 @@ export default function CaseNotes() {
   const [searchFilter, setSearchFilter] = useState("");
   const [showFilter, setShowFilter] = useState<"all" | "answered" | "missing">("all");
 
-  // ─── Persist state to sessionStorage on change ─────────
+  // ─── Persist local UI state to sessionStorage on change ─
   useEffect(() => {
     if (!routeSessionId || !initialLoadDone.current) return;
     persistState(routeSessionId, {
@@ -274,17 +274,12 @@ export default function CaseNotes() {
       permissionConfirmed: form.permissionConfirmed,
       inputMode,
       uploadedFile,
-      notesStatus,
-      lastSavedAt,
     });
-  }, [routeSessionId, form.rawNotes, form.permissionConfirmed, inputMode, uploadedFile, notesStatus, lastSavedAt]);
+  }, [routeSessionId, form.rawNotes, form.permissionConfirmed, inputMode, uploadedFile]);
 
   const updateField = useCallback(
     <K extends keyof CaseNotesFormState>(key: K, value: CaseNotesFormState[K]) => {
       setForm((prev) => ({ ...prev, [key]: value }));
-      if (key === "rawNotes") {
-        setNotesStatus("dirty");
-      }
     },
     []
   );
