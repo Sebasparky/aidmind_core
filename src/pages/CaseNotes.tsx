@@ -83,7 +83,6 @@ interface SessionContext {
   caseLabel: string | null;
   templateId: string | null;
   templateName: string | null;
-  interviewNotes: string | null;
   tenantId: string | null;
 }
 
