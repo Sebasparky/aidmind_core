@@ -266,10 +266,10 @@ Deno.serve(async (req) => {
   const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  // ── Fetch session (for template_id and tenant context only) ─
+  // ── Fetch session (for template_id, phase2_schema_id, and tenant context only) ─
   const { data: session, error: sessionErr } = await supabase
     .from("sessions")
-    .select("id, tenant_id, template_id, metadata")
+    .select("id, tenant_id, template_id, phase2_schema_id, metadata")
     .eq("id", sessionId)
     .maybeSingle();
 
@@ -284,30 +284,60 @@ Deno.serve(async (req) => {
     return json(400, { success: false, error: "Session has no template_id assigned" });
   }
 
-  // ── Fetch template ────────────────────────────────────────
-  const { data: template, error: templateErr } = await supabase
-    .from("kb_templates")
-    .select("id, tenant_id, name, version, metadata")
-    .eq("id", session.template_id)
-    .maybeSingle();
+  // ── Try to load fact fields from linked Phase 2 schema first ──
+  let factFields: FactField[] = [];
 
-  if (templateErr) {
-    console.error(`[${SERVICE_NAME}] Template fetch error:`, templateErr.message);
-    return json(500, { success: false, error: "Failed to fetch template" });
-  }
-  if (!template) {
-    return json(404, { success: false, error: "Template not found" });
-  }
-  if (!template.metadata || typeof template.metadata !== "object") {
-    return json(400, { success: false, error: "Template metadata is null or malformed" });
+  if (session.phase2_schema_id) {
+    const { data: schema, error: schemaErr } = await supabase
+      .from("template_phase2_schemas")
+      .select("schema_json")
+      .eq("id", session.phase2_schema_id)
+      .maybeSingle();
+
+    if (!schemaErr && schema?.schema_json) {
+      const schemaData = schema.schema_json as Record<string, unknown>;
+      if (Array.isArray(schemaData.fields)) {
+        factFields = (schemaData.fields as Record<string, unknown>[])
+          .filter((f) => f.fact_based === true)
+          .map((f) => ({
+            field_key: String(f.field_key ?? ""),
+            label: String(f.label ?? ""),
+            type: String(f.answer_type ?? "text"),
+            question: String(f.template_prompt ?? f.matching_guidance ?? f.label ?? ""),
+          }));
+      }
+    }
+    if (factFields.length > 0) {
+      console.log(`[${SERVICE_NAME}] Loaded ${factFields.length} fact fields from linked schema ${session.phase2_schema_id}`);
+    }
   }
 
-  // ── Extract fact-based fields ─────────────────────────────
-  const factFields = extractFactBasedFields(template.metadata as Record<string, unknown>);
+  // ── Fallback: load from template metadata (backward compat) ──
+  if (factFields.length === 0) {
+    const { data: template, error: templateErr } = await supabase
+      .from("kb_templates")
+      .select("id, tenant_id, name, version, metadata")
+      .eq("id", session.template_id)
+      .maybeSingle();
+
+    if (templateErr) {
+      console.error(`[${SERVICE_NAME}] Template fetch error:`, templateErr.message);
+      return json(500, { success: false, error: "Failed to fetch template" });
+    }
+    if (!template) {
+      return json(404, { success: false, error: "Template not found" });
+    }
+    if (!template.metadata || typeof template.metadata !== "object") {
+      return json(400, { success: false, error: "Template metadata is null or malformed" });
+    }
+
+    factFields = extractFactBasedFields(template.metadata as Record<string, unknown>);
+  }
+
   if (factFields.length === 0) {
     return json(400, {
       success: false,
-      error: "No fact-based fields found in template metadata",
+      error: "No fact-based fields found in template schema or metadata",
     });
   }
 

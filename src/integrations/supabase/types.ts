@@ -554,6 +554,7 @@ export type Database = {
           interaction_type: string | null
           interview_notes: string | null
           metadata: Json
+          phase2_schema_id: string | null
           policy_pack_id: string | null
           review_document_id: string | null
           session_id: string
@@ -580,6 +581,7 @@ export type Database = {
           interaction_type?: string | null
           interview_notes?: string | null
           metadata?: Json
+          phase2_schema_id?: string | null
           policy_pack_id?: string | null
           review_document_id?: string | null
           session_id?: string
@@ -606,6 +608,7 @@ export type Database = {
           interaction_type?: string | null
           interview_notes?: string | null
           metadata?: Json
+          phase2_schema_id?: string | null
           policy_pack_id?: string | null
           review_document_id?: string | null
           session_id?: string
@@ -619,10 +622,80 @@ export type Database = {
         }
         Relationships: [
           {
+            foreignKeyName: "sessions_phase2_schema_id_fkey"
+            columns: ["phase2_schema_id"]
+            isOneToOne: false
+            referencedRelation: "template_phase2_schemas"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "sessions_review_document_id_fkey"
             columns: ["review_document_id"]
             isOneToOne: false
             referencedRelation: "review_documents"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      template_phase2_schemas: {
+        Row: {
+          created_at: string
+          generated_at: string | null
+          generation_notes: string | null
+          id: string
+          is_active: boolean
+          model: string | null
+          schema_json: Json
+          schema_version: number
+          source_template_hash: string | null
+          status: string
+          template_id: string
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          generated_at?: string | null
+          generation_notes?: string | null
+          id?: string
+          is_active?: boolean
+          model?: string | null
+          schema_json?: Json
+          schema_version?: number
+          source_template_hash?: string | null
+          status?: string
+          template_id: string
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          generated_at?: string | null
+          generation_notes?: string | null
+          id?: string
+          is_active?: boolean
+          model?: string | null
+          schema_json?: Json
+          schema_version?: number
+          source_template_hash?: string | null
+          status?: string
+          template_id?: string
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "template_phase2_schemas_template_id_fkey"
+            columns: ["template_id"]
+            isOneToOne: false
+            referencedRelation: "kb_templates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "template_phase2_schemas_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
             referencedColumns: ["id"]
           },
         ]
