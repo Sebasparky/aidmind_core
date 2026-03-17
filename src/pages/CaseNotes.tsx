@@ -375,10 +375,8 @@ export default function CaseNotes() {
 
   const sessionReady = !!session;
   const templateReady = !!session?.templateId;
-  const notesSaved = notesStatus === "saved" || notesStatus === "clean";
-
   const canSaveNotes = notesReady && notesStatus === "dirty" && !!session;
-  // CTA requires ALL conditions including permission
+  // CTA requires notes + permission + template — no save dependency
   const canGenerate =
     sessionReady &&
     templateReady &&
