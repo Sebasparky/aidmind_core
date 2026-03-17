@@ -344,36 +344,9 @@ Deno.serve(async (req) => {
   }
 
   const answeredCount = answers.filter((a) => a.answer !== null).length;
+  const generatedAt = new Date().toISOString();
 
-  // ── Merge into session metadata ───────────────────────────
-  const phase2Data: Phase2Output = {
-    generated_at: new Date().toISOString(),
-    model,
-    answers,
-  };
-
-  const existingMetadata =
-    session.metadata && typeof session.metadata === "object" ? (session.metadata as Record<string, unknown>) : {};
-
-  const mergedMetadata = {
-    ...existingMetadata,
-    guidance_phase2: phase2Data,
-  };
-
-  const { error: updateErr } = await supabase
-    .from("sessions")
-    .update({
-      metadata: mergedMetadata,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", sessionId);
-
-  if (updateErr) {
-    console.error(`[${SERVICE_NAME}] Update error:`, updateErr.message);
-    return json(500, { success: false, error: "Failed to update session metadata" });
-  }
-
-  // ── Eye event ─────────────────────────────────────────────
+  // ── Eye event (metadata only — no raw notes) ──────────────
   try {
     await logEyeEvent(supabase, {
       session_id: sessionId,
@@ -392,11 +365,14 @@ Deno.serve(async (req) => {
     /* never break on eye */
   }
 
+  // Return full answers in response — nothing written to session
   return json(200, {
     success: true,
     session_id: sessionId,
     fact_field_count: factFields.length,
     answered_field_count: answeredCount,
     model,
+    generated_at: generatedAt,
+    answers,
   });
 });
