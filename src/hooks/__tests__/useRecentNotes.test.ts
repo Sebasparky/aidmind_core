@@ -31,6 +31,7 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     guidance_scope_other: null,
     guidance_scope_set_at: null,
     guidance_scope_set_by: null,
+    phase2_schema_id: null,
     ...overrides,
   };
 }
