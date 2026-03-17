@@ -643,7 +643,7 @@ export default function CaseNotes() {
   const sessionReadiness: ReadinessState = sessionReady ? "ready" : "missing";
   const templateReadiness: ReadinessState = !session ? "missing" : session.templateId ? "ready" : "attention";
   const notesReadiness: ReadinessState = notesReady
-    ? notesSaved ? "ready" : "attention"
+    ? "ready"
     : notesEmpty ? "missing" : "attention";
   const permissionReadiness: ReadinessState = form.permissionConfirmed ? "ready" : "missing";
   const allReady = sessionReady && templateReady && notesReady && form.permissionConfirmed;
