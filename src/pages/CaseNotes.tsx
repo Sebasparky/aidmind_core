@@ -736,22 +736,11 @@ export default function CaseNotes() {
                     onChange={(e) => updateField("rawNotes", e.target.value)}
                   />
                   <div className="flex items-center justify-between mt-1.5">
-                    <div className="flex items-center gap-2">
-                      <p className="text-xs text-muted-foreground">
-                        {inputMode === "upload"
-                          ? "Review and edit before saving."
-                          : "Paste interview notes, observations, or transcript excerpts."}
-                      </p>
-                      {notesStatus === "dirty" && notesReady && (
-                        <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 text-[hsl(var(--status-warning))]">Unsaved</Badge>
-                      )}
-                      {notesStatus === "saved" && (
-                        <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 text-[hsl(var(--status-success))]">Saved</Badge>
-                      )}
-                      {notesStatus === "saving" && (
-                        <Badge variant="outline" className="text-xs px-1.5 py-0 h-5">Saving…</Badge>
-                      )}
-                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {inputMode === "upload"
+                        ? "Review and edit before extracting."
+                        : "Paste interview notes, observations, or transcript excerpts."}
+                    </p>
                     <span
                       className={cn(
                         "text-xs tabular-nums",
@@ -769,31 +758,6 @@ export default function CaseNotes() {
                     </p>
                   )}
                 </div>
-
-                {/* Save notes button */}
-                {notesReady && (
-                  <div className="flex items-center justify-between">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 h-8"
-                      disabled={!canSaveNotes}
-                      onClick={handleSaveNotes}
-                    >
-                      {notesStatus === "saving" ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Save className="h-3.5 w-3.5" />
-                      )}
-                      {notesStatus === "saving" ? "Saving…" : "Save notes to session"}
-                    </Button>
-                    {lastSavedAt && (
-                      <span className="text-xs text-muted-foreground">
-                        Last saved {new Date(lastSavedAt).toLocaleTimeString()}
-                      </span>
-                    )}
-                  </div>
-                )}
 
                 {/* Note quality hints */}
                 {!notesReady && (
