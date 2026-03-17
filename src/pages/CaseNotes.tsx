@@ -248,8 +248,6 @@ export default function CaseNotes() {
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null);
 
   // State tracks
-  const [notesStatus, setNotesStatus] = useState<NotesStatus>("clean");
-  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [generationStatus, setGenerationStatus] = useState<GenerationStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [result, setResult] = useState<Phase2Result | null>(null);
@@ -259,7 +257,6 @@ export default function CaseNotes() {
     model: string;
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const savedNotesRef = useRef<string>("");
   const initialLoadDone = useRef(false);
 
   // PDF extraction hook
