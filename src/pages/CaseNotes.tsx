@@ -549,7 +549,7 @@ export default function CaseNotes() {
     try {
       const { data: genResponse, error: genError } = await supabase.functions.invoke(
         "generate-guidance-phase2",
-        { body: { session_id: session.id } }
+        { body: { session_id: session.id, interview_notes: form.rawNotes.trim() } }
       );
       if (genError) throw new Error(genError.message || "Fact extraction failed");
       if (genResponse && !genResponse.success) throw new Error(genResponse.error || "Fact extraction failed");
