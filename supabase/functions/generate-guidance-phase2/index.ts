@@ -313,7 +313,17 @@ Deno.serve(async (req) => {
   }
 
   // ── Fallback: load from template metadata (backward compat) ──
+  // TODO(migration): This fallback exists for sessions created before the
+  // Phase 2 schema architecture was introduced. Once all active sessions
+  // have a linked phase2_schema_id, this block should be removed.
+  // Tracked by the reusable-schema migration path.
   if (factFields.length === 0) {
+    console.warn(
+      `[${SERVICE_NAME}] FALLBACK: No linked Phase 2 schema for session ${sessionId}. ` +
+      `Loading fact fields from kb_templates.metadata. This is deprecated — ` +
+      `sessions should have phase2_schema_id set during Guidance Phase 1.`
+    );
+
     const { data: template, error: templateErr } = await supabase
       .from("kb_templates")
       .select("id, tenant_id, name, version, metadata")
