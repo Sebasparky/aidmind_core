@@ -253,14 +253,23 @@ Deno.serve(async (req) => {
     return json(400, { success: false, error: "session_id is required" });
   }
 
+  // ── Validate interview_notes from request body (transient, not persisted) ──
+  const interviewNotes = body.interview_notes;
+  if (!interviewNotes || typeof interviewNotes !== "string" || interviewNotes.trim().length < MIN_NOTES_LENGTH) {
+    return json(400, {
+      success: false,
+      error: `interview_notes is required in the request body (minimum ${MIN_NOTES_LENGTH} characters)`,
+    });
+  }
+
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  // ── Fetch session ──────────────────────────────────────────
+  // ── Fetch session (for template_id and tenant context only) ─
   const { data: session, error: sessionErr } = await supabase
     .from("sessions")
-    .select("id, tenant_id, template_id, interview_notes, metadata")
+    .select("id, tenant_id, template_id, metadata")
     .eq("id", sessionId)
     .maybeSingle();
 
@@ -273,14 +282,6 @@ Deno.serve(async (req) => {
   }
   if (!session.template_id) {
     return json(400, { success: false, error: "Session has no template_id assigned" });
-  }
-
-  const interviewNotes = session.interview_notes;
-  if (!interviewNotes || typeof interviewNotes !== "string" || interviewNotes.trim().length < MIN_NOTES_LENGTH) {
-    return json(400, {
-      success: false,
-      error: `Session has no usable interview_notes (minimum ${MIN_NOTES_LENGTH} characters)`,
-    });
   }
 
   // ── Fetch template ────────────────────────────────────────

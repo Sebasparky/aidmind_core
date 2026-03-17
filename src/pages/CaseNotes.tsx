@@ -375,10 +375,8 @@ export default function CaseNotes() {
 
   const sessionReady = !!session;
   const templateReady = !!session?.templateId;
-  const notesSaved = notesStatus === "saved" || notesStatus === "clean";
-
   const canSaveNotes = notesReady && notesStatus === "dirty" && !!session;
-  // CTA requires ALL conditions including permission
+  // CTA requires notes + permission + template — no save dependency
   const canGenerate =
     sessionReady &&
     templateReady &&
@@ -517,30 +515,7 @@ export default function CaseNotes() {
   const handleGenerate = useCallback(async () => {
     if (!canGenerate || !session) return;
 
-    // Auto-save dirty notes first
-    if (notesStatus === "dirty") {
-      setNotesStatus("saving");
-      try {
-        const notesText = form.rawNotes.trim();
-        const { data: saveResp, error: saveErr } = await supabase.functions.invoke(
-          "upload-interview-notes-text",
-          { body: { session_id: session.id, notes_text: notesText } }
-        );
-        if (saveErr) throw new Error(saveErr.message || "Failed to save notes");
-        if (saveResp && !saveResp.success) throw new Error(saveResp.error || "Failed to save notes");
-        savedNotesRef.current = notesText;
-        setNotesStatus("saved");
-        setLastSavedAt(new Date().toISOString());
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Failed to save notes";
-        setNotesStatus("save_error");
-        setErrorMessage(msg);
-        toast({ title: "Save failed", description: msg, variant: "destructive" });
-        return;
-      }
-    }
-
-    // Save permission metadata
+    // Save permission metadata (non-blocking context)
     try {
       const { data: current } = await supabase
         .from("sessions")
@@ -566,7 +541,7 @@ export default function CaseNotes() {
         .eq("id", session.id);
     } catch { /* Non-critical */ }
 
-    // Call generate-guidance-phase2
+    // Call generate-guidance-phase2 with transient notes
     setGenerationStatus("generating");
     setErrorMessage(null);
     setGenerationSummary(null);
@@ -574,7 +549,7 @@ export default function CaseNotes() {
     try {
       const { data: genResponse, error: genError } = await supabase.functions.invoke(
         "generate-guidance-phase2",
-        { body: { session_id: session.id } }
+        { body: { session_id: session.id, interview_notes: form.rawNotes.trim() } }
       );
       if (genError) throw new Error(genError.message || "Fact extraction failed");
       if (genResponse && !genResponse.success) throw new Error(genResponse.error || "Fact extraction failed");
@@ -668,7 +643,7 @@ export default function CaseNotes() {
   const sessionReadiness: ReadinessState = sessionReady ? "ready" : "missing";
   const templateReadiness: ReadinessState = !session ? "missing" : session.templateId ? "ready" : "attention";
   const notesReadiness: ReadinessState = notesReady
-    ? notesSaved ? "ready" : "attention"
+    ? "ready"
     : notesEmpty ? "missing" : "attention";
   const permissionReadiness: ReadinessState = form.permissionConfirmed ? "ready" : "missing";
   const allReady = sessionReady && templateReady && notesReady && form.permissionConfirmed;
@@ -1117,10 +1092,8 @@ export default function CaseNotes() {
                   label="Notes present"
                   state={notesReadiness}
                   detail={
-                    notesReady && notesSaved
-                      ? `${notesLength} characters — saved and ready`
-                      : notesReady && !notesSaved
-                      ? `${notesLength} characters — save notes before extraction`
+                    notesReady
+                      ? `${notesLength} characters — ready`
                       : notesEmpty
                       ? "No notes entered yet"
                       : `${notesLength} characters — too short to extract from`
