@@ -44,7 +44,7 @@ import { usePdfTextExtractor } from "@/hooks/usePdfTextExtractor";
 
 // ─── Types ───────────────────────────────────────────────
 type GenerationStatus = "idle" | "generating" | "success" | "error";
-type NotesStatus = "clean" | "dirty" | "saving" | "saved" | "save_error";
+type ExtractionStatus = "idle" | "uploading" | "extracting" | "extracted" | "extraction_error";
 type ExtractionStatus = "idle" | "uploading" | "extracting" | "extracted" | "extraction_error";
 type InputMode = "paste" | "upload";
 
