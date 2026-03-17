@@ -293,7 +293,7 @@ export default function CaseNotes() {
       try {
         const { data, error } = await supabase
           .from("sessions")
-          .select("id, session_id, case_label, template_id, interview_notes, metadata, tenant_id")
+          .select("id, session_id, case_label, template_id, tenant_id")
           .eq("session_id", routeSessionId)
           .maybeSingle();
 
@@ -319,16 +319,8 @@ export default function CaseNotes() {
           caseLabel: data.case_label,
           templateId: data.template_id,
           templateName,
-          interviewNotes: data.interview_notes,
           tenantId: data.tenant_id,
         });
-
-        // Load existing phase 2 results
-        const meta = data.metadata as Record<string, unknown> | null;
-        if (meta?.guidance_phase2) {
-          setResult(meta.guidance_phase2 as Phase2Result);
-          setGenerationStatus("success");
-        }
 
         // Restore persisted UI state if available (tab navigation case)
         const persisted = loadPersistedState(routeSessionId);
@@ -336,16 +328,6 @@ export default function CaseNotes() {
           setForm({ rawNotes: persisted.rawNotes, permissionConfirmed: persisted.permissionConfirmed });
           setInputMode(persisted.inputMode);
           setUploadedFile(persisted.uploadedFile);
-          setNotesStatus(persisted.notesStatus === "saving" ? "dirty" : persisted.notesStatus);
-          setLastSavedAt(persisted.lastSavedAt);
-          savedNotesRef.current = data.interview_notes || "";
-        } else {
-          // First load — use DB values
-          if (data.interview_notes) {
-            setForm((prev) => ({ ...prev, rawNotes: data.interview_notes! }));
-            savedNotesRef.current = data.interview_notes;
-            setNotesStatus("clean");
-          }
         }
       } finally {
         setSessionLoading(false);
@@ -362,7 +344,6 @@ export default function CaseNotes() {
 
   const sessionReady = !!session;
   const templateReady = !!session?.templateId;
-  const canSaveNotes = notesReady && notesStatus === "dirty" && !!session;
   // CTA requires notes + permission + template — no save dependency
   const canGenerate =
     sessionReady &&
@@ -370,37 +351,6 @@ export default function CaseNotes() {
     notesReady &&
     form.permissionConfirmed &&
     generationStatus !== "generating";
-
-  // ─── Save notes to session ─────────────────────────────
-  const handleSaveNotes = useCallback(async () => {
-    if (!session || !notesReady) return;
-
-    setNotesStatus("saving");
-    setErrorMessage(null);
-
-    try {
-      const notesText = form.rawNotes.trim();
-      const { data: response, error } = await supabase.functions.invoke(
-        "upload-interview-notes-text",
-        { body: { session_id: session.id, notes_text: notesText } }
-      );
-
-      if (error) throw new Error(error.message || "Failed to save notes");
-      if (response && !response.success) {
-        throw new Error(response.error || "Failed to save notes");
-      }
-
-      savedNotesRef.current = notesText;
-      setNotesStatus("saved");
-      setLastSavedAt(new Date().toISOString());
-      toast({ description: "Notes saved to session." });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to save notes";
-      setNotesStatus("save_error");
-      setErrorMessage(msg);
-      toast({ title: "Save failed", description: msg, variant: "destructive" });
-    }
-  }, [session, form.rawNotes, notesReady]);
 
   // ─── File handling ─────────────────────────────────────
   const handleFileSelect = useCallback(
@@ -421,7 +371,6 @@ export default function CaseNotes() {
         const text = await file.text();
         setUploadedFile((prev) => prev ? { ...prev, extractedText: text, status: "extracted" } : null);
         setForm((prev) => ({ ...prev, rawNotes: text }));
-        setNotesStatus("dirty");
       } else if (isPdf) {
         setUploadedFile({
           name: file.name, size: file.size, mime: file.type,
@@ -458,7 +407,6 @@ export default function CaseNotes() {
           setUploadedFile((prev) => prev ? { ...prev, extractedText, status: "extracted" } : null);
           if (extractedText) {
             setForm((prev) => ({ ...prev, rawNotes: extractedText }));
-            setNotesStatus("dirty");
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : "Extraction failed";
@@ -476,7 +424,6 @@ export default function CaseNotes() {
     if (pdfExtractor.fullText && uploadedFile?.status === "extracting") {
       setUploadedFile((prev) => prev ? { ...prev, extractedText: pdfExtractor.fullText, status: "extracted" } : null);
       setForm((prev) => ({ ...prev, rawNotes: pdfExtractor.fullText }));
-      setNotesStatus("dirty");
     }
     if (pdfExtractor.error && uploadedFile?.status === "extracting") {
       setUploadedFile((prev) => prev ? { ...prev, status: "extraction_error" } : null);
@@ -498,37 +445,10 @@ export default function CaseNotes() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, [pdfExtractor]);
 
-  // ─── Generate handler ──────────────────────────────────
+  // ─── Generate handler (fully transient) ────────────────
   const handleGenerate = useCallback(async () => {
     if (!canGenerate || !session) return;
 
-    // Save permission metadata (non-blocking context)
-    try {
-      const { data: current } = await supabase
-        .from("sessions")
-        .select("metadata")
-        .eq("id", session.id)
-        .maybeSingle();
-
-      const existingMeta = (current?.metadata as Record<string, unknown>) || {};
-      const sourceInfo: { mode: string; file?: { name: string; size: number; mime: string; path: string | null } } = { mode: inputMode };
-      if (inputMode === "upload" && uploadedFile) {
-        sourceInfo.file = { name: uploadedFile.name, size: uploadedFile.size, mime: uploadedFile.mime, path: uploadedFile.storagePath };
-      }
-      await supabase
-        .from("sessions")
-        .update({
-          metadata: {
-            ...existingMeta,
-            case_notes_permission: { confirmed: true, confirmed_at: new Date().toISOString() },
-            case_notes_source: sourceInfo,
-          } as unknown as import("@/integrations/supabase/types").Json,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", session.id);
-    } catch { /* Non-critical */ }
-
-    // Call generate-guidance-phase2 with transient notes
     setGenerationStatus("generating");
     setErrorMessage(null);
     setGenerationSummary(null);
@@ -541,19 +461,17 @@ export default function CaseNotes() {
       if (genError) throw new Error(genError.message || "Fact extraction failed");
       if (genResponse && !genResponse.success) throw new Error(genResponse.error || "Fact extraction failed");
 
+      // Use response directly — no session re-fetch
+      setResult({
+        generated_at: genResponse.generated_at,
+        model: genResponse.model,
+        answers: genResponse.answers,
+      });
       setGenerationSummary({
         factFieldCount: genResponse?.fact_field_count ?? 0,
         answeredFieldCount: genResponse?.answered_field_count ?? 0,
         model: genResponse?.model ?? "unknown",
       });
-
-      const { data: refreshed } = await supabase
-        .from("sessions")
-        .select("metadata")
-        .eq("id", session.id)
-        .maybeSingle();
-      const meta = refreshed?.metadata as Record<string, unknown> | null;
-      if (meta?.guidance_phase2) setResult(meta.guidance_phase2 as Phase2Result);
 
       setGenerationStatus("success");
       toast({
@@ -566,7 +484,7 @@ export default function CaseNotes() {
       setGenerationStatus("error");
       toast({ title: "Extraction failed", description: msg, variant: "destructive" });
     }
-  }, [canGenerate, session, form, notesStatus, inputMode, uploadedFile]);
+  }, [canGenerate, session, form]);
 
   const handleClear = useCallback(() => {
     setForm(INITIAL_FORM);
@@ -575,7 +493,6 @@ export default function CaseNotes() {
     setGenerationStatus("idle");
     setGenerationSummary(null);
     setErrorMessage(null);
-    setNotesStatus("dirty");
     pdfExtractor.clearText();
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (routeSessionId) sessionStorage.removeItem(storageKey(routeSessionId));
