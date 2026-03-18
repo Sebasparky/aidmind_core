@@ -17,6 +17,8 @@ import {
   X,
   Circle,
   Info,
+  RefreshCw,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -36,6 +38,14 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -368,6 +378,11 @@ export default function CaseNotes() {
   const [searchFilter, setSearchFilter] = useState("");
   const [showFilter, setShowFilter] = useState<"all" | "answered" | "missing">("all");
 
+  // ─── Dialog state ──────────────────────────────────────
+  const [showLeaveDialog, setShowLeaveDialog] = useState(false);
+  const [showClearDialog, setShowClearDialog] = useState(false);
+  const [isDoneLoading, setIsDoneLoading] = useState(false);
+
   useEffect(() => {
     logPersistEvent("mount", { routeSessionId: routeSessionId ?? null });
     return () => {
@@ -513,13 +528,22 @@ export default function CaseNotes() {
 
   const sessionReady = !!session;
   const templateReady = !!session?.templateId;
-  // CTA requires notes + permission + template — no save dependency
   const canGenerate =
     sessionReady &&
     templateReady &&
     notesReady &&
     form.permissionConfirmed &&
     generationStatus !== "generating";
+
+  // Whether the user has meaningful in-progress work
+  const hasInProgressWork =
+    form.rawNotes.trim().length > 0 ||
+    form.permissionConfirmed ||
+    !!result ||
+    !!uploadedFile;
+
+  // Whether extraction is complete and user can mark as Done
+  const isExtractionComplete = generationStatus === "success" && !!result;
 
   // ─── File handling ─────────────────────────────────────
   const handleFileSelect = useCallback(
@@ -630,7 +654,6 @@ export default function CaseNotes() {
       if (genError) throw new Error(genError.message || "Fact extraction failed");
       if (genResponse && !genResponse.success) throw new Error(genResponse.error || "Fact extraction failed");
 
-      // Use response directly — no session re-fetch
       setResult({
         generated_at: genResponse.generated_at,
         model: genResponse.model,
@@ -667,7 +690,71 @@ export default function CaseNotes() {
     pdfExtractor.clearText();
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (routeSessionId) sessionStorage.removeItem(storageKey(routeSessionId));
+    setShowClearDialog(false);
   }, [pdfExtractor, routeSessionId]);
+
+  // ─── Done handler — marks case notes step as workflow-complete ─
+  const handleDone = useCallback(async () => {
+    if (!session) return;
+    setIsDoneLoading(true);
+
+    try {
+      // Read current metadata, merge case_notes_completed_at
+      const { data: current } = await supabase
+        .from("sessions")
+        .select("metadata")
+        .eq("id", session.id)
+        .maybeSingle();
+
+      const existingMeta = (current?.metadata as Record<string, unknown>) ?? {};
+
+      const { error } = await supabase
+        .from("sessions")
+        .update({
+          metadata: {
+            ...existingMeta,
+            case_notes_completed_at: new Date().toISOString(),
+          },
+        })
+        .eq("id", session.id);
+
+      if (error) throw error;
+
+      toast({
+        title: "Case Notes completed",
+        description: "Step marked as done. You can revisit anytime.",
+      });
+
+      navigate(-1);
+    } catch (err) {
+      console.error("[CaseNotes] Done handler error:", err);
+      toast({
+        title: "Failed to mark as done",
+        description: "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDoneLoading(false);
+    }
+  }, [session, navigate]);
+
+  // ─── Back navigation with guard ────────────────────────
+  const handleBack = useCallback(() => {
+    if (hasInProgressWork) {
+      setShowLeaveDialog(true);
+    } else {
+      navigate(-1);
+    }
+  }, [hasInProgressWork, navigate]);
+
+  // ─── Clear all with confirmation ───────────────────────
+  const handleClearClick = useCallback(() => {
+    if (hasInProgressWork) {
+      setShowClearDialog(true);
+    } else {
+      handleClear();
+    }
+  }, [hasInProgressWork, handleClear]);
 
   // ─── Filtered answers ──────────────────────────────────
   const filteredAnswers = useMemo(() => {
@@ -766,6 +853,52 @@ export default function CaseNotes() {
 
   return (
     <DashboardLayout>
+      {/* ─── Leave Confirmation Dialog ─── */}
+      <AlertDialog open={showLeaveDialog} onOpenChange={setShowLeaveDialog}>
+        <AlertDialogContent className="max-w-md rounded-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Leave Case Notes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You have in-progress work on this page. Your notes and any extracted answers will be preserved locally if you return during this browser session.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col gap-2 sm:flex-row">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowLeaveDialog(false);
+                navigate(-1);
+              }}
+            >
+              Leave page
+            </Button>
+            <Button onClick={() => setShowLeaveDialog(false)}>
+              Stay here
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ─── Clear All Confirmation Dialog ─── */}
+      <AlertDialog open={showClearDialog} onOpenChange={setShowClearDialog}>
+        <AlertDialogContent className="max-w-md rounded-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear all work?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will remove your notes, permission confirmation, and any extracted answers for this session. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col gap-2 sm:flex-row">
+            <Button variant="outline" onClick={() => setShowClearDialog(false)}>
+              Keep working
+            </Button>
+            <Button variant="destructive" onClick={handleClear}>
+              Clear all
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <div className="max-w-6xl mx-auto space-y-6">
         {/* ─── Page Header ─── */}
         <div className="space-y-1">
@@ -774,19 +907,22 @@ export default function CaseNotes() {
               variant="ghost"
               size="icon"
               className="h-8 w-8 shrink-0"
-              onClick={() => navigate(-1)}
+              onClick={handleBack}
             >
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <div>
-              <h1 className="text-lg font-semibold text-foreground">Case Notes</h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-lg font-semibold text-foreground">Case Notes</h1>
+                <Badge variant="secondary" className="text-xs font-normal">Step 2 of 3</Badge>
+              </div>
               <p className="text-sm text-muted-foreground">
-                Paste or upload interview notes, then extract fact-based answers for the selected template.
+                Extract structured, fact-based answers from interview notes into the selected template.
               </p>
             </div>
           </div>
           <p className="text-xs text-muted-foreground pl-11">
-            Only fact-based template fields will be answered from the notes.
+            After-meeting step · Notes stay local and are not saved to the server.
           </p>
         </div>
 
@@ -983,15 +1119,15 @@ export default function CaseNotes() {
 
             {/* Generation success summary */}
             {generationStatus === "success" && generationSummary && (
-              <div className="flex items-start gap-2 p-3 rounded-lg bg-[hsl(var(--status-success-muted))] border border-[hsl(var(--status-success)/0.2)]">
+              <div className="flex items-start gap-2 p-4 rounded-lg bg-[hsl(var(--status-success-muted))] border border-[hsl(var(--status-success)/0.2)]">
                 <CheckCircle2 className="h-4 w-4 text-[hsl(var(--status-success))] mt-0.5 shrink-0" />
-                <div>
-                  <p className="text-xs font-medium text-[hsl(var(--status-success-muted-foreground))]">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-[hsl(var(--status-success-muted-foreground))]">
                     Fact extraction complete
                   </p>
-                  <p className="text-xs text-[hsl(var(--status-success-muted-foreground))] mt-0.5">
-                    {generationSummary.answeredFieldCount} of {generationSummary.factFieldCount} fact-based fields answered
-                    {generationSummary.model && ` · Model: ${generationSummary.model}`}
+                  <p className="text-xs text-[hsl(var(--status-success-muted-foreground))]">
+                    {generationSummary.answeredFieldCount} of {generationSummary.factFieldCount} fact-based fields answered.
+                    Review the results below, then click <strong>Done</strong> to finish this step.
                   </p>
                 </div>
               </div>
@@ -1155,52 +1291,88 @@ export default function CaseNotes() {
               </CardContent>
             </Card>
 
-            {/* Primary CTA */}
+            {/* Primary CTA card */}
             <Card className="border border-border shadow-none">
               <CardContent className="px-5 py-4 space-y-3">
-                <Button
-                  className="w-full gap-2"
-                  disabled={!canGenerate}
-                  onClick={handleGenerate}
-                >
-                  {generationStatus === "generating" ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Extracting…
-                    </>
-                  ) : generationStatus === "success" ? (
-                    <>
-                      <CheckCircle2 className="h-4 w-4" />
+                {isExtractionComplete ? (
+                  <>
+                    {/* Done is primary after extraction success */}
+                    <Button
+                      className="w-full gap-2"
+                      onClick={handleDone}
+                      disabled={isDoneLoading}
+                    >
+                      {isDoneLoading ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Saving…
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="h-4 w-4" />
+                          Done
+                        </>
+                      )}
+                    </Button>
+                    <p className="text-xs text-muted-foreground text-center">
+                      Marks this step as complete and returns to your workflow.
+                    </p>
+
+                    {/* Re-extract is secondary */}
+                    <Button
+                      variant="outline"
+                      className="w-full gap-2"
+                      disabled={!canGenerate}
+                      onClick={handleGenerate}
+                    >
+                      <RefreshCw className="h-4 w-4" />
                       Re-extract answers
-                    </>
-                  ) : (
-                    <>
-                      <FileText className="h-4 w-4" />
-                      Extract fact-based answers
-                    </>
-                  )}
-                </Button>
+                    </Button>
+                    <p className="text-xs text-muted-foreground text-center">
+                      Re-running will replace existing extracted answers.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    {/* Extract is primary before success */}
+                    <Button
+                      className="w-full gap-2"
+                      disabled={!canGenerate}
+                      onClick={handleGenerate}
+                    >
+                      {generationStatus === "generating" ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Extracting…
+                        </>
+                      ) : (
+                        <>
+                          <FileText className="h-4 w-4" />
+                          Extract fact-based answers
+                        </>
+                      )}
+                    </Button>
 
-                {disabledReason && generationStatus !== "generating" && (
-                  <p className="text-xs text-muted-foreground text-center">
-                    {disabledReason}
-                  </p>
+                    {disabledReason && generationStatus !== "generating" && (
+                      <p className="text-xs text-muted-foreground text-center">
+                        {disabledReason}
+                      </p>
+                    )}
+                  </>
                 )}
 
-                {generationStatus === "success" && (
-                  <p className="text-xs text-muted-foreground text-center">
-                    Re-running will replace existing extracted answers.
-                  </p>
-                )}
+                <Separator />
 
+                {/* Clear all — minor, with confirmation */}
                 <div className="flex items-center justify-center">
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="text-xs text-muted-foreground h-7"
-                    onClick={handleClear}
+                    className="text-xs text-muted-foreground/70 hover:text-destructive h-7 gap-1.5"
+                    onClick={handleClearClick}
                     disabled={generationStatus === "generating"}
                   >
+                    <Trash2 className="h-3 w-3" />
                     Clear all
                   </Button>
                 </div>
@@ -1226,7 +1398,7 @@ export default function CaseNotes() {
               <p className="text-xs font-medium text-muted-foreground">Workflow</p>
               <div className="flex flex-col gap-1 text-xs text-muted-foreground">
                 <span>1. Before meeting → <strong>Guidance</strong></span>
-                <span>2. After meeting → <strong>Case Notes</strong> (you are here)</span>
+                <span className="text-foreground font-medium">2. After meeting → <strong>Case Notes</strong> (you are here)</span>
                 <span>3. Before submitting → <strong>Reviewer</strong></span>
               </div>
             </div>

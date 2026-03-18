@@ -32,6 +32,7 @@ interface ActiveSession {
   lastAccessed: Date;
   createdAt: Date;
   guidanceCompleted: boolean;
+  caseNotesCompleted: boolean;
   reviewerCompleted: boolean;
 }
 
@@ -86,6 +87,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         lastAccessed: note.updatedAt,
         createdAt: note.updatedAt,
         guidanceCompleted: note.guidanceCompleted,
+        caseNotesCompleted: note.caseNotesCompleted,
         reviewerCompleted: note.reviewerCompleted,
       }));
   }, [notes]);
@@ -287,7 +289,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         ) : (
           <div className="space-y-3">
             {filteredActiveSessions.map((session) => {
-              const toolCount = (session.guidanceCompleted ? 1 : 0) + (session.reviewerCompleted ? 1 : 0);
+              const toolCount = (session.guidanceCompleted ? 1 : 0) + (session.caseNotesCompleted ? 1 : 0) + (session.reviewerCompleted ? 1 : 0);
               const totalTools = 3;
               const allToolsUsed = toolCount >= totalTools;
 
@@ -352,15 +354,27 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                         Guidance
                       </Button>
                     )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 text-xs"
-                      onClick={() => navigate(`/sessions/${session.sessionId}/case-notes`)}
-                    >
-                      <FileText className="h-3.5 w-3.5" />
-                      Case Notes
-                    </Button>
+                    {session.caseNotesCompleted ? (
+                      <Button
+                        variant="default"
+                        size="sm"
+                        className="gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+                        onClick={() => navigate(`/sessions/${session.sessionId}/case-notes`)}
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        View Notes
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 text-xs"
+                        onClick={() => navigate(`/sessions/${session.sessionId}/case-notes`)}
+                      >
+                        <FileText className="h-3.5 w-3.5" />
+                        Case Notes
+                      </Button>
+                    )}
                     {session.reviewerCompleted ? (
                       <Button
                         variant="default"
