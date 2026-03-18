@@ -289,7 +289,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         ) : (
           <div className="space-y-3">
             {filteredActiveSessions.map((session) => {
-              const toolCount = (session.guidanceCompleted ? 1 : 0) + (session.reviewerCompleted ? 1 : 0);
+              const toolCount = (session.guidanceCompleted ? 1 : 0) + (session.caseNotesCompleted ? 1 : 0) + (session.reviewerCompleted ? 1 : 0);
               const totalTools = 3;
               const allToolsUsed = toolCount >= totalTools;
 
