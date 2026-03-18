@@ -338,6 +338,13 @@ export default function CaseNotes() {
           setForm({ rawNotes: persisted.rawNotes, permissionConfirmed: persisted.permissionConfirmed });
           setInputMode(persisted.inputMode);
           setUploadedFile(persisted.uploadedFile);
+          if (persisted.result) setResult(persisted.result);
+          if (persisted.generationStatus && persisted.generationStatus !== "generating") {
+            setGenerationStatus(persisted.generationStatus);
+          }
+          if (persisted.generationSummary) setGenerationSummary(persisted.generationSummary);
+          if (persisted.searchFilter) setSearchFilter(persisted.searchFilter);
+          if (persisted.showFilter) setShowFilter(persisted.showFilter);
         }
       } finally {
         setSessionLoading(false);
