@@ -1347,21 +1347,23 @@ export default function CaseNotes() {
                   </>
                 )}
 
-                <Separator />
-
-                {/* Clear all — minor, with confirmation */}
-                <div className="flex items-center justify-center">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-xs text-muted-foreground/70 hover:text-destructive h-7 gap-1.5"
-                    onClick={handleClearClick}
-                    disabled={generationStatus === "generating"}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                    Clear all
-                  </Button>
-                </div>
+                {!isExtractionComplete && (
+                  <>
+                    <Separator />
+                    <div className="flex items-center justify-center">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-xs text-muted-foreground/70 hover:text-destructive h-7 gap-1.5"
+                        onClick={handleClearClick}
+                        disabled={generationStatus === "generating"}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        Clear all
+                      </Button>
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
 
