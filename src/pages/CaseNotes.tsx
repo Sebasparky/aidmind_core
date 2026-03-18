@@ -109,6 +109,11 @@ interface PersistedState {
   permissionConfirmed: boolean;
   inputMode: InputMode;
   uploadedFile: UploadedFile | null;
+  result: Phase2Result | null;
+  generationStatus: GenerationStatus;
+  generationSummary: { factFieldCount: number; answeredFieldCount: number; model: string } | null;
+  searchFilter: string;
+  showFilter: "all" | "answered" | "missing";
 }
 
 function persistState(sessionId: string, state: PersistedState) {
@@ -273,8 +278,13 @@ export default function CaseNotes() {
       permissionConfirmed: form.permissionConfirmed,
       inputMode,
       uploadedFile,
+      result,
+      generationStatus: generationStatus === "generating" ? "idle" : generationStatus,
+      generationSummary,
+      searchFilter,
+      showFilter,
     });
-  }, [routeSessionId, form.rawNotes, form.permissionConfirmed, inputMode, uploadedFile]);
+  }, [routeSessionId, form.rawNotes, form.permissionConfirmed, inputMode, uploadedFile, result, generationStatus, generationSummary, searchFilter, showFilter]);
 
   const updateField = useCallback(
     <K extends keyof CaseNotesFormState>(key: K, value: CaseNotesFormState[K]) => {
@@ -328,6 +338,13 @@ export default function CaseNotes() {
           setForm({ rawNotes: persisted.rawNotes, permissionConfirmed: persisted.permissionConfirmed });
           setInputMode(persisted.inputMode);
           setUploadedFile(persisted.uploadedFile);
+          if (persisted.result) setResult(persisted.result);
+          if (persisted.generationStatus && persisted.generationStatus !== "generating") {
+            setGenerationStatus(persisted.generationStatus);
+          }
+          if (persisted.generationSummary) setGenerationSummary(persisted.generationSummary);
+          if (persisted.searchFilter) setSearchFilter(persisted.searchFilter);
+          if (persisted.showFilter) setShowFilter(persisted.showFilter);
         }
       } finally {
         setSessionLoading(false);
@@ -493,6 +510,8 @@ export default function CaseNotes() {
     setGenerationStatus("idle");
     setGenerationSummary(null);
     setErrorMessage(null);
+    setSearchFilter("");
+    setShowFilter("all");
     pdfExtractor.clearText();
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (routeSessionId) sessionStorage.removeItem(storageKey(routeSessionId));
