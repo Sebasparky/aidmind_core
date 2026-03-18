@@ -99,11 +99,9 @@ export function generateTitle(session: SessionRow): string {
 
 // Transform a session row to RecentNote
 function sessionToNote(session: SessionRow): RecentNote {
-  // Derive guidance completion from explicit completion signal (not from output existence)
   const meta = session.metadata as Record<string, unknown> | null;
   const guidanceCompleted = !!meta?.guidance_completed_at;
-
-  // Derive reviewer completion from review_document_id presence
+  const caseNotesCompleted = !!meta?.case_notes_completed_at;
   const reviewerCompleted = !!session.review_document_id;
 
   return {
@@ -114,6 +112,7 @@ function sessionToNote(session: SessionRow): RecentNote {
     status: mapStateToStatus(session),
     updatedAt: new Date(session.updated_at),
     guidanceCompleted,
+    caseNotesCompleted,
     reviewerCompleted,
   };
 }
