@@ -114,11 +114,11 @@ FIELD CLASSIFICATION RULES:
 
 1. matching_mode (CRITICAL — tells the local model how to match):
    - "select_one": field has a fixed set of allowed values, pick exactly one
-   - "select_many": field has a fixed set of allowed values, pick one or more
+   - "select_many": field has a fixed set of allowed values, pick one or more. Use this when the field naturally accepts multiple simultaneous values (e.g., sources of income, services seeking, substances used).
    - "boolean_decision": yes/no or true/false
    - "extract_number": extract a numeric value
    - "extract_date": extract a date
-   - "extract_literal_span": copy an exact text span (name, ID, address line)
+   - "extract_literal_span": copy an exact text span (name, ID, address line). The extraction model should return the SMALLEST sufficient span, not surrounding narrative.
    - "extract_short_text": extract a short factual phrase (1-5 words)
    - "human_review_only": do NOT auto-extract; too sensitive, ambiguous, or risky
 
@@ -163,6 +163,23 @@ FIELD CLASSIFICATION RULES:
 
 10. A field CAN be fact_based = true AND requires_human_review = true simultaneously.
     This means: "yes it's factual, but it's too sensitive/ambiguous for auto-extraction."
+
+MATCHING_GUIDANCE QUALITY RULES (CRITICAL for extraction accuracy):
+
+For select_many fields, matching_guidance MUST include:
+- "Return ALL allowed values that are clearly supported by the notes, not just the first match."
+- Mention that the model should scan the full notes for each allowed value.
+
+For extract_literal_span fields, matching_guidance MUST include:
+- "Return the smallest sufficient exact span — just the value itself (e.g., a name, a single number), not the surrounding sentence."
+- Specify what kind of span to look for (e.g., "a single person's name", "a nickname only").
+
+For extract_date fields, matching_guidance MUST include:
+- "Normalize the date to YYYY-MM-DD format."
+- Note common source formats to expect (e.g., "MM/DD/YYYY", "Month DD, YYYY").
+
+For extract_short_text fields, matching_guidance MUST include:
+- "Return compact factual content only, stripping narrative wrappers like 'she mentioned that…' or 'I wrote down…'."
 
 IMPORTANT: Do NOT mark all fields as safely extractable. Be conservative.
 Expect that for a typical intake form:
