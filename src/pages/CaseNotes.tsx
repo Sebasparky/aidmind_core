@@ -278,8 +278,13 @@ export default function CaseNotes() {
       permissionConfirmed: form.permissionConfirmed,
       inputMode,
       uploadedFile,
+      result,
+      generationStatus: generationStatus === "generating" ? "idle" : generationStatus,
+      generationSummary,
+      searchFilter,
+      showFilter,
     });
-  }, [routeSessionId, form.rawNotes, form.permissionConfirmed, inputMode, uploadedFile]);
+  }, [routeSessionId, form.rawNotes, form.permissionConfirmed, inputMode, uploadedFile, result, generationStatus, generationSummary, searchFilter, showFilter]);
 
   const updateField = useCallback(
     <K extends keyof CaseNotesFormState>(key: K, value: CaseNotesFormState[K]) => {
