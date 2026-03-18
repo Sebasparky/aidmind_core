@@ -1296,7 +1296,7 @@ export default function CaseNotes() {
               <CardContent className="px-5 py-4 space-y-3">
                 {isExtractionComplete ? (
                   <>
-                    {/* Done is primary after extraction success */}
+                    {/* Done is the only primary action after extraction success */}
                     <Button
                       className="w-full gap-2"
                       onClick={handleDone}
@@ -1316,20 +1316,6 @@ export default function CaseNotes() {
                     </Button>
                     <p className="text-xs text-muted-foreground text-center">
                       Marks this step as complete and returns to your workflow.
-                    </p>
-
-                    {/* Re-extract is secondary */}
-                    <Button
-                      variant="outline"
-                      className="w-full gap-2"
-                      disabled={!canGenerate}
-                      onClick={handleGenerate}
-                    >
-                      <RefreshCw className="h-4 w-4" />
-                      Re-extract answers
-                    </Button>
-                    <p className="text-xs text-muted-foreground text-center">
-                      Re-running will replace existing extracted answers.
                     </p>
                   </>
                 ) : (
