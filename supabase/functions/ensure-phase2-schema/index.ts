@@ -22,22 +22,47 @@ function json(status: number, body: Record<string, unknown>) {
 }
 
 // ============================================================
-// SCHEMA GENERATION
+// SCHEMA FIELD CONTRACT
 // ============================================================
 
+/**
+ * The canonical field shape stored in template_phase2_schemas.schema_json.fields[].
+ *
+ * matching_mode tells the local extraction model HOW to match:
+ *   select_one          — pick exactly one allowed_value
+ *   select_many         — pick one or more allowed_values
+ *   boolean_decision    — return true / false
+ *   extract_number      — return a numeric value
+ *   extract_date        — return a date string
+ *   extract_literal_span — copy an exact text span from notes
+ *   extract_short_text  — extract a short factual phrase
+ *   human_review_only   — do NOT auto-extract; flag for human
+ *
+ * sensitivity_level / ambiguity_level / extraction_priority give the
+ * consumer additional safety signals for gating or ordering extraction.
+ */
 interface SchemaField {
   field_key: string;
   label: string;
   template_prompt: string;
   fact_based: boolean;
   answer_type: string;
+  matching_mode: string;
   allowed_values: string[] | null;
   requires_direct_statement: boolean;
   return_null_if_missing: boolean;
   matching_guidance: string;
   examples: string[];
   requires_human_review: boolean;
+  human_review_reason: string | null;
+  sensitivity_level: "low" | "medium" | "high";
+  ambiguity_level: "low" | "medium" | "high";
+  extraction_priority: "high" | "medium" | "low";
 }
+
+// ============================================================
+// SCHEMA GENERATION
+// ============================================================
 
 async function generateSchemaFromTemplate(
   templateName: string,
@@ -71,39 +96,100 @@ async function generateSchemaFromTemplate(
     }
   }
 
-  const systemPrompt = `You are a schema designer for a social services case management system.
+  const systemPrompt = `You are a schema designer for a social services case management system called AidMind.
 
-Your task is to analyze a program template and produce a structured extraction schema that defines what factual information can be extracted from interview notes.
+Your task is to analyze a program template and produce a structured extraction schema that defines what factual information can safely be extracted from interview notes by a narrow local model.
 
-For each field in the template, determine:
-1. Whether it is fact-based (can be answered from interview notes alone)
-2. What type of answer is expected
-3. What matching guidance a local model would need to extract it
+The local model will NOT reason about the form. It will perform constrained matching:
+- For categorical fields: select one or more allowed values
+- For boolean fields: return true/false
+- For numeric fields: extract a number
+- For date fields: extract a date
+- For text spans: copy exact text from notes
+- For human-review fields: skip entirely
 
-CRITICAL RULES:
-- Only mark fields as fact_based=true if they can be answered by direct factual statements in notes
-- Fields requiring judgment, risk assessment, or professional opinion should be fact_based=false and requires_human_review=true
-- Be conservative: if unsure, set fact_based=false
-- answer_type should be one of: "text", "categorical_single", "categorical_multi", "boolean", "date", "number"
-- If answer_type is categorical, provide allowed_values
-- matching_guidance should be a clear instruction for a narrow extraction model
-- examples should show 2-3 typical note excerpts that would match
+YOUR JOB is to classify each field carefully so the local model knows EXACTLY what to do.
+
+FIELD CLASSIFICATION RULES:
+
+1. matching_mode (CRITICAL — tells the local model how to match):
+   - "select_one": field has a fixed set of allowed values, pick exactly one
+   - "select_many": field has a fixed set of allowed values, pick one or more
+   - "boolean_decision": yes/no or true/false
+   - "extract_number": extract a numeric value
+   - "extract_date": extract a date
+   - "extract_literal_span": copy an exact text span (name, ID, address line)
+   - "extract_short_text": extract a short factual phrase (1-5 words)
+   - "human_review_only": do NOT auto-extract; too sensitive, ambiguous, or risky
+
+2. sensitivity_level:
+   - "high": SSN, insurance IDs, phone numbers, email addresses, exact addresses, emergency contact details, legal identifiers
+   - "medium": names, dates of birth, employer info, income amounts
+   - "low": general categorical questions (pregnant?, substance use?, housing type?)
+
+3. ambiguity_level:
+   - "high": field could easily be confused with another similar field (e.g., physical city vs mailing city), or notes rarely contain clear evidence
+   - "medium": field is usually present but can be stated ambiguously
+   - "low": field is typically stated clearly and unambiguously
+
+4. extraction_priority:
+   - "high": core intake data that is almost always present in notes
+   - "medium": commonly available but may be missing
+   - "low": rarely explicitly stated, or too sensitive to prioritize
+
+5. requires_human_review — set to true for ANY of:
+   - sensitivity_level = "high" (sensitive identifiers)
+   - The field requires professional judgment
+   - The field is structurally ambiguous (e.g., physical vs mailing address that are easily confused)
+   - Mistakes would be costly or harmful
+   - The field is rarely documented clearly in narrative notes
+
+6. human_review_reason — when requires_human_review is true, explain WHY:
+   - "Sensitive identifier — requires verification"
+   - "Structurally ambiguous — easily confused with similar field"
+   - "Rarely documented clearly in narrative notes"
+   - "Mistakes would be costly to the client"
+
+7. DUPLICATE / SIMILAR FIELD HANDLING:
+   - If the template has both physical and mailing address fields, prefix field_keys clearly: physical_city, physical_state, mailing_city, mailing_state
+   - Make matching_guidance explicitly distinguish them: "Extract the PHYSICAL address city only, not the mailing address"
+   - Set ambiguity_level = "high" for both
+
+8. answer_type should be one of: "text", "categorical_single", "categorical_multi", "boolean", "date", "number"
+   - If answer_type is categorical, provide allowed_values
+
+9. fact_based = true ONLY if the field can be answered by direct factual statements in notes
+   - Fields requiring judgment → fact_based = false, requires_human_review = true
+
+10. A field CAN be fact_based = true AND requires_human_review = true simultaneously.
+    This means: "yes it's factual, but it's too sensitive/ambiguous for auto-extraction."
+
+IMPORTANT: Do NOT mark all fields as safely extractable. Be conservative.
+Expect that for a typical intake form:
+- 30-60% of fields should be safely auto-extractable (requires_human_review = false)
+- 20-40% should be fact-based but human-review-preferred (requires_human_review = true)
+- 10-20% should require professional judgment (fact_based = false)
 
 Return JSON:
 {
   "fields": [
     {
-      "field_key": "string (snake_case identifier)",
+      "field_key": "string (snake_case, disambiguated)",
       "label": "string (human-readable label)",
       "template_prompt": "string (original prompt from template)",
       "fact_based": true/false,
       "answer_type": "text|categorical_single|categorical_multi|boolean|date|number",
+      "matching_mode": "select_one|select_many|boolean_decision|extract_number|extract_date|extract_literal_span|extract_short_text|human_review_only",
       "allowed_values": ["array"] or null,
       "requires_direct_statement": true/false,
       "return_null_if_missing": true,
-      "matching_guidance": "string (instruction for extraction model)",
+      "matching_guidance": "string (specific instruction for narrow extraction model)",
       "examples": ["example note excerpt 1", "example 2"],
-      "requires_human_review": true/false
+      "requires_human_review": true/false,
+      "human_review_reason": "string or null",
+      "sensitivity_level": "low|medium|high",
+      "ambiguity_level": "low|medium|high",
+      "extraction_priority": "high|medium|low"
     }
   ]
 }`;
@@ -119,6 +205,7 @@ ${contentPreview}
 ${existingFieldsHint}
 
 Analyze this template and produce the Phase 2 extraction schema.
+Remember: be conservative about auto-extraction. Sensitive identifiers, ambiguous duplicates, and rarely-documented fields should be marked requires_human_review = true.
 Return JSON only.`;
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -160,20 +247,58 @@ Return JSON only.`;
     throw new Error("OpenAI response missing or empty 'fields' array");
   }
 
+  const VALID_MATCHING_MODES = new Set([
+    "select_one", "select_many", "boolean_decision",
+    "extract_number", "extract_date", "extract_literal_span",
+    "extract_short_text", "human_review_only",
+  ]);
+  const VALID_SENSITIVITY = new Set(["low", "medium", "high"]);
+  const VALID_PRIORITY = new Set(["high", "medium", "low"]);
+
   // Validate/normalize fields
-  const fields: SchemaField[] = parsed.fields.map((f: Record<string, unknown>) => ({
-    field_key: String(f.field_key ?? ""),
-    label: String(f.label ?? ""),
-    template_prompt: String(f.template_prompt ?? ""),
-    fact_based: f.fact_based === true,
-    answer_type: String(f.answer_type ?? "text"),
-    allowed_values: Array.isArray(f.allowed_values) ? f.allowed_values.map(String) : null,
-    requires_direct_statement: f.requires_direct_statement !== false,
-    return_null_if_missing: f.return_null_if_missing !== false,
-    matching_guidance: String(f.matching_guidance ?? ""),
-    examples: Array.isArray(f.examples) ? f.examples.map(String) : [],
-    requires_human_review: f.requires_human_review === true,
-  }));
+  const fields: SchemaField[] = parsed.fields.map((f: Record<string, unknown>) => {
+    const requiresHumanReview = f.requires_human_review === true ||
+      f.sensitivity_level === "high" ||
+      f.matching_mode === "human_review_only";
+
+    const rawMode = String(f.matching_mode ?? "extract_short_text");
+    const matchingMode = VALID_MATCHING_MODES.has(rawMode) ? rawMode : "extract_short_text";
+
+    const rawSensitivity = String(f.sensitivity_level ?? "low");
+    const sensitivityLevel = VALID_SENSITIVITY.has(rawSensitivity) ? rawSensitivity as "low" | "medium" | "high" : "low";
+
+    const rawAmbiguity = String(f.ambiguity_level ?? "low");
+    const ambiguityLevel = VALID_SENSITIVITY.has(rawAmbiguity) ? rawAmbiguity as "low" | "medium" | "high" : "low";
+
+    const rawPriority = String(f.extraction_priority ?? "medium");
+    const extractionPriority = VALID_PRIORITY.has(rawPriority) ? rawPriority as "high" | "medium" | "low" : "medium";
+
+    // Force human_review_only matching_mode for high-sensitivity fields
+    const finalMatchingMode = (sensitivityLevel === "high" && matchingMode !== "human_review_only")
+      ? "human_review_only"
+      : matchingMode;
+
+    return {
+      field_key: String(f.field_key ?? ""),
+      label: String(f.label ?? ""),
+      template_prompt: String(f.template_prompt ?? ""),
+      fact_based: f.fact_based === true,
+      answer_type: String(f.answer_type ?? "text"),
+      matching_mode: finalMatchingMode,
+      allowed_values: Array.isArray(f.allowed_values) ? f.allowed_values.map(String) : null,
+      requires_direct_statement: f.requires_direct_statement !== false,
+      return_null_if_missing: f.return_null_if_missing !== false,
+      matching_guidance: String(f.matching_guidance ?? ""),
+      examples: Array.isArray(f.examples) ? f.examples.map(String) : [],
+      requires_human_review: requiresHumanReview,
+      human_review_reason: requiresHumanReview
+        ? String(f.human_review_reason ?? "Requires manual verification")
+        : null,
+      sensitivity_level: sensitivityLevel,
+      ambiguity_level: ambiguityLevel,
+      extraction_priority: extractionPriority,
+    };
+  });
 
   return { fields, model };
 }
@@ -324,9 +449,12 @@ async function generateAndStoreSchema(
   const now = new Date().toISOString();
   const factCount = fields.filter((f) => f.fact_based).length;
   const humanReviewCount = fields.filter((f) => f.requires_human_review).length;
+  const autoExtractCount = fields.filter((f) => f.fact_based && !f.requires_human_review).length;
+  const humanReviewOnlyCount = fields.filter((f) => f.matching_mode === "human_review_only").length;
 
   const schemaJson = {
     generated_at: now,
+    schema_contract_version: "2.0",
     fields,
   };
 
@@ -341,7 +469,7 @@ async function generateAndStoreSchema(
       schema_json: schemaJson,
       model,
       source_template_hash: template.content_hash,
-      generation_notes: `Generated ${fields.length} fields (${factCount} fact-based, ${humanReviewCount} human-review)`,
+      generation_notes: `Generated ${fields.length} fields: ${autoExtractCount} auto-extractable, ${humanReviewCount} human-review, ${humanReviewOnlyCount} human-review-only, ${factCount} fact-based total`,
       generated_at: now,
     })
     .select("id")
@@ -350,6 +478,6 @@ async function generateAndStoreSchema(
   if (insertErr) throw new Error(`Failed to store schema: ${insertErr.message}`);
   if (!inserted) throw new Error("Schema insert returned no data");
 
-  console.log(`[${SERVICE_NAME}] Schema ${inserted.id} generated (v${version}, ${fields.length} fields)`);
+  console.log(`[${SERVICE_NAME}] Schema ${inserted.id} generated (v${version}, ${fields.length} fields, ${autoExtractCount} auto-extractable, ${humanReviewCount} human-review)`);
   return inserted.id;
 }
