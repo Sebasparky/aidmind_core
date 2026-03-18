@@ -100,6 +100,8 @@ const ACCEPTED_MIMES = [
 ];
 
 // ─── Session-scoped persistence helpers ──────────────────
+const CASE_NOTES_PERSIST_DEBUG = import.meta.env.DEV;
+
 function storageKey(sessionId: string) {
   return `aidmind:case-notes:${sessionId}`;
 }
@@ -116,17 +118,113 @@ interface PersistedState {
   showFilter: "all" | "answered" | "missing";
 }
 
+function logPersistEvent(event: string, payload?: Record<string, unknown>) {
+  if (!CASE_NOTES_PERSIST_DEBUG) return;
+  if (payload) {
+    console.info(`[CaseNotes][persist] ${event}`, payload);
+    return;
+  }
+  console.info(`[CaseNotes][persist] ${event}`);
+}
+
+function summarizeState(state: PersistedState | null) {
+  if (!state) return { hasState: false };
+  return {
+    hasState: true,
+    notesLength: state.rawNotes.length,
+    inputMode: state.inputMode,
+    hasFile: !!state.uploadedFile,
+    hasResult: !!state.result,
+    generationStatus: state.generationStatus,
+    answeredCount: state.result?.answers?.filter((answer) => answer.answer !== null).length ?? 0,
+    totalCount: state.result?.answers?.length ?? 0,
+    searchFilterLength: state.searchFilter.length,
+    showFilter: state.showFilter,
+  };
+}
+
+function normalizePersistedState(raw: unknown): PersistedState | null {
+  if (!raw || typeof raw !== "object") return null;
+
+  const parsed = raw as Partial<PersistedState>;
+
+  const inputMode: InputMode = parsed.inputMode === "upload" ? "upload" : "paste";
+  const generationStatus: GenerationStatus =
+    parsed.generationStatus === "generating"
+      ? "idle"
+      : parsed.generationStatus === "success" || parsed.generationStatus === "error" || parsed.generationStatus === "idle"
+      ? parsed.generationStatus
+      : "idle";
+
+  const showFilter: "all" | "answered" | "missing" =
+    parsed.showFilter === "answered" || parsed.showFilter === "missing" ? parsed.showFilter : "all";
+
+  const uploadedFile =
+    parsed.uploadedFile && typeof parsed.uploadedFile === "object"
+      ? (parsed.uploadedFile as UploadedFile)
+      : null;
+
+  const result =
+    parsed.result && typeof parsed.result === "object"
+      ? (parsed.result as Phase2Result)
+      : null;
+
+  const generationSummary =
+    parsed.generationSummary && typeof parsed.generationSummary === "object"
+      ? parsed.generationSummary
+      : null;
+
+  const effectiveStatus: GenerationStatus =
+    generationStatus === "idle" && result ? "success" : generationStatus;
+
+  return {
+    rawNotes: typeof parsed.rawNotes === "string" ? parsed.rawNotes : "",
+    permissionConfirmed: !!parsed.permissionConfirmed,
+    inputMode,
+    uploadedFile,
+    result,
+    generationStatus: effectiveStatus,
+    generationSummary,
+    searchFilter: typeof parsed.searchFilter === "string" ? parsed.searchFilter : "",
+    showFilter,
+  };
+}
+
 function persistState(sessionId: string, state: PersistedState) {
+  const key = storageKey(sessionId);
   try {
-    sessionStorage.setItem(storageKey(sessionId), JSON.stringify(state));
-  } catch { /* quota exceeded — non-critical */ }
+    sessionStorage.setItem(key, JSON.stringify(state));
+    logPersistEvent("save", { key, ...summarizeState(state) });
+  } catch (error) {
+    logPersistEvent("save_failed", {
+      key,
+      error: error instanceof Error ? error.message : "unknown",
+    });
+  }
 }
 
 function loadPersistedState(sessionId: string): PersistedState | null {
+  const key = storageKey(sessionId);
   try {
-    const raw = sessionStorage.getItem(storageKey(sessionId));
-    return raw ? JSON.parse(raw) : null;
-  } catch {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) {
+      logPersistEvent("restore_miss", { key });
+      return null;
+    }
+
+    const normalized = normalizePersistedState(JSON.parse(raw));
+    if (!normalized) {
+      logPersistEvent("restore_invalid", { key });
+      return null;
+    }
+
+    logPersistEvent("restore_hit", { key, ...summarizeState(normalized) });
+    return normalized;
+  } catch (error) {
+    logPersistEvent("restore_failed", {
+      key,
+      error: error instanceof Error ? error.message : "unknown",
+    });
     return null;
   }
 }
