@@ -555,11 +555,12 @@ export default function CaseNotes() {
 
       const isText = file.type === "text/plain" || file.name.endsWith(".md") || file.type === "text/markdown";
       const isPdf = file.type === "application/pdf" || file.name.endsWith(".pdf");
+      const isDocx = file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || file.name.endsWith(".docx");
 
       if (isText) {
         setUploadedFile({
           name: file.name, size: file.size, mime: file.type || "text/plain",
-          extractedText: null, storagePath: null, status: "extracting",
+          extractedText: null, status: "reading",
         });
         const text = await file.text();
         setUploadedFile((prev) => prev ? { ...prev, extractedText: text, status: "extracted" } : null);
@@ -567,7 +568,7 @@ export default function CaseNotes() {
       } else if (isPdf) {
         setUploadedFile({
           name: file.name, size: file.size, mime: file.type,
-          extractedText: null, storagePath: null, status: "extracting",
+          extractedText: null, status: "extracting",
         });
         try {
           await pdfExtractor.extractText(file);
@@ -575,41 +576,32 @@ export default function CaseNotes() {
           setUploadedFile((prev) => prev ? { ...prev, status: "extraction_error" } : null);
           toast({ title: "PDF extraction failed", variant: "destructive" });
         }
-      } else {
+      } else if (isDocx) {
         setUploadedFile({
           name: file.name, size: file.size, mime: file.type,
-          extractedText: null, storagePath: null, status: "uploading",
+          extractedText: null, status: "extracting",
         });
         try {
-          const path = `case-notes/${routeSessionId}/${Date.now()}-${file.name}`;
-          const { error: uploadErr } = await supabase.storage
-            .from("review-documents")
-            .upload(path, file, { upsert: true });
-          if (uploadErr) throw uploadErr;
-
-          setUploadedFile((prev) => prev ? { ...prev, storagePath: path, status: "extracting" } : null);
-
-          const { data: extractResult, error: extractErr } = await supabase.functions.invoke(
-            "extract-case-note-text",
-            { body: { storage_path: path, mime_type: file.type, session_id: session?.id || null } }
-          );
-          if (extractErr) throw new Error(extractErr.message || "Extraction failed");
-          if (extractResult && !extractResult.success) throw new Error(extractResult.error || "Extraction failed");
-
-          const extractedText = extractResult?.text || "";
-          setUploadedFile((prev) => prev ? { ...prev, extractedText, status: "extracted" } : null);
-          if (extractedText) {
-            setForm((prev) => ({ ...prev, rawNotes: extractedText }));
+          const arrayBuffer = await file.arrayBuffer();
+          const result = await mammoth.extractRawText({ arrayBuffer });
+          const extractedText = result.value.trim();
+          if (!extractedText) {
+            setUploadedFile((prev) => prev ? { ...prev, status: "extraction_error" } : null);
+            toast({ title: "No text found in document", description: "The file may be empty or image-only.", variant: "destructive" });
+            return;
           }
+          setUploadedFile((prev) => prev ? { ...prev, extractedText, status: "extracted" } : null);
+          setForm((prev) => ({ ...prev, rawNotes: extractedText }));
         } catch (err) {
-          const msg = err instanceof Error ? err.message : "Extraction failed";
+          const msg = err instanceof Error ? err.message : "DOCX extraction failed";
           setUploadedFile((prev) => prev ? { ...prev, status: "extraction_error" } : null);
-          setErrorMessage(msg);
           toast({ title: "File extraction failed", description: msg, variant: "destructive" });
         }
+      } else {
+        toast({ title: "Unsupported file type", description: "Only .txt, .md, .pdf, and .docx files can be processed locally.", variant: "destructive" });
       }
     },
-    [routeSessionId, session, pdfExtractor]
+    [pdfExtractor]
   );
 
   // Sync PDF extractor results
