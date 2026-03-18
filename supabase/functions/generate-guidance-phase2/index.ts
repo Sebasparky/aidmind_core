@@ -149,19 +149,22 @@ You will receive interview notes and a list of fields. Each field has a matching
 
 MATCHING MODES:
 - "select_one": Pick EXACTLY ONE value from the allowed_values list. If none clearly match, return null.
-- "select_many": Pick ONE OR MORE values from the allowed_values list. Return as comma-separated string. If none clearly match, return null.
+- "select_many": Pick ALL values from the allowed_values list that are clearly supported by the notes. Return as a comma-separated string (e.g. "Wages/Salary,Public Assistance"). Do NOT stop after the first match — scan the ENTIRE notes for every applicable allowed value. If none clearly match, return null.
 - "boolean_decision": Return "Yes" or "No" only. If unclear, return null.
-- "extract_number": Return ONLY a numeric value. If no number is clearly stated, return null.
-- "extract_date": Return ONLY a date (YYYY-MM-DD preferred). If no date is clearly stated, return null.
-- "extract_literal_span": Copy an EXACT text span from the notes (a name, ID, address). If not found, return null.
-- "extract_short_text": Extract a short factual phrase (1-5 words). If not found, return null.
+- "extract_number": Return ONLY a numeric value (digits only, no units or text). If no number is clearly stated, return null.
+- "extract_date": Return a date normalized to YYYY-MM-DD format (e.g. "1991-08-14"). Convert common formats: "8/14/91" → "1991-08-14", "03/18/2026" → "2026-03-18", "August 14, 1991" → "1991-08-14". For 2-digit years, assume 00-29 = 2000s and 30-99 = 1900s. If the date is too ambiguous to normalize safely, return null.
+- "extract_literal_span": Copy the SMALLEST SUFFICIENT exact text span from the notes. Return only the precise value — a name, a number, a single identifier — not the surrounding sentence or narrative. For example, if the field asks for a nickname and the notes say "most people call me Mari", return "Mari", not "Mari Torres" or the whole sentence. If not found, return null.
+- "extract_short_text": Extract a compact factual phrase. Strip narrative wrappers like "she said that…" or "I wrote down…". Return only the factual content in a clean, compact form. For example: "Dr. Helen Morris, Sparrow Family Medicine, 517-555-2210" instead of "Dr. Helen Morris at Sparrow Family Medicine and I wrote down 517-555-2210 for that office". If not found, return null.
 
 STRICT RULES:
 - Do NOT guess, infer, interpret, or summarize.
 - Do NOT combine unrelated statements.
 - Do NOT generate opinions or recommendations.
-- For select_one/select_many: ONLY use values from allowed_values.
-- For extract_literal_span: the answer MUST appear verbatim in the notes.
+- For select_one/select_many: ONLY use values from allowed_values. Spelling must match exactly.
+- For select_many: you MUST check every allowed_value against the full notes. Return ALL that apply.
+- For extract_literal_span: prefer the shortest exact answer that fully satisfies the field.
+- For extract_short_text: return compact factual content, not narrative sentences from the notes.
+- For extract_date: always normalize to YYYY-MM-DD when possible.
 - If requires_direct_statement is true: only extract if explicitly stated, not implied.
 - When in doubt, return null.
 - supporting_excerpt must be an exact or near-exact quote from the notes.
