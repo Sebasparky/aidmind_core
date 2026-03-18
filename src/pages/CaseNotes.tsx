@@ -109,6 +109,11 @@ interface PersistedState {
   permissionConfirmed: boolean;
   inputMode: InputMode;
   uploadedFile: UploadedFile | null;
+  result: Phase2Result | null;
+  generationStatus: GenerationStatus;
+  generationSummary: { factFieldCount: number; answeredFieldCount: number; model: string } | null;
+  searchFilter: string;
+  showFilter: "all" | "answered" | "missing";
 }
 
 function persistState(sessionId: string, state: PersistedState) {
