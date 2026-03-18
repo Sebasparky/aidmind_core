@@ -359,7 +359,7 @@ export default function CaseNotes() {
     model: string;
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const initialLoadDone = useRef(false);
+  const [hydratedSessionId, setHydratedSessionId] = useState<string | null>(null);
 
   // PDF extraction hook
   const pdfExtractor = usePdfTextExtractor();
@@ -368,9 +368,54 @@ export default function CaseNotes() {
   const [searchFilter, setSearchFilter] = useState("");
   const [showFilter, setShowFilter] = useState<"all" | "answered" | "missing">("all");
 
+  useEffect(() => {
+    logPersistEvent("mount", { routeSessionId: routeSessionId ?? null });
+    return () => {
+      logPersistEvent("unmount", { routeSessionId: routeSessionId ?? null });
+    };
+  }, [routeSessionId]);
+
+  // ─── Hydrate local UI state immediately on session route change ─
+  useEffect(() => {
+    if (!routeSessionId) {
+      setHydratedSessionId(null);
+      return;
+    }
+
+    logPersistEvent("hydrate_start", { key: storageKey(routeSessionId) });
+    const persisted = loadPersistedState(routeSessionId);
+
+    if (persisted) {
+      setForm({ rawNotes: persisted.rawNotes, permissionConfirmed: persisted.permissionConfirmed });
+      setInputMode(persisted.inputMode);
+      setUploadedFile(persisted.uploadedFile);
+      setResult(persisted.result);
+      setGenerationStatus(persisted.generationStatus);
+      setGenerationSummary(persisted.generationSummary);
+      setSearchFilter(persisted.searchFilter);
+      setShowFilter(persisted.showFilter);
+      setErrorMessage(null);
+      logPersistEvent("hydrate_applied", { key: storageKey(routeSessionId), ...summarizeState(persisted) });
+    } else {
+      setForm(INITIAL_FORM);
+      setInputMode("paste");
+      setUploadedFile(null);
+      setResult(null);
+      setGenerationStatus("idle");
+      setGenerationSummary(null);
+      setSearchFilter("");
+      setShowFilter("all");
+      setErrorMessage(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      logPersistEvent("hydrate_defaulted", { key: storageKey(routeSessionId) });
+    }
+
+    setHydratedSessionId(routeSessionId);
+  }, [routeSessionId]);
+
   // ─── Persist local UI state to sessionStorage on change ─
   useEffect(() => {
-    if (!routeSessionId || !initialLoadDone.current) return;
+    if (!routeSessionId || hydratedSessionId !== routeSessionId) return;
     persistState(routeSessionId, {
       rawNotes: form.rawNotes,
       permissionConfirmed: form.permissionConfirmed,
@@ -382,7 +427,7 @@ export default function CaseNotes() {
       searchFilter,
       showFilter,
     });
-  }, [routeSessionId, form.rawNotes, form.permissionConfirmed, inputMode, uploadedFile, result, generationStatus, generationSummary, searchFilter, showFilter]);
+  }, [routeSessionId, hydratedSessionId, form.rawNotes, form.permissionConfirmed, inputMode, uploadedFile, result, generationStatus, generationSummary, searchFilter, showFilter]);
 
   const updateField = useCallback(
     <K extends keyof CaseNotesFormState>(key: K, value: CaseNotesFormState[K]) => {
@@ -394,9 +439,15 @@ export default function CaseNotes() {
   // ─── Load session data on mount ────────────────────────
   useEffect(() => {
     if (!routeSessionId) {
+      setSession(null);
       setSessionLoading(false);
       return;
     }
+
+    let cancelled = false;
+    setSessionLoading(true);
+    setSession(null);
+
     (async () => {
       try {
         const { data, error } = await supabase
@@ -405,9 +456,15 @@ export default function CaseNotes() {
           .eq("session_id", routeSessionId)
           .maybeSingle();
 
+        if (cancelled) return;
+
         if (error || !data) {
           console.error("[CaseNotes] Session fetch error:", error?.message);
-          setSessionLoading(false);
+          logPersistEvent("session_fetch_error", {
+            routeSessionId,
+            error: error?.message ?? "session not found",
+          });
+          setSession(null);
           return;
         }
 
@@ -418,8 +475,10 @@ export default function CaseNotes() {
             .select("name")
             .eq("id", data.template_id)
             .maybeSingle();
-          if (tmpl) templateName = tmpl.name;
+          if (!cancelled && tmpl) templateName = tmpl.name;
         }
+
+        if (cancelled) return;
 
         setSession({
           id: data.id,
@@ -430,25 +489,20 @@ export default function CaseNotes() {
           tenantId: data.tenant_id,
         });
 
-        // Restore persisted UI state if available (tab navigation case)
-        const persisted = loadPersistedState(routeSessionId);
-        if (persisted) {
-          setForm({ rawNotes: persisted.rawNotes, permissionConfirmed: persisted.permissionConfirmed });
-          setInputMode(persisted.inputMode);
-          setUploadedFile(persisted.uploadedFile);
-          if (persisted.result) setResult(persisted.result);
-          if (persisted.generationStatus && persisted.generationStatus !== "generating") {
-            setGenerationStatus(persisted.generationStatus);
-          }
-          if (persisted.generationSummary) setGenerationSummary(persisted.generationSummary);
-          if (persisted.searchFilter) setSearchFilter(persisted.searchFilter);
-          if (persisted.showFilter) setShowFilter(persisted.showFilter);
-        }
+        logPersistEvent("session_loaded", {
+          routeSessionId,
+          hasTemplate: !!data.template_id,
+        });
       } finally {
-        setSessionLoading(false);
-        initialLoadDone.current = true;
+        if (!cancelled) {
+          setSessionLoading(false);
+        }
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [routeSessionId]);
 
   // ─── Derived state ─────────────────────────────────────
