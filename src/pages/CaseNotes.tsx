@@ -55,7 +55,7 @@ import mammoth from "mammoth";
 
 // ─── Types ───────────────────────────────────────────────
 type GenerationStatus = "idle" | "generating" | "success" | "error";
-type ExtractionStatus = "idle" | "uploading" | "extracting" | "extracted" | "extraction_error";
+type ExtractionStatus = "idle" | "reading" | "extracting" | "extracted" | "extraction_error";
 type InputMode = "paste" | "upload";
 
 interface FieldAnswer {
