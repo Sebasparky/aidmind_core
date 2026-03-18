@@ -354,15 +354,27 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                         Guidance
                       </Button>
                     )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 text-xs"
-                      onClick={() => navigate(`/sessions/${session.sessionId}/case-notes`)}
-                    >
-                      <FileText className="h-3.5 w-3.5" />
-                      Case Notes
-                    </Button>
+                    {session.caseNotesCompleted ? (
+                      <Button
+                        variant="default"
+                        size="sm"
+                        className="gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+                        onClick={() => navigate(`/sessions/${session.sessionId}/case-notes`)}
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        View Notes
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 text-xs"
+                        onClick={() => navigate(`/sessions/${session.sessionId}/case-notes`)}
+                      >
+                        <FileText className="h-3.5 w-3.5" />
+                        Case Notes
+                      </Button>
+                    )}
                     {session.reviewerCompleted ? (
                       <Button
                         variant="default"
