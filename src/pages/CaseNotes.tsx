@@ -510,6 +510,8 @@ export default function CaseNotes() {
     setGenerationStatus("idle");
     setGenerationSummary(null);
     setErrorMessage(null);
+    setSearchFilter("");
+    setShowFilter("all");
     pdfExtractor.clearText();
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (routeSessionId) sessionStorage.removeItem(storageKey(routeSessionId));
