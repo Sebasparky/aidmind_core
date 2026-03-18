@@ -2,7 +2,11 @@
  * generate-guidance-phase2
  *
  * Maps interview notes to fact-based template fields using an LLM.
- * Only answers fields marked `fact_based: true` in the template metadata.
+ * Uses the linked Phase 2 schema (template_phase2_schemas) as the
+ * source of truth for field definitions and matching modes.
+ *
+ * Fields with matching_mode = "human_review_only" are SKIPPED entirely
+ * and returned with answer = null, flagged for human review.
  *
  * Part of the Guidance Phase 2 pipeline.
  */
@@ -18,7 +22,26 @@ const MIN_NOTES_LENGTH = 20;
 // TYPES
 // ============================================================
 
-interface FactField {
+interface SchemaFieldInput {
+  field_key: string;
+  label: string;
+  template_prompt: string;
+  fact_based: boolean;
+  answer_type: string;
+  matching_mode: string;
+  allowed_values: string[] | null;
+  requires_direct_statement: boolean;
+  return_null_if_missing: boolean;
+  matching_guidance: string;
+  requires_human_review: boolean;
+  human_review_reason: string | null;
+  sensitivity_level: string;
+  ambiguity_level: string;
+  extraction_priority: string;
+}
+
+/** Legacy field shape from kb_templates.metadata (backward compat only) */
+interface LegacyFactField {
   field_key: string;
   label: string;
   type: string;
@@ -32,6 +55,10 @@ interface FieldAnswer {
   answer: string | null;
   confidence: "high" | "medium" | "low";
   supporting_excerpt: string | null;
+  matching_mode: string;
+  requires_human_review: boolean;
+  human_review_reason: string | null;
+  skipped: boolean;
 }
 
 interface Phase2Output {
@@ -41,11 +68,12 @@ interface Phase2Output {
 }
 
 // ============================================================
-// TEMPLATE METADATA PARSING
+// LEGACY TEMPLATE METADATA PARSING
+// TODO(migration): Remove once all sessions use linked Phase 2 schemas.
 // ============================================================
 
-function extractFactBasedFields(metadata: Record<string, unknown>): FactField[] {
-  const fields: FactField[] = [];
+function extractFactBasedFieldsLegacy(metadata: Record<string, unknown>): LegacyFactField[] {
+  const fields: LegacyFactField[] = [];
   const sections = metadata.sections;
   if (!Array.isArray(sections)) return fields;
 
@@ -73,69 +101,72 @@ function extractFactBasedFields(metadata: Record<string, unknown>): FactField[] 
 }
 
 // ============================================================
-// MODEL ABSTRACTION LAYER
+// EXTRACTION WITH MATCHING_MODE CONTEXT
 // ============================================================
 
 /**
- * Generate fact-based field mappings from interview notes.
- *
- * This function is the single integration point with the LLM.
- * To swap to a local model later, replace the implementation here
- * without changing the rest of the edge function.
+ * Build the extraction prompt fields list, giving the LLM explicit
+ * matching_mode instructions per field so it does constrained matching.
  */
-async function generatePhase2FieldMappings(
+function buildFieldInstructions(fields: SchemaFieldInput[]): string {
+  return JSON.stringify(
+    fields.map((f) => {
+      const instruction: Record<string, unknown> = {
+        field_key: f.field_key,
+        label: f.label,
+        matching_mode: f.matching_mode,
+        matching_guidance: f.matching_guidance,
+      };
+      if (f.allowed_values && f.allowed_values.length > 0) {
+        instruction.allowed_values = f.allowed_values;
+      }
+      if (f.requires_direct_statement) {
+        instruction.requires_direct_statement = true;
+      }
+      return instruction;
+    }),
+    null,
+    2,
+  );
+}
+
+async function generatePhase2Answers(
   interviewNotes: string,
-  factFields: FactField[],
-): Promise<{ answers: FieldAnswer[]; model: string }> {
+  fields: SchemaFieldInput[],
+): Promise<{ answers: { field_key: string; answer: string | null; supporting_excerpt: string | null }[]; model: string }> {
   const apiKey = Deno.env.get("OPENAI_API_KEY");
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
 
   const model = "gpt-4o";
 
-  const fieldsJson = JSON.stringify(
-    factFields.map((f) => ({
-      field_key: f.field_key,
-      question: f.question,
-    })),
-  );
+  const fieldsJson = buildFieldInstructions(fields);
 
   const systemPrompt = `You are a factual information extraction assistant for social services casework.
 
-Your task is to extract factual answers from interview notes.
+Your task is to extract factual answers from interview notes using CONSTRAINED MATCHING.
 
-You will receive:
+You will receive interview notes and a list of fields. Each field has a matching_mode that tells you EXACTLY how to extract:
 
-1. Interview notes from a caseworker interview
-2. A list of template fields that require factual answers
-
-The template fields have already been filtered to include ONLY fact-based questions.
-
-This means:
-- Every field is valid.
-- You do NOT need to determine whether a field is opinionated or appropriate.
-- Your only task is to determine whether the interview notes contain the answer.
-
-For each field:
-• If the interview notes clearly contain the information needed to answer the question, extract the answer.
-• The answer must come directly from the notes.
-• Provide a supporting_excerpt that is an exact or near-exact quote from the notes that proves the answer.
-
-If the notes do NOT contain the information needed:
-• Set "answer": null
-• Set "supporting_excerpt": null
+MATCHING MODES:
+- "select_one": Pick EXACTLY ONE value from the allowed_values list. If none clearly match, return null.
+- "select_many": Pick ONE OR MORE values from the allowed_values list. Return as comma-separated string. If none clearly match, return null.
+- "boolean_decision": Return "Yes" or "No" only. If unclear, return null.
+- "extract_number": Return ONLY a numeric value. If no number is clearly stated, return null.
+- "extract_date": Return ONLY a date (YYYY-MM-DD preferred). If no date is clearly stated, return null.
+- "extract_literal_span": Copy an EXACT text span from the notes (a name, ID, address). If not found, return null.
+- "extract_short_text": Extract a short factual phrase (1-5 words). If not found, return null.
 
 STRICT RULES:
-- Do NOT guess.
-- Do NOT infer.
-- Do NOT interpret.
-- Do NOT summarize the notes.
-- Do NOT combine unrelated statements to form an answer.
-- Do NOT generate opinions, risk judgments, or recommendations.
+- Do NOT guess, infer, interpret, or summarize.
+- Do NOT combine unrelated statements.
+- Do NOT generate opinions or recommendations.
+- For select_one/select_many: ONLY use values from allowed_values.
+- For extract_literal_span: the answer MUST appear verbatim in the notes.
+- If requires_direct_statement is true: only extract if explicitly stated, not implied.
+- When in doubt, return null.
+- supporting_excerpt must be an exact or near-exact quote from the notes.
 
-Answers must be short factual phrases taken from the notes.
-If the supporting_excerpt text does not appear in the interview notes, the answer is invalid.
-
-Return JSON only in the following format:
+Return JSON only:
 {
   "answers": [
     {
@@ -144,20 +175,17 @@ Return JSON only in the following format:
       "supporting_excerpt": "string or null"
     }
   ]
-}
-
-If the supporting_excerpt text does not appear in the interview notes, the answer is invalid.`;
+}`;
 
   const userPrompt = `INTERVIEW NOTES
 ---------------
 ${interviewNotes}
 
-FIELDS TO ANSWER
-----------------
+FIELDS TO EXTRACT
+-----------------
 ${fieldsJson}
 
-For each field determine whether the interview notes contain the factual answer.
-Return the JSON response now.`;
+For each field, use the matching_mode to determine how to extract. Return JSON now.`;
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -198,10 +226,60 @@ Return the JSON response now.`;
     throw new Error("OpenAI response missing 'answers' array");
   }
 
-  // Build a lookup from factFields so we can reattach label/question
-  const fieldLookup = new Map(factFields.map((f) => [f.field_key, f]));
+  return {
+    answers: parsed.answers.map((a: Record<string, unknown>) => ({
+      field_key: String(a.field_key ?? ""),
+      answer: a.answer != null ? String(a.answer) : null,
+      supporting_excerpt: a.supporting_excerpt != null ? String(a.supporting_excerpt) : null,
+    })),
+    model,
+  };
+}
 
-  // Validate, normalise, and reattach metadata from factFields
+/** Legacy extraction for old sessions without linked schema */
+async function generatePhase2Legacy(
+  interviewNotes: string,
+  factFields: LegacyFactField[],
+): Promise<{ answers: FieldAnswer[]; model: string }> {
+  const apiKey = Deno.env.get("OPENAI_API_KEY");
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
+
+  const model = "gpt-4o";
+  const fieldsJson = JSON.stringify(factFields.map((f) => ({ field_key: f.field_key, question: f.question })));
+
+  const systemPrompt = `You are a factual information extraction assistant for social services casework.
+Your task is to extract factual answers from interview notes.
+For each field: if the notes contain the answer, extract it with a supporting excerpt. Otherwise return null.
+STRICT RULES: Do NOT guess. Do NOT infer. Do NOT summarize. Answers must come directly from the notes.
+Return JSON: { "answers": [{ "field_key": "string", "answer": "string or null", "supporting_excerpt": "string or null" }] }`;
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `INTERVIEW NOTES\n${interviewNotes}\n\nFIELDS\n${fieldsJson}\n\nReturn JSON.` },
+      ],
+      temperature: 0.1,
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "unknown");
+    throw new Error(`OpenAI API error ${response.status}: ${errText}`);
+  }
+
+  const completion = await response.json();
+  const rawContent = completion.choices?.[0]?.message?.content;
+  if (!rawContent) throw new Error("OpenAI returned empty content");
+
+  const parsed = JSON.parse(rawContent);
+  if (!Array.isArray(parsed.answers)) throw new Error("Missing 'answers' array");
+
+  const fieldLookup = new Map(factFields.map((f) => [f.field_key, f]));
   const answers: FieldAnswer[] = parsed.answers.map((a: Record<string, unknown>) => {
     const key = String(a.field_key ?? "");
     const meta = fieldLookup.get(key);
@@ -212,6 +290,10 @@ Return the JSON response now.`;
       answer: a.answer != null ? String(a.answer) : null,
       confidence: (a.answer != null ? "high" : "low") as "high" | "medium" | "low",
       supporting_excerpt: a.supporting_excerpt != null ? String(a.supporting_excerpt) : null,
+      matching_mode: "extract_short_text",
+      requires_human_review: false,
+      human_review_reason: null,
+      skipped: false,
     };
   });
 
@@ -266,7 +348,7 @@ Deno.serve(async (req) => {
   const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  // ── Fetch session (for template_id, phase2_schema_id, and tenant context only) ─
+  // ── Fetch session ──
   const { data: session, error: sessionErr } = await supabase
     .from("sessions")
     .select("id, tenant_id, template_id, phase2_schema_id, metadata")
@@ -284,8 +366,9 @@ Deno.serve(async (req) => {
     return json(400, { success: false, error: "Session has no template_id assigned" });
   }
 
-  // ── Try to load fact fields from linked Phase 2 schema first ──
-  let factFields: FactField[] = [];
+  // ── Try linked Phase 2 schema (preferred path) ──
+  let allSchemaFields: SchemaFieldInput[] = [];
+  let usedLinkedSchema = false;
 
   if (session.phase2_schema_id) {
     const { data: schema, error: schemaErr } = await supabase
@@ -297,70 +380,212 @@ Deno.serve(async (req) => {
     if (!schemaErr && schema?.schema_json) {
       const schemaData = schema.schema_json as Record<string, unknown>;
       if (Array.isArray(schemaData.fields)) {
-        factFields = (schemaData.fields as Record<string, unknown>[])
-          .filter((f) => f.fact_based === true)
-          .map((f) => ({
-            field_key: String(f.field_key ?? ""),
-            label: String(f.label ?? ""),
-            type: String(f.answer_type ?? "text"),
-            question: String(f.template_prompt ?? f.matching_guidance ?? f.label ?? ""),
-          }));
+        allSchemaFields = (schemaData.fields as Record<string, unknown>[]).map((f) => ({
+          field_key: String(f.field_key ?? ""),
+          label: String(f.label ?? ""),
+          template_prompt: String(f.template_prompt ?? ""),
+          fact_based: f.fact_based === true,
+          answer_type: String(f.answer_type ?? "text"),
+          matching_mode: String(f.matching_mode ?? "extract_short_text"),
+          allowed_values: Array.isArray(f.allowed_values) ? f.allowed_values.map(String) : null,
+          requires_direct_statement: f.requires_direct_statement !== false,
+          return_null_if_missing: f.return_null_if_missing !== false,
+          matching_guidance: String(f.matching_guidance ?? ""),
+          requires_human_review: f.requires_human_review === true,
+          human_review_reason: f.human_review_reason != null ? String(f.human_review_reason) : null,
+          sensitivity_level: String(f.sensitivity_level ?? "low"),
+          ambiguity_level: String(f.ambiguity_level ?? "low"),
+          extraction_priority: String(f.extraction_priority ?? "medium"),
+        }));
+        usedLinkedSchema = true;
       }
     }
-    if (factFields.length > 0) {
-      console.log(`[${SERVICE_NAME}] Loaded ${factFields.length} fact fields from linked schema ${session.phase2_schema_id}`);
+    if (allSchemaFields.length > 0) {
+      console.log(`[${SERVICE_NAME}] Loaded ${allSchemaFields.length} fields from linked schema ${session.phase2_schema_id}`);
     }
   }
 
-  // ── Fallback: load from template metadata (backward compat) ──
+  // ── If using linked schema: split into extractable vs human-review-only ──
+  if (usedLinkedSchema && allSchemaFields.length > 0) {
+    const extractableFields = allSchemaFields.filter(
+      (f) => f.fact_based && f.matching_mode !== "human_review_only",
+    );
+    const humanReviewFields = allSchemaFields.filter(
+      (f) => !f.fact_based || f.matching_mode === "human_review_only",
+    );
+
+    console.log(
+      `[${SERVICE_NAME}] ${extractableFields.length} auto-extractable, ${humanReviewFields.length} human-review-only/non-factual`,
+    );
+
+    if (extractableFields.length === 0) {
+      // All fields need human review — return them all as skipped
+      const skippedAnswers: FieldAnswer[] = allSchemaFields.map((f) => ({
+        field_key: f.field_key,
+        label: f.label,
+        question: f.template_prompt,
+        answer: null,
+        confidence: "low" as const,
+        supporting_excerpt: null,
+        matching_mode: f.matching_mode,
+        requires_human_review: true,
+        human_review_reason: f.human_review_reason,
+        skipped: true,
+      }));
+
+      return json(200, {
+        success: true,
+        session_id: sessionId,
+        schema_source: "linked",
+        fact_field_count: 0,
+        answered_field_count: 0,
+        human_review_field_count: allSchemaFields.length,
+        model: "none",
+        generated_at: new Date().toISOString(),
+        answers: skippedAnswers,
+      });
+    }
+
+    // ── Extract only auto-extractable fields ──
+    let extractedAnswers: { field_key: string; answer: string | null; supporting_excerpt: string | null }[];
+    let model: string;
+    try {
+      const result = await generatePhase2Answers(interviewNotes.trim(), extractableFields);
+      extractedAnswers = result.answers;
+      model = result.model;
+    } catch (llmErr) {
+      console.error(`[${SERVICE_NAME}] LLM error:`, llmErr);
+      try {
+        await logEyeEvent(supabase, {
+          session_id: sessionId,
+          event_type: "guidance.phase2.failed",
+          serviceName: SERVICE_NAME,
+          payload: {
+            result: "failure",
+            tenant_id: session.tenant_id,
+            template_id: session.template_id,
+            error: llmErr instanceof Error ? llmErr.message : "Unknown LLM error",
+          },
+        });
+      } catch { /* never break on eye */ }
+      return json(502, {
+        success: false,
+        error: llmErr instanceof Error ? llmErr.message : "LLM generation failed",
+      });
+    }
+
+    // Build lookup for extracted answers
+    const extractedLookup = new Map(extractedAnswers.map((a) => [a.field_key, a]));
+
+    // Merge: extractable fields get LLM answers, human-review fields get skipped
+    const allAnswers: FieldAnswer[] = allSchemaFields.map((f) => {
+      const isExtractable = f.fact_based && f.matching_mode !== "human_review_only";
+      if (isExtractable) {
+        const extracted = extractedLookup.get(f.field_key);
+        return {
+          field_key: f.field_key,
+          label: f.label,
+          question: f.template_prompt,
+          answer: extracted?.answer ?? null,
+          confidence: (extracted?.answer != null ? "high" : "low") as "high" | "medium" | "low",
+          supporting_excerpt: extracted?.supporting_excerpt ?? null,
+          matching_mode: f.matching_mode,
+          requires_human_review: f.requires_human_review,
+          human_review_reason: f.human_review_reason,
+          skipped: false,
+        };
+      }
+      // Human-review-only or non-factual
+      return {
+        field_key: f.field_key,
+        label: f.label,
+        question: f.template_prompt,
+        answer: null,
+        confidence: "low" as const,
+        supporting_excerpt: null,
+        matching_mode: f.matching_mode,
+        requires_human_review: true,
+        human_review_reason: f.human_review_reason ?? "Not auto-extractable",
+        skipped: true,
+      };
+    });
+
+    const answeredCount = allAnswers.filter((a) => a.answer !== null).length;
+    const generatedAt = new Date().toISOString();
+
+    try {
+      await logEyeEvent(supabase, {
+        session_id: sessionId,
+        event_type: "guidance.phase2.generated",
+        serviceName: SERVICE_NAME,
+        payload: {
+          result: "success",
+          schema_source: "linked",
+          tenant_id: session.tenant_id,
+          template_id: session.template_id,
+          total_fields: allSchemaFields.length,
+          extractable_fields: extractableFields.length,
+          human_review_fields: humanReviewFields.length,
+          answered_field_count: answeredCount,
+          model,
+        },
+      });
+    } catch { /* never break on eye */ }
+
+    return json(200, {
+      success: true,
+      session_id: sessionId,
+      schema_source: "linked",
+      fact_field_count: extractableFields.length,
+      answered_field_count: answeredCount,
+      human_review_field_count: humanReviewFields.length,
+      total_field_count: allSchemaFields.length,
+      model,
+      generated_at: generatedAt,
+      answers: allAnswers,
+    });
+  }
+
+  // ── FALLBACK: load from template metadata (backward compat) ──
   // TODO(migration): This fallback exists for sessions created before the
   // Phase 2 schema architecture was introduced. Once all active sessions
   // have a linked phase2_schema_id, this block should be removed.
-  // Tracked by the reusable-schema migration path.
-  if (factFields.length === 0) {
-    console.warn(
-      `[${SERVICE_NAME}] FALLBACK: No linked Phase 2 schema for session ${sessionId}. ` +
-      `Loading fact fields from kb_templates.metadata. This is deprecated — ` +
-      `sessions should have phase2_schema_id set during Guidance Phase 1.`
-    );
+  console.warn(
+    `[${SERVICE_NAME}] FALLBACK: No linked Phase 2 schema for session ${sessionId}. ` +
+    `Loading fact fields from kb_templates.metadata. This is deprecated — ` +
+    `sessions should have phase2_schema_id set during Guidance Phase 1.`,
+  );
 
-    const { data: template, error: templateErr } = await supabase
-      .from("kb_templates")
-      .select("id, tenant_id, name, version, metadata")
-      .eq("id", session.template_id)
-      .maybeSingle();
+  const { data: template, error: templateErr } = await supabase
+    .from("kb_templates")
+    .select("id, tenant_id, name, version, metadata")
+    .eq("id", session.template_id)
+    .maybeSingle();
 
-    if (templateErr) {
-      console.error(`[${SERVICE_NAME}] Template fetch error:`, templateErr.message);
-      return json(500, { success: false, error: "Failed to fetch template" });
-    }
-    if (!template) {
-      return json(404, { success: false, error: "Template not found" });
-    }
-    if (!template.metadata || typeof template.metadata !== "object") {
-      return json(400, { success: false, error: "Template metadata is null or malformed" });
-    }
-
-    factFields = extractFactBasedFields(template.metadata as Record<string, unknown>);
+  if (templateErr) {
+    console.error(`[${SERVICE_NAME}] Template fetch error:`, templateErr.message);
+    return json(500, { success: false, error: "Failed to fetch template" });
+  }
+  if (!template) {
+    return json(404, { success: false, error: "Template not found" });
+  }
+  if (!template.metadata || typeof template.metadata !== "object") {
+    return json(400, { success: false, error: "Template metadata is null or malformed" });
   }
 
-  if (factFields.length === 0) {
+  const legacyFields = extractFactBasedFieldsLegacy(template.metadata as Record<string, unknown>);
+  if (legacyFields.length === 0) {
     return json(400, {
       success: false,
       error: "No fact-based fields found in template schema or metadata",
     });
   }
 
-  // ── Generate field mappings via LLM ───────────────────────
-  let answers: FieldAnswer[];
-  let model: string;
+  let legacyResult: { answers: FieldAnswer[]; model: string };
   try {
-    const result = await generatePhase2FieldMappings(interviewNotes.trim(), factFields);
-    answers = result.answers;
-    model = result.model;
+    legacyResult = await generatePhase2Legacy(interviewNotes.trim(), legacyFields);
   } catch (llmErr) {
-    console.error(`[${SERVICE_NAME}] LLM error:`, llmErr);
-
+    console.error(`[${SERVICE_NAME}] Legacy LLM error:`, llmErr);
     try {
       await logEyeEvent(supabase, {
         session_id: sessionId,
@@ -368,25 +593,21 @@ Deno.serve(async (req) => {
         serviceName: SERVICE_NAME,
         payload: {
           result: "failure",
+          schema_source: "legacy_fallback",
           tenant_id: session.tenant_id,
           template_id: session.template_id,
           error: llmErr instanceof Error ? llmErr.message : "Unknown LLM error",
         },
       });
-    } catch {
-      /* never break on eye */
-    }
-
+    } catch { /* never break on eye */ }
     return json(502, {
       success: false,
       error: llmErr instanceof Error ? llmErr.message : "LLM generation failed",
     });
   }
 
-  const answeredCount = answers.filter((a) => a.answer !== null).length;
-  const generatedAt = new Date().toISOString();
+  const answeredCount = legacyResult.answers.filter((a) => a.answer !== null).length;
 
-  // ── Eye event (metadata only — no raw notes) ──────────────
   try {
     await logEyeEvent(supabase, {
       session_id: sessionId,
@@ -394,25 +615,24 @@ Deno.serve(async (req) => {
       serviceName: SERVICE_NAME,
       payload: {
         result: "success",
+        schema_source: "legacy_fallback",
         tenant_id: session.tenant_id,
         template_id: session.template_id,
-        fact_field_count: factFields.length,
+        fact_field_count: legacyFields.length,
         answered_field_count: answeredCount,
-        model,
+        model: legacyResult.model,
       },
     });
-  } catch {
-    /* never break on eye */
-  }
+  } catch { /* never break on eye */ }
 
-  // Return full answers in response — nothing written to session
   return json(200, {
     success: true,
     session_id: sessionId,
-    fact_field_count: factFields.length,
+    schema_source: "legacy_fallback",
+    fact_field_count: legacyFields.length,
     answered_field_count: answeredCount,
-    model,
-    generated_at: generatedAt,
-    answers,
+    model: legacyResult.model,
+    generated_at: new Date().toISOString(),
+    answers: legacyResult.answers,
   });
 });
