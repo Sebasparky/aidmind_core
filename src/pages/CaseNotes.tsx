@@ -78,7 +78,6 @@ interface UploadedFile {
   size: number;
   mime: string;
   extractedText: string | null;
-  storagePath: string | null;
   status: ExtractionStatus;
 }
 
