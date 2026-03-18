@@ -12,6 +12,7 @@ export interface RecentNote {
   status: NoteStatus;
   updatedAt: Date;
   guidanceCompleted: boolean;
+  caseNotesCompleted: boolean;
   reviewerCompleted: boolean;
 }
 

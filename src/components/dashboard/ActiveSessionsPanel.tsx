@@ -87,6 +87,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         lastAccessed: note.updatedAt,
         createdAt: note.updatedAt,
         guidanceCompleted: note.guidanceCompleted,
+        caseNotesCompleted: note.caseNotesCompleted,
         reviewerCompleted: note.reviewerCompleted,
       }));
   }, [notes]);
