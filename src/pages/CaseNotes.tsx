@@ -1150,7 +1150,7 @@ export default function CaseNotes() {
                           <span className="text-xs text-muted-foreground">
                             Generated {new Date(result.generated_at).toLocaleString()}
                           </span>
-                          <Badge variant="secondary" className="text-xs">Draft</Badge>
+                          
                         </div>
                       )}
                     </div>
