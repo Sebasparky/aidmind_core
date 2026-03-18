@@ -993,9 +993,9 @@ export default function CaseNotes() {
                             <X className="h-3.5 w-3.5" />
                           </Button>
                         </div>
-                        {uploadedFile.status === "uploading" && (
+                        {uploadedFile.status === "reading" && (
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <Loader2 className="h-3 w-3 animate-spin" /> Uploading to storage…
+                            <Loader2 className="h-3 w-3 animate-spin" /> Reading file…
                           </div>
                         )}
                         {uploadedFile.status === "extracting" && (
