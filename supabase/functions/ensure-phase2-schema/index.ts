@@ -406,6 +406,7 @@ async function generateSchemaFromTemplate(
   templateName: string,
   templateContent: string,
   templateMetadata: Record<string, unknown>,
+  retryContext?: { issues: string[]; previousFieldCount: number },
 ): Promise<{ fields: SchemaField[]; model: string; sections: string[]; detectedSections: string[] }> {
   const apiKey = Deno.env.get("OPENAI_API_KEY");
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
