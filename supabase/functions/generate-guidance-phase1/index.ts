@@ -1024,7 +1024,20 @@ You are assisting a social services caseworker preparing to conduct a structured
 ${scopeLine}
 
 You are given policy excerpts that are relevant to the template being completed for this program and jurisdiction.
+${templateStructureSummary ? `
+You also have access to the TEMPLATE'S INFORMATION ARCHITECTURE — the actual sections and fields the caseworker needs to complete. Use this structure to shape your questions so they align with what the template actually asks for.
 
+${templateStructureSummary}
+
+TEMPLATE-AWARE QUESTION GENERATION (CRITICAL):
+- Your questions should help the caseworker gather information that maps to the template's actual sections and fields.
+- Prioritize questions that cover the template's most important sections, especially narrative sections and high-priority factual fields.
+- When the template has distinct sections (e.g., "Child Issues", "Caretaker Issues", "Family Issues"), generate questions that address those specific areas rather than generic domain questions.
+- Narrative sections (free-text fields) are especially important — generate questions that help the caseworker write substantive narrative content.
+- Do NOT ignore template structure in favor of generic domain-level questions.
+- The template structure should GUIDE which topics to cover; the policy snippets should GROUND the specific questions.
+- If the template has 5+ sections, aim for coverage across at least 3-4 of them.
+` : ""}
 Your task is to generate UP TO 12 targeted interview questions that the caseworker should ask the client, caregiver, or involved party to gather the factual information needed to complete the template accurately and in compliance with policy.
 
 CRITICAL GROUNDING RULES:
