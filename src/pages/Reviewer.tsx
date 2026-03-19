@@ -265,6 +265,7 @@ export default function Reviewer() {
     setToolState("recovering");
 
     let structured_answers: any[] = [];
+    let review_worthy_answers: any[] = [];
     let unanswered_fields: any[] = [];
     let human_review_fields: any[] = [];
 
@@ -272,6 +273,7 @@ export default function Reviewer() {
       try {
         const recovery = recoverFieldsFromDocument(extractedFullText, schemaFields);
         structured_answers = recovery.structured_answers;
+        review_worthy_answers = recovery.review_worthy_answers;
         unanswered_fields = recovery.unanswered_fields;
         human_review_fields = recovery.human_review_fields;
 
@@ -299,6 +301,7 @@ export default function Reviewer() {
         page_count: pageCount,
         text_length: extractedFullText.length,
         structured_answers_count: structured_answers.length,
+        review_worthy_count: review_worthy_answers.length,
         unanswered_count: unanswered_fields.length,
         human_review_count: human_review_fields.length,
         has_schema: !!schemaFields,
@@ -312,6 +315,7 @@ export default function Reviewer() {
         phase2_schema_id: sessionInfo.phase2SchemaId || undefined,
         document_text: extractedFullText,
         structured_answers,
+        review_worthy_answers,
         unanswered_fields,
         human_review_fields,
       };
