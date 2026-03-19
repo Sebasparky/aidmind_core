@@ -78,6 +78,11 @@ export interface Phase2SchemaField {
   sensitivity_level: "low" | "medium" | "high";
   ambiguity_level: "low" | "medium" | "high";
   extraction_priority: "high" | "medium" | "low";
+  // v2.1 section-aware fields (optional for backward compat with older schemas)
+  section?: string;
+  field_group?: string | null;
+  content_type?: "checkbox" | "narrative" | "factual" | "identifier" | "categorical";
+  field_purpose?: string[];
 }
 
 // ── Review relevance classifier ──────────────────────────────────────────
