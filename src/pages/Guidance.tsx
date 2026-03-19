@@ -143,9 +143,9 @@ export default function Guidance() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const handleCopyCategory = async (category: GuidanceCategory) => {
+  const handleCopyCategory = async (category: string) => {
     if (!session?.guidanceOutput) return;
-    const questions = session.guidanceOutput.questions.filter((q) => q.category === category);
+    const questions = session.guidanceOutput.questions.filter((q) => (q.category || "Other") === category);
     const text = questions.map((q, i) => `${i + 1}. ${q.question}`).join("\n");
     await navigator.clipboard.writeText(text);
     setCopiedId(`cat-${category}`);
