@@ -69,6 +69,8 @@ interface PersistedReviewerState {
   recoveryStats: { answered: number; missing: number; humanReview: number } | null;
   activeSnippet: string | null;
   copiedCategory: string | null;
+  reconciliationResult: ReconciliationResult | null;
+  templateParseResult: CompletedTemplateParse | null;
 }
 
 function reviewerStorageKey(sessionId: string) {
