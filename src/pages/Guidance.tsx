@@ -24,9 +24,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import {
   type GuidanceQuestion,
-  type GuidanceCategory,
   type TimelineConsideration,
-  GUIDANCE_CATEGORIES,
 } from "@/lib/tools/guidance-types";
 import { useGuidanceSession } from "@/hooks/useGuidanceSession";
 import { useEyeLogger } from "@/hooks/useEyeLogger";
@@ -143,9 +141,9 @@ export default function Guidance() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const handleCopyCategory = async (category: GuidanceCategory) => {
+  const handleCopyCategory = async (category: string) => {
     if (!session?.guidanceOutput) return;
-    const questions = session.guidanceOutput.questions.filter((q) => q.category === category);
+    const questions = session.guidanceOutput.questions.filter((q) => (q.category || "Other") === category);
     const text = questions.map((q, i) => `${i + 1}. ${q.question}`).join("\n");
     await navigator.clipboard.writeText(text);
     setCopiedId(`cat-${category}`);
@@ -155,8 +153,15 @@ export default function Guidance() {
   const handleCopyAll = async () => {
     if (!session?.guidanceOutput) return;
     const output = session.guidanceOutput;
-    const text = GUIDANCE_CATEGORIES.map((cat) => {
-      const qs = output.questions.filter((q) => q.category === cat);
+    // Dynamically group for copy
+    const seen = new Set<string>();
+    const cats: string[] = [];
+    for (const q of output.questions) {
+      const c = q.category || "Other";
+      if (!seen.has(c)) { seen.add(c); cats.push(c); }
+    }
+    const text = cats.map((cat) => {
+      const qs = output.questions.filter((q) => (q.category || "Other") === cat);
       if (qs.length === 0) return "";
       return `## ${cat}\n${qs.map((q, i) => `${i + 1}. ${q.question}`).join("\n")}`;
     })
@@ -208,11 +213,28 @@ export default function Guidance() {
   const isTemplateRequired = runError?.code === "TEMPLATE_REQUIRED";
   const isScopeRequired = runError?.code === "SCOPE_REQUIRED";
 
-  // Group questions by category
-  const groupedQuestions: Record<GuidanceCategory, GuidanceQuestion[]> = {} as any;
+  // Group questions by category — dynamic to handle both old fixed categories
+  // and new schema-driven categories (e.g. template section names)
+  const allCategories: string[] = [];
+  const groupedQuestions: Record<string, GuidanceQuestion[]> = {};
   if (output) {
-    for (const cat of GUIDANCE_CATEGORIES) {
-      groupedQuestions[cat] = output.questions.filter((q) => q.category === cat);
+    // Collect all unique categories in order of appearance
+    for (const q of output.questions) {
+      const cat = q.category || "Other";
+      if (!groupedQuestions[cat]) {
+        groupedQuestions[cat] = [];
+        allCategories.push(cat);
+      }
+      groupedQuestions[cat].push(q);
+    }
+
+    // Debug diagnostics (dev only)
+    if (import.meta.env.DEV) {
+      console.log("[Guidance] payload keys:", Object.keys(output));
+      console.log("[Guidance] questions.length:", output.questions.length);
+      console.log("[Guidance] first question:", output.questions[0]);
+      console.log("[Guidance] categories found:", allCategories);
+      console.log("[Guidance] per-category counts:", Object.fromEntries(allCategories.map(c => [c, groupedQuestions[c].length])));
     }
   }
 
@@ -557,7 +579,7 @@ export default function Guidance() {
                   </p>
 
                   {/* Category cards */}
-                  {GUIDANCE_CATEGORIES.map((category) => {
+                  {allCategories.map((category) => {
                     const questions = groupedQuestions[category] || [];
                     if (questions.length === 0) return null;
 
