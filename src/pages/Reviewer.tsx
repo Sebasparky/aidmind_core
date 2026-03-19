@@ -407,6 +407,8 @@ export default function Reviewer() {
     setErrorMessage(null);
     setActiveSnippet(null);
     setRecoveryStats(null);
+    setReconciliationResult(null);
+    setTemplateParseResult(null);
     if (sessionId) clearReviewerState(sessionId);
   };
 
