@@ -1,5 +1,5 @@
 /**
- * Schema-aware field recovery — hardened deterministic heuristic layer
+ * Schema-aware field recovery — hardened deterministic heuristic layer (v2.1)
  *
  * RULES:
  *   1. Every recovery REQUIRES a local anchor (label/prompt match)
@@ -7,6 +7,8 @@
  *   3. Recovery searches only local block (same line, next line, small window)
  *   4. Each result includes recovery_method and anchor_used for debugging
  *   5. Fields are classified as review_worthy vs structure_only
+ *   6. Garbage span detection rejects scaffolding/header spillover
+ *   7. Section-bounded recovery for large select_many checkbox blocks
  */
 
 import type {
@@ -30,6 +32,76 @@ const TEXT_BLOCK_CHARS = 300;
 
 /** Max chars for a recovered answer */
 const MAX_ANSWER_LENGTH = 500;
+
+/** Max sensible length for short identity fields (name, number, ID) */
+const MAX_SHORT_ID_LENGTH = 80;
+
+/** Max sensible length for literal span fields */
+const MAX_LITERAL_SPAN_LENGTH = 200;
+
+/** Section-bounded search window for large select_many blocks */
+const SECTION_BLOCK_CHARS = 1500;
+
+// ── Garbage detection ─────────────────────────────────────────────────────
+
+const SCAFFOLDING_PATTERNS = [
+  /general\s+instructions/i,
+  /\bpage\s+\d+/i,
+  /\bSECTION\s+\d/i,
+  /\bPART\s+[IVX\d]/i,
+  /\bCONFIDENTIAL\b/i,
+  /\bFORM\s+#?\d/i,
+  /\bREVISED\s+\d/i,
+  /\bAPPROVED\s+BY\b/i,
+  /\bDRAFT\b/i,
+];
+
+/** Patterns that look like neighboring field labels (e.g., "Case Number:" or "Agency/District") */
+const FIELD_LABEL_PATTERN = /[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}\s*[:\/]/;
+
+/**
+ * Detect if a recovered span is likely garbage (form scaffolding, headers,
+ * neighboring labels, or instruction text rather than a real answer).
+ */
+function isGarbageSpan(value: string, field: Phase2SchemaField): boolean {
+  if (!value || value.trim().length === 0) return true;
+
+  const trimmed = value.trim();
+
+  // Too many all-caps tokens (likely headers)
+  const tokens = trimmed.split(/\s+/);
+  const capsTokens = tokens.filter((t) => t.length > 2 && t === t.toUpperCase());
+  if (tokens.length > 3 && capsTokens.length / tokens.length > 0.5) return true;
+
+  // Contains scaffolding patterns
+  for (const pat of SCAFFOLDING_PATTERNS) {
+    if (pat.test(trimmed)) return true;
+  }
+
+  // Contains multiple field-label-like patterns (neighboring labels swallowed)
+  const labelMatches = trimmed.match(/[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,3}\s*:/g);
+  if (labelMatches && labelMatches.length >= 2) return true;
+
+  // For short identity fields, enforce strict length
+  const shortModes = new Set(["extract_literal_span", "extract_short_text"]);
+  if (shortModes.has(field.matching_mode)) {
+    // If label suggests a short identity field, apply tight limit
+    const shortIdentityLabels = /\b(name|number|id|phone|address|email|ssn|dob|date of birth)\b/i;
+    if (shortIdentityLabels.test(field.label) && trimmed.length > MAX_SHORT_ID_LENGTH) {
+      return true;
+    }
+    // General literal span max
+    if (field.matching_mode === "extract_literal_span" && trimmed.length > MAX_LITERAL_SPAN_LENGTH) {
+      return true;
+    }
+  }
+
+  // Contains too many checkbox symbols (swallowed a checkbox block)
+  const checkboxSymbols = (trimmed.match(/[☐☑✓✗✘□■▢▣☒xX]/g) || []).length;
+  if (checkboxSymbols >= 3) return true;
+
+  return false;
+}
 
 // ── Main entry point ──────────────────────────────────────────────────────
 
@@ -58,7 +130,7 @@ export function recoverFieldsFromDocument(
     // Human-review-only: include but mark
     if (field.requires_human_review) {
       const anchor = findAnchor(field, normalizedText, lowerText);
-      const recovered = anchor ? attemptLocalRecovery(field, normalizedText, anchor) : null;
+      const recovered = anchor ? attemptLocalRecovery(field, normalizedText, lowerText, anchor) : null;
 
       human_review_fields.push({
         field_key: field.field_key,
@@ -114,9 +186,36 @@ export function recoverFieldsFromDocument(
       continue;
     }
 
-    const recovered = attemptLocalRecovery(field, normalizedText, anchor);
+    const recovered = attemptLocalRecovery(field, normalizedText, lowerText, anchor);
 
     if (recovered && recovered.answer) {
+      // Garbage detection gate
+      if (isGarbageSpan(recovered.answer, field)) {
+        const rejected: RecoveredField = {
+          field_key: field.field_key,
+          label: field.label,
+          template_prompt: field.template_prompt,
+          answer: null,
+          recovery_confidence: "unrecovered",
+          recovery_method: "unresolved",
+          anchor_used: anchor.anchorText,
+          source_excerpt: recovered.excerpt,
+          matching_mode: field.matching_mode,
+          review_relevance: relevance,
+          requires_human_review: false,
+          missing: true,
+        };
+        structured_answers.push(rejected);
+        if (relevance === "review_worthy") review_worthy_answers.push(rejected);
+        unanswered_fields.push({
+          field_key: field.field_key,
+          label: field.label,
+          matching_mode: field.matching_mode,
+          review_relevance: relevance,
+        });
+        continue;
+      }
+
       const entry: RecoveredField = {
         field_key: field.field_key,
         label: field.label,
@@ -249,6 +348,41 @@ function cleanAnswer(raw: string): string {
   return cleaned;
 }
 
+// ── Section-bounded block extraction ──────────────────────────────────────
+
+/**
+ * For large select_many fields, extract a section-bounded region starting
+ * from the anchor until the next major section header or a large gap.
+ * This captures the full checkbox block without spilling into other sections.
+ */
+function getSectionBoundedBlock(
+  text: string,
+  anchor: AnchorResult,
+  maxChars: number = SECTION_BLOCK_CHARS,
+): string {
+  const afterAnchor = anchor.index + anchor.anchorText.length;
+  const candidate = text.slice(afterAnchor, afterAnchor + maxChars);
+
+  // Find the next major section header (all-caps line, numbered section, or bold-like header)
+  const sectionBreakPatterns = [
+    /\n[A-Z][A-Z\s]{5,}(?:\n|$)/,           // ALL-CAPS header line
+    /\n(?:SECTION|PART|CHAPTER)\s+[\dIVX]/i, // Explicit section marker
+    /\n\d+\.\s+[A-Z]/,                       // Numbered section (e.g., "3. Services")
+    /\n_{3,}/,                                // Horizontal rule/separator
+    /\n={3,}/,                                // Equals separator
+  ];
+
+  let endIndex = candidate.length;
+  for (const pat of sectionBreakPatterns) {
+    const m = pat.exec(candidate);
+    if (m && m.index < endIndex) {
+      endIndex = m.index;
+    }
+  }
+
+  return candidate.slice(0, endIndex);
+}
+
 // ── Recovery dispatch (all modes require anchor) ──────────────────────────
 
 interface LocalRecoveryResult {
@@ -261,13 +395,14 @@ interface LocalRecoveryResult {
 function attemptLocalRecovery(
   field: Phase2SchemaField,
   text: string,
+  lowerText: string,
   anchor: AnchorResult,
 ): LocalRecoveryResult | null {
   switch (field.matching_mode) {
     case "select_one":
       return recoverSelectOne(field, text, anchor);
     case "select_many":
-      return recoverSelectMany(field, text, anchor);
+      return recoverSelectMany(field, text, lowerText, anchor);
     case "boolean_decision":
       return recoverBoolean(text, anchor);
     case "extract_number":
@@ -275,11 +410,11 @@ function attemptLocalRecovery(
     case "extract_date":
       return recoverDate(text, anchor);
     case "extract_literal_span":
-      return recoverTextSpan(text, anchor, true);
+      return recoverTextSpan(field, text, anchor, true);
     case "extract_short_text":
-      return recoverTextSpan(text, anchor, false);
+      return recoverTextSpan(field, text, anchor, false);
     default:
-      return recoverTextSpan(text, anchor, false);
+      return recoverTextSpan(field, text, anchor, false);
   }
 }
 
@@ -292,7 +427,7 @@ function recoverSelectOne(
 ): LocalRecoveryResult | null {
   if (!field.allowed_values || field.allowed_values.length === 0) return null;
 
-  // Search same line first, then local block
+  // Search same line first, then next line, then local block
   const sameLine = getSameLineText(text, anchor).toLowerCase();
   const nextLine = getNextLineText(text, anchor).toLowerCase();
   const localBlock = getLocalBlock(text, anchor, LOCAL_BLOCK_CHARS).toLowerCase();
@@ -337,30 +472,66 @@ function recoverSelectOne(
   return null;
 }
 
+/**
+ * Section-bounded select_many recovery.
+ *
+ * Strategy:
+ *   1. Extract a section-bounded block from anchor to next section header
+ *   2. Look for selection markers (X, ✓, ☑, checked) near allowed values
+ *   3. Fall back to simple inclusion if markers aren't found but values appear
+ *   4. Preserve schema order in results
+ */
 function recoverSelectMany(
   field: Phase2SchemaField,
   text: string,
+  _lowerText: string,
   anchor: AnchorResult,
 ): LocalRecoveryResult | null {
   if (!field.allowed_values || field.allowed_values.length === 0) return null;
 
-  const localBlock = getLocalBlock(text, anchor, LOCAL_BLOCK_CHARS).toLowerCase();
-  const matched: string[] = [];
+  // Use section-bounded block instead of small local block
+  const sectionBlock = getSectionBoundedBlock(text, anchor);
+  const sectionLower = sectionBlock.toLowerCase();
 
-  // Preserve schema order
+  // Strategy 1: Look for selection markers near allowed values
+  const markerMatched: string[] = [];
+  const inclusionMatched: string[] = [];
+
   for (const val of field.allowed_values) {
-    if (localBlock.includes(val.toLowerCase())) {
-      matched.push(val);
+    const lv = val.toLowerCase();
+    const valIdx = sectionLower.indexOf(lv);
+    if (valIdx === -1) continue;
+
+    // Check for selection markers within ~10 chars before the value
+    const markerRegion = sectionBlock.slice(Math.max(0, valIdx - 10), valIdx + lv.length + 5);
+    const hasMarker = /[xX✓☑✗☒■▣]/.test(markerRegion) ||
+                      /\[\s*[xX✓]\s*\]/.test(markerRegion) ||
+                      /\(\s*[xX✓]\s*\)/.test(markerRegion);
+
+    if (hasMarker) {
+      markerMatched.push(val);
+    } else {
+      inclusionMatched.push(val);
     }
   }
 
+  // Prefer marker-based matches; fall back to inclusion only if no markers found anywhere
+  const hasAnyMarkers = markerMatched.length > 0;
+  const matched = hasAnyMarkers ? markerMatched : inclusionMatched;
+
   if (matched.length === 0) return null;
+
+  // If using inclusion fallback and most allowed values match, it's likely
+  // just the option list being present (not actually selected) — reject
+  if (!hasAnyMarkers && matched.length > field.allowed_values.length * 0.7) {
+    return null;
+  }
 
   return {
     answer: matched.join(", "),
-    confidence: "high",
-    method: "allowed_value_local_match",
-    excerpt: localBlock.trim().slice(0, 100),
+    confidence: hasAnyMarkers ? "high" : "medium",
+    method: hasAnyMarkers ? "allowed_value_local_match" : "allowed_value_local_match",
+    excerpt: sectionBlock.trim().slice(0, 120),
   };
 }
 
@@ -475,6 +646,7 @@ function recoverDate(
 }
 
 function recoverTextSpan(
+  field: Phase2SchemaField,
   text: string,
   anchor: AnchorResult,
   literalOnly: boolean,
@@ -488,7 +660,7 @@ function recoverTextSpan(
       ? sameLine.split(/\s{3,}|\t/)[0].trim() // smallest clean span
       : sameLine;
 
-    if (answer.length >= 1) {
+    if (answer.length >= 1 && !isGarbageSpan(answer, field)) {
       return {
         answer: answer.slice(0, MAX_ANSWER_LENGTH),
         confidence: answer.length < 80 ? "high" : "medium",
@@ -505,7 +677,7 @@ function recoverTextSpan(
       ? nextLine.split(/\s{3,}|\t/)[0].trim()
       : nextLine;
 
-    if (answer.length >= 1) {
+    if (answer.length >= 1 && !isGarbageSpan(answer, field)) {
       return {
         answer: answer.slice(0, MAX_ANSWER_LENGTH),
         confidence: "medium",
@@ -520,7 +692,7 @@ function recoverTextSpan(
     const block = cleanAnswer(getLocalBlock(text, anchor, windowSize));
     // Take up to first double newline or end
     const trimmed = block.split(/\n\n/)[0].trim();
-    if (trimmed.length >= 1) {
+    if (trimmed.length >= 1 && !isGarbageSpan(trimmed, field)) {
       return {
         answer: trimmed.slice(0, MAX_ANSWER_LENGTH),
         confidence: "low",

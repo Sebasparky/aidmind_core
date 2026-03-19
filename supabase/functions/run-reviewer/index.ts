@@ -1,5 +1,5 @@
 /**
- * run-reviewer v2 Edge Function (hardened)
+ * run-reviewer v2.1 Edge Function (hardened)
  *
  * Accepts a TRANSIENT structured reviewer payload with:
  *   - document_text: raw text for tone/bias/policy-language review
@@ -7,8 +7,7 @@
  *   - review_worthy_answers: only authored-text fields for tone/bias analysis
  *   - unanswered_fields / human_review_fields
  *
- * The reviewer model focuses linguistic analysis on review_worthy_answers
- * and uses structured_answers primarily for completeness/consistency.
+ * Post-processing deduplicates overlapping completeness issues.
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -55,7 +54,7 @@ async function eye(
   }
 }
 
-// ── Reviewer v2 Prompt (hardened) ──────────────────────────────────────────
+// ── Reviewer v2.1 Prompt (hardened categorization) ─────────────────────────
 
 const REVIEWER_V2_SYSTEM_PROMPT = `You are AidMind Reviewer, a compliance and quality auditor for social-services case documentation.
 
@@ -66,20 +65,34 @@ You receive a STRUCTURED REVIEW PACKET containing:
 4. "human_review_fields" — fields requiring manual human verification (do NOT flag as missing).
 5. "document_text" — raw document text as backup context.
 
-ISSUE CATEGORIES AND WHAT TO USE FOR EACH:
+ISSUE CATEGORIES — STRICT DEFINITIONS:
 
-- completeness: Use structured_answers + unanswered_fields. Check for missing required fields, incomplete sections, gaps.
-- consistency: Use structured_answers. Check for contradictions between field values, logical inconsistencies.
-- tone: Use review_worthy_answers + document_text. Check for unprofessional, judgmental, or emotionally charged AUTHORED language.
-- bias: Use review_worthy_answers + document_text. Check for assumptions, stereotypes, stigmatizing language in AUTHORED text.
-- policy_language: Use review_worthy_answers + document_text. Check for prohibited terms, incorrect terminology in AUTHORED text.
+- completeness: ONLY for missing required fields, incomplete sections, blank required items. Report ONE issue per missing field. Do NOT group multiple missing fields into a single issue, and do NOT repeat the same field across multiple issues.
 
-CRITICAL EFFICIENCY RULES:
-1. Do NOT analyze checkbox/categorical/boolean/number/date fields for tone or bias. They are structured selections, not authored language.
-2. Focus tone/bias/policy-language analysis on review_worthy_answers (short-answer, free-text, narrative content).
-3. Use document_text as backup context when review_worthy_answers are insufficient.
-4. Treat low-confidence recovered values cautiously — note uncertainty rather than treating them as definitive.
-5. human_review_fields are intentionally excluded from auto-recovery; do NOT flag their absence as completeness issues.
+- consistency: ONLY for genuine contradictions or logical conflicts. Examples: a field says "No children" but another says "2 minors in household"; a date of birth conflicts with stated age. Do NOT use for tone or wording issues. A word being "judgmental" or "dramatic" is NEVER a consistency issue.
+
+- tone: For unprofessional, judgmental, emotionally charged, blaming, shaming, or condescending language in AUTHORED text. Examples: "mother was dramatic", "client was irresponsible", "father minimizes the impact". These are tone issues, NOT consistency issues.
+
+- bias: For stigmatizing language, unsupported assumptions, stereotypes, subjective labels presented as fact in AUTHORED text. Examples: "typical substance abuse behavior", "as expected given the neighborhood", "uncooperative demeanor suggests deception".
+
+- policy_language: For prohibited terminology, incorrect policy terms, wording that conflicts with policy standards in AUTHORED text.
+
+CRITICAL CATEGORIZATION RULES:
+1. If the issue is about HOW something is worded (judgmental, emotional, unprofessional), it is TONE — never consistency.
+2. If the issue is about ASSUMPTIONS or STEREOTYPES, it is BIAS — never consistency.
+3. CONSISTENCY requires TWO conflicting data points. A single problematic phrase is never a consistency issue.
+4. Do NOT analyze checkbox/categorical/boolean/number/date fields for tone or bias — they are structured selections.
+5. Focus tone/bias/policy-language analysis on review_worthy_answers and document_text only.
+
+COMPLETENESS RULES:
+1. Report exactly ONE issue per missing field.
+2. Do NOT create grouped issues that bundle multiple missing fields (e.g., "Fields A, B, and C are blank").
+3. Do NOT create an issue for a field that is already covered by another completeness issue.
+4. human_review_fields are intentionally excluded from auto-recovery — do NOT flag their absence.
+
+CONFIDENCE RULES:
+1. Treat low-confidence recovered values cautiously — note uncertainty rather than treating them as definitive.
+2. When recovery is weak, use raw document_text as backup reference.
 
 SEVERITY LEVELS:
 - "low": Minor issue, may want to address
@@ -156,6 +169,79 @@ function validateReviewReport(parsed: unknown): boolean {
   return true;
 }
 
+// ── Completeness Issue Deduplication ────────────────────────────────────────
+
+interface ReviewIssue {
+  type: string;
+  severity: string;
+  excerpt: string;
+  explanation: string;
+  field_key?: string;
+}
+
+/**
+ * Post-process issues to remove duplicate/overlapping completeness findings.
+ *
+ * Rules:
+ *   1. If two completeness issues reference the same field_key, keep only one.
+ *   2. If a completeness issue mentions field labels already covered by
+ *      another per-field completeness issue, remove the grouped one.
+ *   3. If a grouped completeness issue has no field_key but mentions
+ *      multiple field labels that are each covered individually, remove it.
+ */
+function dedupeCompletenessIssues(issues: ReviewIssue[]): ReviewIssue[] {
+  const completeness = issues.filter((i) => i.type === "completeness");
+  const others = issues.filter((i) => i.type !== "completeness");
+
+  if (completeness.length <= 1) return issues;
+
+  // Collect field_keys that have dedicated per-field issues
+  const coveredFieldKeys = new Set<string>();
+  const perFieldIssues: ReviewIssue[] = [];
+  const groupedIssues: ReviewIssue[] = [];
+
+  for (const issue of completeness) {
+    if (issue.field_key && issue.field_key.trim().length > 0) {
+      if (coveredFieldKeys.has(issue.field_key)) {
+        // Duplicate field_key — skip
+        continue;
+      }
+      coveredFieldKeys.add(issue.field_key);
+      perFieldIssues.push(issue);
+    } else {
+      groupedIssues.push(issue);
+    }
+  }
+
+  // For grouped issues (no field_key), check if the explanation mentions
+  // labels already covered by per-field issues
+  const coveredLabels = perFieldIssues
+    .map((i) => i.field_key?.replace(/_/g, " ").toLowerCase() ?? "")
+    .filter(Boolean);
+
+  const survivingGrouped = groupedIssues.filter((gi) => {
+    const explanation = gi.explanation.toLowerCase();
+    // If explanation mentions 2+ already-covered field labels, remove it
+    const mentionedCount = coveredLabels.filter((label) => explanation.includes(label)).length;
+    return mentionedCount < 2;
+  });
+
+  const deduped = [...others, ...perFieldIssues, ...survivingGrouped];
+
+  return deduped;
+}
+
+/**
+ * Recalculate metrics after deduplication.
+ */
+function recalcMetrics(report: Record<string, any>): void {
+  const issues = report.issues as ReviewIssue[];
+  report.metrics = {
+    issue_count: issues.length,
+    high_severity_count: issues.filter((i) => i.severity === "high").length,
+  };
+}
+
 // ── Input types ───────────────────────────────────────────────────────────
 
 interface StructuredAnswer {
@@ -215,7 +301,7 @@ function buildUserMessage(body: V2Body): string {
 
   // Structured answers summary (completeness/consistency)
   if (body.structured_answers && body.structured_answers.length > 0) {
-    parts.push("ALL STRUCTURED FIELDS (for completeness and consistency checks):");
+    parts.push("ALL STRUCTURED FIELDS (for completeness and consistency checks only — do NOT review these for tone/bias):");
     for (const a of body.structured_answers) {
       if (a.requires_human_review) continue;
       const status = a.missing ? "[MISSING]" : `[${a.recovery_confidence}]`;
@@ -227,9 +313,9 @@ function buildUserMessage(body: V2Body): string {
 
   // Unanswered fields
   if (body.unanswered_fields && body.unanswered_fields.length > 0) {
-    parts.push("UNANSWERED FIELDS (not found in document):");
+    parts.push("UNANSWERED FIELDS (not found in document — report ONE completeness issue per field):");
     for (const f of body.unanswered_fields) {
-      parts.push(`  - ${f.label}`);
+      parts.push(`  - ${f.label} (field_key: ${f.field_key})`);
     }
     parts.push("");
   }
@@ -355,6 +441,10 @@ serve(async (req) => {
     }
 
     const reportObj = report as Record<string, any>;
+
+    // Post-process: deduplicate completeness issues
+    reportObj.issues = dedupeCompletenessIssues(reportObj.issues);
+    recalcMetrics(reportObj);
 
     await eye(supabase, v2.session_id, "reviewer_v2.completed", {
       tenant_id: session.tenant_id,
