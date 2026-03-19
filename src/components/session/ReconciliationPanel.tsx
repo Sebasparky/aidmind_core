@@ -16,7 +16,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   CheckCircle2, AlertTriangle, XCircle, ArrowRightLeft, HelpCircle,
-  ChevronDown, Info, ShieldAlert,
+  ChevronDown, Info, ShieldAlert, FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type {
@@ -34,34 +34,34 @@ const RESOLUTION_CONFIG: Record<ReconciliationResolution, {
   badgeClass: string;
   order: number;
 }> = {
-  confirmed_match: {
-    label: "Matches",
-    icon: CheckCircle2,
-    badgeClass: "text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30 bg-[hsl(var(--status-success-muted))]",
-    order: 0,
-  },
-  likely_correction: {
-    label: "Likely Corrections",
-    icon: ArrowRightLeft,
-    badgeClass: "text-[hsl(var(--status-info))] border-[hsl(var(--status-info))]/30 bg-[hsl(var(--status-info-muted))]",
-    order: 1,
-  },
   possible_discrepancy: {
     label: "Possible Discrepancies",
     icon: AlertTriangle,
     badgeClass: "text-[hsl(var(--status-warning))] border-[hsl(var(--status-warning))]/30 bg-[hsl(var(--status-warning-muted))]",
-    order: 2,
+    order: 0,
   },
   likely_omission: {
     label: "Likely Omissions",
     icon: XCircle,
     badgeClass: "text-[hsl(var(--status-danger))] border-[hsl(var(--status-danger))]/30 bg-[hsl(var(--status-danger-muted))]",
-    order: 3,
+    order: 1,
   },
   unresolved: {
     label: "Needs Review",
     icon: HelpCircle,
     badgeClass: "text-muted-foreground border-muted bg-muted/30",
+    order: 2,
+  },
+  likely_correction: {
+    label: "Likely Corrections",
+    icon: ArrowRightLeft,
+    badgeClass: "text-[hsl(var(--status-info))] border-[hsl(var(--status-info))]/30 bg-[hsl(var(--status-info-muted))]",
+    order: 3,
+  },
+  confirmed_match: {
+    label: "Matches",
+    icon: CheckCircle2,
+    badgeClass: "text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30 bg-[hsl(var(--status-success-muted))]",
     order: 4,
   },
 };
@@ -76,9 +76,11 @@ const CONFIDENCE_BADGE: Record<ParseConfidence, string> = {
 
 interface ReconciliationPanelProps {
   result: ReconciliationResult;
+  notesSource?: "case_notes" | "field_recovery";
+  artifactStatus?: "loading" | "ready" | "missing" | "generating";
 }
 
-export function ReconciliationPanel({ result }: ReconciliationPanelProps) {
+export function ReconciliationPanel({ result, notesSource, artifactStatus }: ReconciliationPanelProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
     new Set(["possible_discrepancy", "likely_omission", "unresolved"]),
   );
@@ -92,7 +94,6 @@ export function ReconciliationPanel({ result }: ReconciliationPanelProps) {
     });
   };
 
-  // Group fields by resolution
   const grouped = useMemo(() => {
     const groups: Record<ReconciliationResolution, FieldReconciliation[]> = {
       confirmed_match: [],
@@ -115,31 +116,46 @@ export function ReconciliationPanel({ result }: ReconciliationPanelProps) {
     "confirmed_match",
   ];
 
+  const actionableCount = result.possible_discrepancies + result.likely_omissions + result.unresolved;
+
   return (
     <div className="space-y-3">
-      {/* Summary bar */}
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <ArrowRightLeft className="h-3.5 w-3.5 text-primary" />
           <span className="text-xs font-medium text-foreground">Notes ↔ Form Comparison</span>
         </div>
-        <Badge
-          variant="outline"
-          className={cn(
-            "text-[10px]",
-            result.template_parse_confidence === "high"
-              ? CONFIDENCE_BADGE.high
-              : result.template_parse_confidence === "medium"
-                ? CONFIDENCE_BADGE.medium
-                : CONFIDENCE_BADGE.low,
+        <div className="flex items-center gap-1.5">
+          {notesSource && (
+            <Badge variant="outline" className="text-[9px] px-1.5 h-4 text-muted-foreground">
+              <FileText className="h-2.5 w-2.5 mr-0.5" />
+              {notesSource === "case_notes" ? "Case Notes" : "Recovery"}
+            </Badge>
           )}
-        >
-          Parse: {result.template_parse_confidence}
-        </Badge>
+          <Badge
+            variant="outline"
+            className={cn(
+              "text-[10px]",
+              result.template_parse_confidence === "high"
+                ? CONFIDENCE_BADGE.high
+                : result.template_parse_confidence === "medium"
+                  ? CONFIDENCE_BADGE.medium
+                  : CONFIDENCE_BADGE.low,
+            )}
+          >
+            Parse: {result.template_parse_confidence}
+          </Badge>
+        </div>
       </div>
 
       {/* Stats row */}
       <div className="flex flex-wrap gap-1.5">
+        {actionableCount > 0 && (
+          <Badge variant="outline" className="text-[10px] px-1.5 h-5 text-[hsl(var(--status-warning))] border-[hsl(var(--status-warning))]/30 font-medium">
+            {actionableCount} need attention
+          </Badge>
+        )}
         <Badge variant="outline" className="text-[10px] px-1.5 h-5">
           {result.matches} matches
         </Badge>
@@ -171,6 +187,16 @@ export function ReconciliationPanel({ result }: ReconciliationPanelProps) {
           <ShieldAlert className="h-3.5 w-3.5 text-[hsl(var(--status-warning))] shrink-0 mt-0.5" />
           <p className="text-[11px] text-[hsl(var(--status-warning-muted-foreground))]">
             Form parsing confidence is low. Some findings may need manual verification.
+          </p>
+        </div>
+      )}
+
+      {/* Not reliable warning */}
+      {!result.reliable_for_review && result.template_parse_confidence !== "low" && (
+        <div className="flex items-start gap-2 p-2 rounded-lg bg-muted/50 border border-border">
+          <Info className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+          <p className="text-[11px] text-muted-foreground">
+            Reconciliation is partial — not enough fields resolved for strong completeness claims.
           </p>
         </div>
       )}
@@ -223,7 +249,9 @@ function FieldComparisonRow({ field }: { field: FieldReconciliation }) {
       ? <AlertTriangle className="h-3 w-3 text-[hsl(var(--status-warning))]" />
       : field.status === "missing_in_template"
         ? <XCircle className="h-3 w-3 text-[hsl(var(--status-danger))]" />
-        : <HelpCircle className="h-3 w-3 text-muted-foreground" />;
+        : field.status === "missing_in_notes"
+          ? <ArrowRightLeft className="h-3 w-3 text-[hsl(var(--status-info))]" />
+          : <HelpCircle className="h-3 w-3 text-muted-foreground" />;
 
   return (
     <div
@@ -252,32 +280,40 @@ function FieldComparisonRow({ field }: { field: FieldReconciliation }) {
 
       {expanded && (
         <div className="mt-2 pt-2 border-t border-border/50 space-y-1.5">
-          {field.notes_value && (
-            <div className="flex gap-2">
-              <span className="text-[10px] text-muted-foreground shrink-0 w-12">Notes:</span>
-              <span className="text-[11px] text-foreground break-words">
-                "{field.notes_value.slice(0, 150)}"
-                {field.notes_confidence && (
-                  <span className={cn("ml-1 text-[9px]", CONFIDENCE_BADGE[field.notes_confidence])}>
-                    ({field.notes_confidence})
-                  </span>
-                )}
-              </span>
-            </div>
-          )}
-          {field.template_value && (
-            <div className="flex gap-2">
-              <span className="text-[10px] text-muted-foreground shrink-0 w-12">Form:</span>
-              <span className="text-[11px] text-foreground break-words">
-                "{field.template_value.slice(0, 150)}"
-                {field.template_confidence && (
-                  <span className={cn("ml-1 text-[9px]", CONFIDENCE_BADGE[field.template_confidence])}>
-                    ({field.template_confidence})
-                  </span>
-                )}
-              </span>
-            </div>
-          )}
+          <div className="flex gap-2">
+            <span className="text-[10px] text-muted-foreground shrink-0 w-12">Notes:</span>
+            <span className="text-[11px] text-foreground break-words">
+              {field.notes_value ? (
+                <>
+                  "{field.notes_value.slice(0, 150)}"
+                  {field.notes_confidence && (
+                    <span className={cn("ml-1 text-[9px]", CONFIDENCE_BADGE[field.notes_confidence])}>
+                      ({field.notes_confidence})
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span className="text-muted-foreground italic">(not available)</span>
+              )}
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <span className="text-[10px] text-muted-foreground shrink-0 w-12">Form:</span>
+            <span className="text-[11px] text-foreground break-words">
+              {field.template_value ? (
+                <>
+                  "{field.template_value.slice(0, 150)}"
+                  {field.template_confidence && (
+                    <span className={cn("ml-1 text-[9px]", CONFIDENCE_BADGE[field.template_confidence])}>
+                      ({field.template_confidence})
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span className="text-muted-foreground italic">(not found)</span>
+              )}
+            </span>
+          </div>
           {field.notes_source_excerpt && (
             <div className="text-[10px] text-muted-foreground/70 italic border-l-2 border-border pl-2">
               Notes source: "{field.notes_source_excerpt.slice(0, 80)}"
