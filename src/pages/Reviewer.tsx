@@ -10,29 +10,29 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { useEyeLogger } from "@/hooks/useEyeLogger";
 import { usePdfTextExtractor } from "@/hooks/usePdfTextExtractor";
-import {
-  type ReviewerOutput,
-  type CategorizedFlag,
-  type FlagCategory,
-  type FlagSeverity,
-  FLAG_CATEGORIES,
-  FLAG_CATEGORY_META,
-  MAX_REVIEWER_TEXT_LENGTH,
-} from "@/lib/tools/reviewer-types";
+import { recoverFieldsFromDocument } from "@/lib/tools/field-recovery";
+import type {
+  ReviewerV2Report,
+  ReviewIssue,
+  ReviewSeverity,
+  ReviewIssueType,
+  Phase2SchemaField,
+} from "@/lib/tools/reviewer-v2-types";
 
-type ToolState = "idle" | "ready" | "running" | "success" | "error";
+type ToolState = "idle" | "ready" | "recovering" | "running" | "success" | "error";
 
 interface SessionInfo {
   caseLabel: string;
   interactionType: string | null;
+  sessionUuid: string;
+  templateId: string | null;
+  phase2SchemaId: string | null;
 }
 
 interface SelectedFile {
@@ -43,18 +43,21 @@ interface SelectedFile {
 const MAX_FILE_SIZE_MB = 20;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
-const SEVERITY_CONFIG: Record<FlagSeverity, { variant: "destructive" | "default" | "secondary"; label: string }> = {
+const SEVERITY_CONFIG: Record<ReviewSeverity, { variant: "destructive" | "default" | "secondary"; label: string }> = {
   high: { variant: "destructive", label: "High" },
-  med: { variant: "default", label: "Medium" },
+  medium: { variant: "default", label: "Medium" },
   low: { variant: "secondary", label: "Low" },
 };
 
-const CATEGORY_ICONS: Record<FlagCategory, typeof MessageSquare> = {
-  tone_flags: MessageSquare,
-  bias_flags: Eye,
-  policy_language_flags: Scale,
-  completeness_flags: CheckSquare,
+const ISSUE_TYPE_META: Record<ReviewIssueType, { label: string; icon: typeof MessageSquare }> = {
+  tone: { label: "Tone & Clarity", icon: MessageSquare },
+  bias: { label: "Bias & Assumptions", icon: Eye },
+  policy_language: { label: "Policy Language", icon: Scale },
+  completeness: { label: "Completeness", icon: CheckSquare },
+  consistency: { label: "Consistency", icon: Shield },
 };
+
+const ISSUE_TYPES: ReviewIssueType[] = ["completeness", "policy_language", "tone", "bias", "consistency"];
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -101,6 +104,7 @@ export default function Reviewer() {
   const { logEvent } = useEyeLogger();
 
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
+  const [schemaFields, setSchemaFields] = useState<Phase2SchemaField[] | null>(null);
   const [pageLoading, setPageLoading] = useState(true);
   const [pageError, setPageError] = useState<string | null>(null);
 
@@ -108,11 +112,12 @@ export default function Reviewer() {
   const [toolState, setToolState] = useState<ToolState>("idle");
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
-  const [output, setOutput] = useState<ReviewerOutput | null>(null);
+  const [output, setOutput] = useState<ReviewerV2Report | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [copiedCategory, setCopiedCategory] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [activeSnippet, setActiveSnippet] = useState<string | null>(null);
+  const [recoveryStats, setRecoveryStats] = useState<{ answered: number; missing: number; humanReview: number } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textPanelRef = useRef<HTMLDivElement>(null);
@@ -128,7 +133,7 @@ export default function Reviewer() {
     clearText,
   } = usePdfTextExtractor();
 
-  // Load session info
+  // Load session info + schema
   useEffect(() => {
     async function fetchSession() {
       if (!sessionId) {
@@ -139,18 +144,39 @@ export default function Reviewer() {
       try {
         const { data, error } = await supabase
           .from("sessions")
-          .select("case_label, interaction_type")
+          .select("id, case_label, interaction_type, template_id, phase2_schema_id")
           .eq("session_id", sessionId)
           .maybeSingle();
 
         if (error) throw error;
         if (!data) {
           setPageError("Session not found");
-        } else {
-          setSessionInfo({
-            caseLabel: data.case_label || "Untitled session",
-            interactionType: data.interaction_type,
-          });
+          setPageLoading(false);
+          return;
+        }
+
+        setSessionInfo({
+          caseLabel: data.case_label || "Untitled session",
+          interactionType: data.interaction_type,
+          sessionUuid: data.id,
+          templateId: data.template_id,
+          phase2SchemaId: data.phase2_schema_id,
+        });
+
+        // Load schema if available
+        if (data.phase2_schema_id) {
+          const { data: schema, error: schemaErr } = await supabase
+            .from("template_phase2_schemas")
+            .select("schema_json")
+            .eq("id", data.phase2_schema_id)
+            .maybeSingle();
+
+          if (!schemaErr && schema?.schema_json) {
+            const parsed = schema.schema_json as any;
+            if (parsed?.fields && Array.isArray(parsed.fields)) {
+              setSchemaFields(parsed.fields as Phase2SchemaField[]);
+            }
+          }
         }
       } catch {
         setPageError("Failed to load session");
@@ -170,7 +196,7 @@ export default function Reviewer() {
     };
   }, [selectedFile]);
 
-  const canRun = selectedFile !== null && !fileError && !extracting && extractedFullText.length > 0 && toolState !== "running";
+  const canRun = selectedFile !== null && !fileError && !extracting && extractedFullText.length > 0 && toolState !== "running" && toolState !== "recovering";
 
   const validateAndSetFile = useCallback((file: File) => {
     setFileError(null);
@@ -191,8 +217,8 @@ export default function Reviewer() {
     setOutput(null);
     setErrorMessage(null);
     setActiveSnippet(null);
+    setRecoveryStats(null);
 
-    // Extract text immediately
     extractText(file);
   }, [selectedFile, extractText]);
 
@@ -221,48 +247,83 @@ export default function Reviewer() {
     setOutput(null);
     setErrorMessage(null);
     setActiveSnippet(null);
+    setRecoveryStats(null);
   };
 
   const handleReplace = () => { fileInputRef.current?.click(); };
 
-  // --- Run Reviewer (real edge function call) ---
+  // --- Run Reviewer v2 (schema-aware transient flow) ---
   const handleRun = useCallback(async () => {
-    if (!sessionId || !extractedFullText) return;
+    if (!sessionId || !sessionInfo || !extractedFullText) return;
 
     const requestId = crypto.randomUUID();
-    setToolState("running");
     setOutput(null);
     setErrorMessage(null);
     setActiveSnippet(null);
 
-    // Eye: started
+    // Stage 1: Schema-aware field recovery (local, deterministic)
+    setToolState("recovering");
+
+    let structured_answers: any[] = [];
+    let unanswered_fields: any[] = [];
+    let human_review_fields: any[] = [];
+
+    if (schemaFields && schemaFields.length > 0) {
+      try {
+        const recovery = recoverFieldsFromDocument(extractedFullText, schemaFields);
+        structured_answers = recovery.structured_answers;
+        unanswered_fields = recovery.unanswered_fields;
+        human_review_fields = recovery.human_review_fields;
+
+        const answered = structured_answers.filter((a) => !a.missing && !a.requires_human_review).length;
+        setRecoveryStats({
+          answered,
+          missing: unanswered_fields.length,
+          humanReview: human_review_fields.length,
+        });
+      } catch (err) {
+        console.warn("[Reviewer] Field recovery failed, proceeding with text-only:", err);
+      }
+    }
+
+    // Stage 2: Send transient payload to run-reviewer
+    setToolState("running");
+
     logEvent({
       eventType: "tool.run.started",
       sessionId,
       requestId,
-      toolName: "run_reviewer",
+      toolName: "run_reviewer_v2",
       metadata: {
         file_size_bytes: selectedFile?.file.size ?? 0,
         page_count: pageCount,
         text_length: extractedFullText.length,
+        structured_answers_count: structured_answers.length,
+        unanswered_count: unanswered_fields.length,
+        human_review_count: human_review_fields.length,
+        has_schema: !!schemaFields,
       },
     });
 
-    // Truncate text if needed
-    const textToSend = extractedFullText.length > MAX_REVIEWER_TEXT_LENGTH
-      ? extractedFullText.slice(0, MAX_REVIEWER_TEXT_LENGTH)
-      : extractedFullText;
-
     try {
+      const payload = {
+        session_id: sessionInfo.sessionUuid,
+        template_id: sessionInfo.templateId || undefined,
+        phase2_schema_id: sessionInfo.phase2SchemaId || undefined,
+        document_text: extractedFullText,
+        structured_answers,
+        unanswered_fields,
+        human_review_fields,
+      };
+
       const { data, error } = await supabase.functions.invoke("run-reviewer", {
-        body: { session_id: sessionId, text: textToSend },
+        body: payload,
       });
 
       if (error) {
         throw new Error(error.message || "Edge function invocation failed");
       }
 
-      // Check for error response shape
       if (data?.error) {
         const code = data.error.code || "UNKNOWN";
         const msg = data.error.message || "Review failed";
@@ -271,7 +332,7 @@ export default function Reviewer() {
           eventType: "tool.run.failed",
           sessionId,
           requestId,
-          toolName: "run_reviewer",
+          toolName: "run_reviewer_v2",
           result: "failure",
           metadata: { error_code: code },
         });
@@ -281,36 +342,26 @@ export default function Reviewer() {
         return;
       }
 
-      // Validate we got flag arrays
-      if (!data?.tone_flags || !data?.bias_flags || !data?.policy_language_flags || !data?.completeness_flags) {
-        throw new Error("Invalid response schema from reviewer");
+      if (!data?.review_report) {
+        throw new Error("Invalid response from reviewer");
       }
 
-      const result: ReviewerOutput = {
-        tone_flags: data.tone_flags,
-        bias_flags: data.bias_flags,
-        policy_language_flags: data.policy_language_flags,
-        completeness_flags: data.completeness_flags,
-      };
-
-      const totalFlags = FLAG_CATEGORIES.reduce((sum, cat) => sum + result[cat].length, 0);
+      const report = data.review_report as ReviewerV2Report;
 
       logEvent({
         eventType: "tool.run.completed",
         sessionId,
         requestId,
-        toolName: "run_reviewer",
+        toolName: "run_reviewer_v2",
         result: "success",
         metadata: {
-          total_flags: totalFlags,
-          tone_count: result.tone_flags.length,
-          bias_count: result.bias_flags.length,
-          policy_count: result.policy_language_flags.length,
-          completeness_count: result.completeness_flags.length,
+          issue_count: report.metrics.issue_count,
+          high_severity_count: report.metrics.high_severity_count,
+          overall_risk: report.summary.overall_risk,
         },
       });
 
-      setOutput(result);
+      setOutput(report);
       setToolState("success");
     } catch (err: any) {
       console.error("[Reviewer] Run failed:", err);
@@ -319,7 +370,7 @@ export default function Reviewer() {
         eventType: "tool.run.failed",
         sessionId,
         requestId,
-        toolName: "run_reviewer",
+        toolName: "run_reviewer_v2",
         result: "failure",
         metadata: { error_message: err?.message?.slice(0, 100) ?? "unknown" },
       });
@@ -327,7 +378,7 @@ export default function Reviewer() {
       setErrorMessage(err?.message || "An unexpected error occurred.");
       setToolState("error");
     }
-  }, [sessionId, extractedFullText, selectedFile, pageCount, logEvent]);
+  }, [sessionId, sessionInfo, extractedFullText, selectedFile, pageCount, schemaFields, logEvent]);
 
   const handleClear = () => {
     handleRemoveFile();
@@ -339,7 +390,6 @@ export default function Reviewer() {
   // --- Highlight / Jump ---
   const handleHighlight = useCallback((snippet: string) => {
     setActiveSnippet(snippet);
-    // Scroll to first mark in text panel
     setTimeout(() => {
       const mark = textPanelRef.current?.querySelector("mark");
       if (mark) {
@@ -349,24 +399,13 @@ export default function Reviewer() {
   }, []);
 
   // --- Copy ---
-  const handleCopyCategory = async (category: FlagCategory) => {
-    if (!output) return;
-    const flags = output[category];
-    const text = flags
-      .map((f) => `[${f.severity.toUpperCase()}] ${f.message}${f.snippet ? ` — "${f.snippet}"` : ""}`)
-      .join("\n");
-    await navigator.clipboard.writeText(text);
-    setCopiedCategory(category);
-    setTimeout(() => setCopiedCategory(null), 2000);
-  };
-
   const handleCopyAll = async () => {
     if (!output) return;
-    const text = FLAG_CATEGORIES.map((cat) => {
-      const flags = output[cat];
-      if (flags.length === 0) return "";
-      return `## ${FLAG_CATEGORY_META[cat].label}\n${flags
-        .map((f) => `- [${f.severity.toUpperCase()}] ${f.message}${f.snippet ? ` — "${f.snippet}"` : ""}`)
+    const text = ISSUE_TYPES.map((type) => {
+      const issues = output.issues.filter((i) => i.type === type);
+      if (issues.length === 0) return "";
+      return `## ${ISSUE_TYPE_META[type].label}\n${issues
+        .map((i) => `- [${i.severity.toUpperCase()}] ${i.explanation}${i.excerpt ? ` — "${i.excerpt}"` : ""}`)
         .join("\n")}`;
     })
       .filter(Boolean)
@@ -376,11 +415,28 @@ export default function Reviewer() {
     setTimeout(() => setCopiedCategory(null), 2000);
   };
 
+  const handleCopyType = async (type: ReviewIssueType) => {
+    if (!output) return;
+    const issues = output.issues.filter((i) => i.type === type);
+    const text = issues
+      .map((i) => `[${i.severity.toUpperCase()}] ${i.explanation}${i.excerpt ? ` — "${i.excerpt}"` : ""}`)
+      .join("\n");
+    await navigator.clipboard.writeText(text);
+    setCopiedCategory(type);
+    setTimeout(() => setCopiedCategory(null), 2000);
+  };
+
   const handleBack = () => navigate("/dashboard");
 
-  const totalFlags = output
-    ? FLAG_CATEGORIES.reduce((sum, cat) => sum + output[cat].length, 0)
-    : 0;
+  const totalIssues = output ? output.metrics.issue_count : 0;
+
+  // Group issues by type
+  const issuesByType = output
+    ? ISSUE_TYPES.reduce((acc, type) => {
+        acc[type] = output.issues.filter((i) => i.type === type);
+        return acc;
+      }, {} as Record<ReviewIssueType, ReviewIssue[]>)
+    : null;
 
   // Page-level loading/error
   if (pageLoading) {
@@ -426,11 +482,18 @@ export default function Reviewer() {
                 </p>
               </div>
             </div>
-            {sessionId && (
-              <Badge variant="outline" className="text-xs font-mono text-muted-foreground">
-                Session: {sessionId.slice(0, 8)}…
-              </Badge>
-            )}
+            <div className="flex items-center gap-2">
+              {schemaFields && (
+                <Badge variant="outline" className="text-xs text-primary border-primary/30">
+                  Schema-aware · {schemaFields.length} fields
+                </Badge>
+              )}
+              {sessionId && (
+                <Badge variant="outline" className="text-xs font-mono text-muted-foreground">
+                  Session: {sessionId.slice(0, 8)}…
+                </Badge>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -442,9 +505,9 @@ export default function Reviewer() {
           <Alert className="mb-4 border-primary/20 bg-primary/5">
             <Info className="h-4 w-4 text-primary" />
             <AlertDescription className="text-sm text-muted-foreground">
-              Upload a PDF to check for tone, bias, policy language, and completeness.
+              Upload a completed PDF to check for tone, bias, policy language, and completeness.
               <strong className="block mt-1 text-foreground">
-                AidMind does not store or edit your files. Your upload is used only for this review.
+                Files are extracted locally in your browser. Nothing is uploaded or stored.
               </strong>
             </AlertDescription>
           </Alert>
@@ -457,9 +520,9 @@ export default function Reviewer() {
             <div className="max-w-lg mx-auto mt-8">
               <Card>
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-base">Upload PDF</CardTitle>
+                  <CardTitle className="text-base">Upload Completed Document</CardTitle>
                   <CardDescription>
-                    Upload the document you want reviewed. Files are processed in memory only.
+                    Upload the filled-out document you want reviewed. Text is extracted locally — nothing leaves your browser.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -566,7 +629,7 @@ export default function Reviewer() {
                 <Card className="flex-1 flex flex-col overflow-hidden">
                   <CardHeader className="pb-2 shrink-0">
                     <div className="flex items-center justify-between">
-                      <CardTitle className="text-sm font-medium">Reviewed Text</CardTitle>
+                      <CardTitle className="text-sm font-medium">Extracted Text</CardTitle>
                       {activeSnippet && (
                         <Button
                           variant="ghost"
@@ -579,7 +642,7 @@ export default function Reviewer() {
                       )}
                     </div>
                     <CardDescription className="text-xs">
-                      Extracted in-browser · Not stored · Cleared on leave
+                      Extracted locally in your browser · Not stored anywhere
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="flex-1 overflow-hidden p-2">
@@ -615,11 +678,11 @@ export default function Reviewer() {
                 </Card>
               </div>
 
-              {/* Right: Suggestions */}
+              {/* Right: Review Results */}
               <div className="lg:col-span-4 flex flex-col min-h-0">
                 <Card className="flex-1 flex flex-col overflow-hidden">
                   <CardHeader className="pb-2 shrink-0">
-                    <CardTitle className="text-sm font-medium">Suggestions</CardTitle>
+                    <CardTitle className="text-sm font-medium">Review Results</CardTitle>
                   </CardHeader>
                   <CardContent className="flex-1 overflow-hidden p-2">
                     <ScrollArea className="h-full" style={{ minHeight: 400 }}>
@@ -635,11 +698,22 @@ export default function Reviewer() {
                                   ? "Ready to review"
                                   : "Waiting for text extraction"}
                             </p>
-                            {extractedFullText.length > MAX_REVIEWER_TEXT_LENGTH && (
-                              <p className="text-xs text-amber-600 mt-2">
-                                Text will be truncated to {MAX_REVIEWER_TEXT_LENGTH.toLocaleString()} characters.
+                            {schemaFields && canRun && (
+                              <p className="text-xs text-primary/70 mt-2">
+                                Schema-aware review: {schemaFields.length} fields will be checked
                               </p>
                             )}
+                          </div>
+                        )}
+
+                        {/* Recovering */}
+                        {toolState === "recovering" && (
+                          <div className="text-center py-8">
+                            <Loader2 className="h-8 w-8 mx-auto text-primary animate-spin mb-3" />
+                            <p className="text-sm text-muted-foreground">Recovering field structure…</p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Matching document content to template fields
+                            </p>
                           </div>
                         )}
 
@@ -647,10 +721,22 @@ export default function Reviewer() {
                         {toolState === "running" && (
                           <div className="text-center py-8">
                             <Loader2 className="h-8 w-8 mx-auto text-primary animate-spin mb-3" />
-                            <p className="text-sm text-muted-foreground">Analyzing your document…</p>
+                            <p className="text-sm text-muted-foreground">Analyzing document…</p>
                             <p className="text-xs text-muted-foreground mt-1">
-                              Checking tone, bias, policy language, and completeness.
+                              Checking tone, bias, policy language, and completeness
                             </p>
+                            {recoveryStats && (
+                              <div className="flex items-center justify-center gap-3 mt-3">
+                                <Badge variant="outline" className="text-[10px]">
+                                  {recoveryStats.answered} fields recovered
+                                </Badge>
+                                {recoveryStats.missing > 0 && (
+                                  <Badge variant="secondary" className="text-[10px]">
+                                    {recoveryStats.missing} missing
+                                  </Badge>
+                                )}
+                              </div>
+                            )}
                           </div>
                         )}
 
@@ -667,13 +753,21 @@ export default function Reviewer() {
                         )}
 
                         {/* Success */}
-                        {toolState === "success" && output && (
+                        {toolState === "success" && output && issuesByType && (
                           <div className="space-y-3">
                             {/* Summary */}
                             <div className="flex items-center justify-between">
-                              <Badge variant="secondary" className="text-xs">
-                                {totalFlags} {totalFlags === 1 ? "flag" : "flags"} found
-                              </Badge>
+                              <div className="flex items-center gap-2">
+                                <Badge
+                                  variant={output.summary.overall_risk === "high" ? "destructive" : output.summary.overall_risk === "medium" ? "default" : "secondary"}
+                                  className="text-xs"
+                                >
+                                  {output.summary.overall_risk.toUpperCase()} risk
+                                </Badge>
+                                <Badge variant="secondary" className="text-xs">
+                                  {totalIssues} {totalIssues === 1 ? "issue" : "issues"}
+                                </Badge>
+                              </div>
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -688,43 +782,73 @@ export default function Reviewer() {
                               </Button>
                             </div>
 
+                            {/* Key findings */}
+                            {output.summary.key_findings.length > 0 && (
+                              <div className="rounded-lg border p-2.5 bg-accent/20">
+                                <p className="text-[10px] uppercase font-medium text-muted-foreground mb-1.5">Key Findings</p>
+                                <ul className="space-y-1">
+                                  {output.summary.key_findings.map((f, i) => (
+                                    <li key={i} className="text-xs text-foreground">• {f}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+
+                            {/* Recovery stats */}
+                            {recoveryStats && (
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <Badge variant="outline" className="text-[10px]">
+                                  {recoveryStats.answered} fields answered
+                                </Badge>
+                                {recoveryStats.missing > 0 && (
+                                  <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300">
+                                    {recoveryStats.missing} missing
+                                  </Badge>
+                                )}
+                                {recoveryStats.humanReview > 0 && (
+                                  <Badge variant="outline" className="text-[10px]">
+                                    {recoveryStats.humanReview} human-review
+                                  </Badge>
+                                )}
+                              </div>
+                            )}
+
                             <p className="text-xs text-muted-foreground italic">
-                              AI-generated suggestions — review before applying.
+                              AI-generated audit — review before acting.
                             </p>
 
-                            {totalFlags === 0 && (
+                            {totalIssues === 0 && (
                               <div className="text-center py-6">
                                 <Badge variant="outline" className="text-primary border-primary/30 px-4 py-2">
-                                  No flags found — documentation looks good!
+                                  No issues found — documentation looks good!
                                 </Badge>
                               </div>
                             )}
 
-                            {/* Category groups */}
-                            {FLAG_CATEGORIES.map((category) => {
-                              const flags = output[category];
-                              const meta = FLAG_CATEGORY_META[category];
-                              const Icon = CATEGORY_ICONS[category];
-
-                              if (flags.length === 0) return null;
+                            {/* Issue groups by type */}
+                            {ISSUE_TYPES.map((type) => {
+                              const issues = issuesByType[type];
+                              if (!issues || issues.length === 0) return null;
+                              const meta = ISSUE_TYPE_META[type];
+                              const Icon = meta.icon;
 
                               return (
-                                <div key={category} className="space-y-2">
+                                <div key={type} className="space-y-2">
                                   <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-2">
                                       <Icon className="h-3.5 w-3.5 text-muted-foreground" />
                                       <span className="text-xs font-medium text-foreground">{meta.label}</span>
                                       <Badge variant="secondary" className="text-[10px] px-1.5 h-4">
-                                        {flags.length}
+                                        {issues.length}
                                       </Badge>
                                     </div>
                                     <Button
                                       variant="ghost"
                                       size="sm"
                                       className="h-6 px-1.5 text-[10px] text-muted-foreground"
-                                      onClick={() => handleCopyCategory(category)}
+                                      onClick={() => handleCopyType(type)}
                                     >
-                                      {copiedCategory === category ? (
+                                      {copiedCategory === type ? (
                                         <><Check className="h-2.5 w-2.5 mr-0.5" /> Copied</>
                                       ) : (
                                         <><Copy className="h-2.5 w-2.5 mr-0.5" /> Copy</>
@@ -732,9 +856,9 @@ export default function Reviewer() {
                                     </Button>
                                   </div>
 
-                                  {flags.map((flag, i) => {
-                                    const sev = SEVERITY_CONFIG[flag.severity];
-                                    const isActive = activeSnippet === flag.snippet && flag.snippet.length > 0;
+                                  {issues.map((issue, i) => {
+                                    const sev = SEVERITY_CONFIG[issue.severity];
+                                    const isActive = activeSnippet === issue.excerpt && issue.excerpt.length > 0;
 
                                     return (
                                       <div
@@ -749,21 +873,26 @@ export default function Reviewer() {
                                             {sev.label}
                                           </Badge>
                                           <div className="flex-1 min-w-0">
-                                            <p className="text-xs text-foreground leading-relaxed">{flag.message}</p>
-                                            {flag.snippet && (
+                                            <p className="text-xs text-foreground leading-relaxed">{issue.explanation}</p>
+                                            {issue.field_key && (
+                                              <p className="text-[10px] text-muted-foreground mt-0.5 font-mono">
+                                                Field: {issue.field_key}
+                                              </p>
+                                            )}
+                                            {issue.excerpt && (
                                               <p className="text-[11px] text-muted-foreground mt-1 italic border-l-2 border-muted pl-2">
-                                                "{flag.snippet}"
+                                                "{issue.excerpt}"
                                               </p>
                                             )}
                                           </div>
                                         </div>
-                                        {flag.snippet && flag.snippet.length > 0 && (
+                                        {issue.excerpt && issue.excerpt.length > 0 && (
                                           <div className="flex items-center gap-1 mt-2 pt-1.5 border-t border-border">
                                             <Button
                                               variant={isActive ? "secondary" : "ghost"}
                                               size="sm"
                                               className="h-6 px-2 text-[10px] gap-1"
-                                              onClick={() => handleHighlight(isActive ? "" : flag.snippet)}
+                                              onClick={() => handleHighlight(isActive ? "" : issue.excerpt)}
                                             >
                                               <Search className="h-2.5 w-2.5" />
                                               {isActive ? "Unhighlight" : "Highlight"}
@@ -774,7 +903,7 @@ export default function Reviewer() {
                                               className="h-6 px-2 text-[10px] gap-1"
                                               onClick={async () => {
                                                 await navigator.clipboard.writeText(
-                                                  `[${flag.severity.toUpperCase()}] ${flag.message}${flag.snippet ? ` — "${flag.snippet}"` : ""}`
+                                                  `[${issue.severity.toUpperCase()}] ${issue.explanation}${issue.excerpt ? ` — "${issue.excerpt}"` : ""}`
                                                 );
                                               }}
                                             >
@@ -816,7 +945,7 @@ export default function Reviewer() {
             )}
             {selectedFile && (
               <Button onClick={handleRun} disabled={!canRun}>
-                {toolState === "running" ? (
+                {toolState === "running" || toolState === "recovering" ? (
                   <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Analyzing…</>
                 ) : (
                   <><Shield className="h-4 w-4 mr-2" /> Run Reviewer</>
