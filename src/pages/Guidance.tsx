@@ -581,7 +581,7 @@ export default function Guidance() {
                   </p>
 
                   {/* Category cards */}
-                  {GUIDANCE_CATEGORIES.map((category) => {
+                  {allCategories.map((category) => {
                     const questions = groupedQuestions[category] || [];
                     if (questions.length === 0) return null;
 
