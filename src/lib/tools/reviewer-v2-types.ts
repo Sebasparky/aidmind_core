@@ -97,6 +97,10 @@ const STRUCTURE_ONLY_MODES = new Set([
 
 export function classifyReviewRelevance(field: Phase2SchemaField): ReviewRelevance {
   if (field.requires_human_review) return "structure_only";
+  // v2.1: Use content_type when available for more accurate classification
+  if (field.content_type === "narrative") return "review_worthy";
+  if (field.content_type === "checkbox" || field.content_type === "categorical" || field.content_type === "identifier") return "structure_only";
+  // Fallback to matching_mode for older schemas without content_type
   if (STRUCTURE_ONLY_MODES.has(field.matching_mode)) return "structure_only";
   // extract_short_text and extract_literal_span contain authored language
   return "review_worthy";
