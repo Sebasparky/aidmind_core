@@ -667,6 +667,14 @@ export default function Reviewer() {
                     )}
                   </div>
                 </div>
+                {isRestoredWithoutFile && (
+                  <div className="px-4 py-2 bg-[hsl(var(--status-info-muted))] border-b border-[hsl(var(--status-info))]/20 shrink-0">
+                    <p className="text-[11px] text-[hsl(var(--status-info-muted-foreground))]">
+                      <Info className="h-3 w-3 inline mr-1 -mt-0.5" />
+                      Extracted text and results restored from your session. PDF preview requires re-upload.
+                    </p>
+                  </div>
+                )}
                 <ScrollArea className="flex-1">
                   <div ref={textPanelRef} className="p-4 space-y-4 text-sm leading-relaxed">
                     {extracting && (
