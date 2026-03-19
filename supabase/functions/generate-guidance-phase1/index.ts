@@ -868,6 +868,92 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ── 1c. Load the ensured schema to get template structure ──
+    let templateStructureSummary = "";
+    {
+      // Re-fetch session to get the linked schema ID (ensure-phase2-schema just set it)
+      const { data: refreshedSession } = await supabase
+        .from("sessions")
+        .select("phase2_schema_id")
+        .eq("id", sessionIdResult.value)
+        .maybeSingle();
+
+      if (refreshedSession?.phase2_schema_id) {
+        const { data: schemaData } = await supabase
+          .from("template_phase2_schemas")
+          .select("schema_json")
+          .eq("id", refreshedSession.phase2_schema_id)
+          .maybeSingle();
+
+        if (schemaData?.schema_json) {
+          const schema = schemaData.schema_json as Record<string, unknown>;
+          const sections = Array.isArray(schema.sections) ? schema.sections as string[] : [];
+          const fields = Array.isArray(schema.fields) ? schema.fields as Record<string, unknown>[] : [];
+
+          if (fields.length > 0) {
+            // Build a section-grouped summary of the template's information architecture
+            const sectionMap = new Map<string, { guidance: string[]; narrative: string[]; categorical: string[]; factual: string[] }>();
+
+            for (const f of fields) {
+              const section = String(f.section ?? "General");
+              const purposes = Array.isArray(f.field_purpose) ? f.field_purpose.map(String) : ["extraction"];
+              const contentType = String(f.content_type ?? "factual");
+              const label = String(f.label ?? "");
+
+              if (!sectionMap.has(section)) {
+                sectionMap.set(section, { guidance: [], narrative: [], categorical: [], factual: [] });
+              }
+              const entry = sectionMap.get(section)!;
+
+              // Only include fields relevant to guidance
+              if (purposes.includes("guidance") || contentType === "narrative") {
+                entry.guidance.push(label);
+              }
+              if (contentType === "narrative") {
+                entry.narrative.push(label);
+              } else if (contentType === "categorical" || contentType === "checkbox") {
+                entry.categorical.push(label);
+              } else {
+                entry.factual.push(label);
+              }
+            }
+
+            const structureParts: string[] = [];
+            structureParts.push(`TEMPLATE INFORMATION ARCHITECTURE (${fields.length} fields across ${sections.length || sectionMap.size} sections):`);
+            structureParts.push("");
+
+            const orderedSections = sections.length > 0 ? sections : Array.from(sectionMap.keys());
+            for (const sec of orderedSections) {
+              const entry = sectionMap.get(sec);
+              if (!entry) continue;
+
+              const allFields = [...entry.guidance, ...entry.narrative, ...entry.categorical, ...entry.factual];
+              const uniqueFields = [...new Set(allFields)];
+              if (uniqueFields.length === 0) continue;
+
+              structureParts.push(`SECTION: ${sec}`);
+              if (entry.narrative.length > 0) {
+                structureParts.push(`  Narrative fields (free-text, important for interview): ${entry.narrative.join(", ")}`);
+              }
+              if (entry.guidance.length > 0) {
+                const guidanceOnly = entry.guidance.filter(g => !entry.narrative.includes(g));
+                if (guidanceOnly.length > 0) {
+                  structureParts.push(`  Key guidance fields: ${guidanceOnly.slice(0, 8).join(", ")}${guidanceOnly.length > 8 ? ` (+${guidanceOnly.length - 8} more)` : ""}`);
+                }
+              }
+              if (entry.categorical.length > 0) {
+                structureParts.push(`  Categorical/checkbox fields: ${entry.categorical.slice(0, 6).join(", ")}${entry.categorical.length > 6 ? ` (+${entry.categorical.length - 6} more)` : ""}`);
+              }
+              structureParts.push("");
+            }
+
+            templateStructureSummary = structureParts.join("\n");
+            console.log(`[generate-guidance-phase1] Template structure: ${sections.length || sectionMap.size} sections, ${fields.length} fields, ${fields.filter(f => (f as any).content_type === "narrative").length} narrative`);
+          }
+        }
+      }
+    }
+
     // ── 2. Retrieve policy snippets ──
     const snippetResponse = await supabase.rpc("get_policy_snippets_for_session", {
       session_id_input: sessionIdResult.value,
@@ -938,7 +1024,20 @@ You are assisting a social services caseworker preparing to conduct a structured
 ${scopeLine}
 
 You are given policy excerpts that are relevant to the template being completed for this program and jurisdiction.
+${templateStructureSummary ? `
+You also have access to the TEMPLATE'S INFORMATION ARCHITECTURE — the actual sections and fields the caseworker needs to complete. Use this structure to shape your questions so they align with what the template actually asks for.
 
+${templateStructureSummary}
+
+TEMPLATE-AWARE QUESTION GENERATION (CRITICAL):
+- Your questions should help the caseworker gather information that maps to the template's actual sections and fields.
+- Prioritize questions that cover the template's most important sections, especially narrative sections and high-priority factual fields.
+- When the template has distinct sections (e.g., "Child Issues", "Caretaker Issues", "Family Issues"), generate questions that address those specific areas rather than generic domain questions.
+- Narrative sections (free-text fields) are especially important — generate questions that help the caseworker write substantive narrative content.
+- Do NOT ignore template structure in favor of generic domain-level questions.
+- The template structure should GUIDE which topics to cover; the policy snippets should GROUND the specific questions.
+- If the template has 5+ sections, aim for coverage across at least 3-4 of them.
+` : ""}
 Your task is to generate UP TO 12 targeted interview questions that the caseworker should ask the client, caregiver, or involved party to gather the factual information needed to complete the template accurately and in compliance with policy.
 
 CRITICAL GROUNDING RULES:
