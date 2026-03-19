@@ -660,7 +660,7 @@ export default function Reviewer() {
                         Clear highlight
                       </Button>
                     )}
-                    {isRestoredWithoutFile && (
+                    {isRestoredWithoutFile && toolState !== "success" && (
                       <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px] gap-1" onClick={handleReplace}>
                         <Upload className="h-3 w-3" /> Re-upload PDF
                       </Button>
