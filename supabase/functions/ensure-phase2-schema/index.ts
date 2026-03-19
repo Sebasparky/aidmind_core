@@ -51,6 +51,147 @@ interface SchemaField {
 }
 
 // ============================================================
+// TEMPLATE SECTION DETECTION
+// ============================================================
+
+/**
+ * Heuristically detect section headings from template content.
+ * Looks for common patterns: markdown headings, numbered sections,
+ * ALL-CAPS lines, "Section:" prefixes, bold markers, etc.
+ */
+function detectTemplateSections(content: string): string[] {
+  const lines = content.split("\n");
+  const sections: string[] = [];
+  const seen = new Set<string>();
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.length < 3 || line.length > 120) continue;
+
+    let sectionName: string | null = null;
+
+    // Markdown headings: ## Section Name
+    const mdMatch = line.match(/^#{1,3}\s+(.+)/);
+    if (mdMatch) {
+      sectionName = mdMatch[1].trim();
+    }
+
+    // Numbered sections: "1. Section Name", "I. Section Name", "A. Section Name"
+    if (!sectionName) {
+      const numMatch = line.match(/^(?:\d+|[IVXLC]+|[A-Z])[\.\)]\s+([A-Z][A-Za-z\s\/\-&]+)/);
+      if (numMatch && numMatch[1].length > 3) {
+        sectionName = numMatch[1].trim();
+      }
+    }
+
+    // ALL-CAPS lines (likely section headers): "CHILD ISSUES", "INTAKE NARRATIVE"
+    if (!sectionName && line === line.toUpperCase() && line.length > 4 && line.length < 60 && /^[A-Z\s\/\-&]+$/.test(line)) {
+      sectionName = line;
+    }
+
+    // "Section:" or "Part:" prefixed
+    if (!sectionName) {
+      const prefixMatch = line.match(/^(?:Section|Part|Category|Area)\s*[:\-]\s*(.+)/i);
+      if (prefixMatch) {
+        sectionName = prefixMatch[1].trim();
+      }
+    }
+
+    // Bold markers: **Section Name** at start of line
+    if (!sectionName) {
+      const boldMatch = line.match(/^\*\*(.+?)\*\*/);
+      if (boldMatch && boldMatch[1].length > 3 && boldMatch[1].length < 60) {
+        const candidate = boldMatch[1].trim();
+        if (/^[A-Z]/.test(candidate) && !candidate.includes(". ") && candidate.split(" ").length <= 8) {
+          sectionName = candidate;
+        }
+      }
+    }
+
+    if (sectionName) {
+      sectionName = sectionName.replace(/[\s:\-]+$/, "").trim();
+      const key = sectionName.toLowerCase();
+      if (!seen.has(key) && sectionName.length > 2) {
+        seen.add(key);
+        sections.push(sectionName);
+      }
+    }
+  }
+
+  return sections;
+}
+
+// ============================================================
+// SCHEMA QUALITY VALIDATION
+// ============================================================
+
+interface SchemaQualityResult {
+  pass: boolean;
+  issues: string[];
+  fieldCount: number;
+  sectionsCovered: number;
+  sectionsExpected: number;
+  narrativeCount: number;
+}
+
+function validateSchemaQuality(
+  fields: SchemaField[],
+  detectedSections: string[],
+  templateContent: string,
+): SchemaQualityResult {
+  const issues: string[] = [];
+  const fieldCount = fields.length;
+  const sectionsExpected = detectedSections.length;
+
+  const fieldSections = new Set(fields.map(f => f.section.toLowerCase()));
+  const sectionsCovered = fieldSections.size;
+
+  const narrativeCount = fields.filter(f => f.content_type === "narrative").length;
+
+  if (sectionsExpected >= 5 && fieldCount < sectionsExpected) {
+    issues.push(`Only ${fieldCount} fields for ${sectionsExpected} detected sections — schema is too shallow`);
+  }
+
+  if (sectionsExpected >= 5 && fieldCount < sectionsExpected * 1.5) {
+    issues.push(`Average of ${(fieldCount / sectionsExpected).toFixed(1)} fields per section — expected at least 2-3 for complex forms`);
+  }
+
+  if (sectionsExpected >= 5 && sectionsCovered < Math.ceil(sectionsExpected * 0.5)) {
+    issues.push(`Only ${sectionsCovered} sections covered out of ${sectionsExpected} detected — many sections have no fields`);
+  }
+
+  const hasNarrativeContent = /narrative|summary|description|comments|explanation|notes|reason/i.test(templateContent);
+  if (hasNarrativeContent && narrativeCount === 0) {
+    issues.push(`No narrative fields generated despite template containing narrative sections`);
+  }
+
+  if (fieldCount >= 5) {
+    const sectionCounts = new Map<string, number>();
+    for (const f of fields) {
+      const s = f.section.toLowerCase();
+      sectionCounts.set(s, (sectionCounts.get(s) ?? 0) + 1);
+    }
+    const maxInOne = Math.max(...sectionCounts.values());
+    if (maxInOne > fieldCount * 0.6 && sectionsExpected >= 5) {
+      issues.push(`${maxInOne} of ${fieldCount} fields concentrated in one section — poor distribution`);
+    }
+  }
+
+  if (fieldCount < 5) {
+    issues.push(`Only ${fieldCount} fields — absolute minimum is 5`);
+  }
+
+  return {
+    pass: issues.length === 0,
+    issues,
+    fieldCount,
+    sectionsCovered,
+    sectionsExpected,
+    narrativeCount,
+  };
+}
+
+// ============================================================
 // SCHEMA GENERATION (v2.1)
 // ============================================================
 
