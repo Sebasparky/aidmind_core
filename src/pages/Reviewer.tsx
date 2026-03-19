@@ -624,14 +624,16 @@ export default function Reviewer() {
                       <span className="text-xs text-foreground font-medium truncate">{fileName}</span>
                       {pageCount > 0 && <Badge variant="secondary" className="text-[10px] shrink-0">{pageCount}p</Badge>}
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <Button variant="ghost" size="sm" onClick={handleReplace} className="h-6 px-2 text-[10px] gap-1">
-                        <RefreshCw className="h-3 w-3" /> Replace
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={handleRemoveFile} className="h-6 px-2 text-[10px] gap-1 text-destructive hover:text-destructive">
-                        <X className="h-3 w-3" />
-                      </Button>
-                    </div>
+                    {toolState !== "success" && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button variant="ghost" size="sm" onClick={handleReplace} className="h-6 px-2 text-[10px] gap-1">
+                          <RefreshCw className="h-3 w-3" /> Replace
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={handleRemoveFile} className="h-6 px-2 text-[10px] gap-1 text-destructive hover:text-destructive">
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    )}
                   </div>
                   <div className="flex-1 overflow-hidden bg-muted/30 p-1">
                     <iframe src={selectedFile.objectUrl} title="PDF preview" className="w-full h-full rounded border-0" />
@@ -658,13 +660,21 @@ export default function Reviewer() {
                         Clear highlight
                       </Button>
                     )}
-                    {isRestoredWithoutFile && (
+                    {isRestoredWithoutFile && toolState !== "success" && (
                       <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px] gap-1" onClick={handleReplace}>
                         <Upload className="h-3 w-3" /> Re-upload PDF
                       </Button>
                     )}
                   </div>
                 </div>
+                {isRestoredWithoutFile && (
+                  <div className="px-4 py-2 bg-[hsl(var(--status-info-muted))] border-b border-[hsl(var(--status-info))]/20 shrink-0">
+                    <p className="text-[11px] text-[hsl(var(--status-info-muted-foreground))]">
+                      <Info className="h-3 w-3 inline mr-1 -mt-0.5" />
+                      Extracted text and results restored from your session. PDF preview requires re-upload.
+                    </p>
+                  </div>
+                )}
                 <ScrollArea className="flex-1">
                   <div ref={textPanelRef} className="p-4 space-y-4 text-sm leading-relaxed">
                     {extracting && (
@@ -719,14 +729,9 @@ export default function Reviewer() {
                 )}
 
                 {toolState === "success" && (
-                  <div className="flex gap-2">
-                    <Button variant="outline" onClick={handleRun} disabled={!canRun} className="flex-1 gap-1.5 text-sm">
-                      <RefreshCw className="h-3.5 w-3.5" /> Re-run
-                    </Button>
-                    <Button variant="outline" onClick={handleClear} className="gap-1.5 text-sm">
-                      <RotateCcw className="h-3.5 w-3.5" /> Clear
-                    </Button>
-                  </div>
+                  <Button variant="default" onClick={handleBack} className="w-full gap-2" size="lg">
+                    <CheckCircle2 className="h-4 w-4" /> Done — Back to Dashboard
+                  </Button>
                 )}
 
                 {toolState === "error" && (
