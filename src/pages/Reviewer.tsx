@@ -211,6 +211,9 @@ export default function Reviewer() {
   const [isDragging, setIsDragging] = useState(false);
   const [activeSnippet, setActiveSnippet] = useState<string | null>(null);
   const [recoveryStats, setRecoveryStats] = useState<{ answered: number; missing: number; humanReview: number } | null>(null);
+  const [reconciliationResult, setReconciliationResult] = useState<ReconciliationResult | null>(null);
+  const [templateParseResult, setTemplateParseResult] = useState<CompletedTemplateParse | null>(null);
+  const [parserArtifact, setParserArtifact] = useState<TemplateParserArtifact | null>(null);
 
   // Restored state (for when File object isn't available)
   const [restoredPages, setRestoredPages] = useState<PageText[]>([]);
