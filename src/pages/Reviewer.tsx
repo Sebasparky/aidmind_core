@@ -276,6 +276,24 @@ export default function Reviewer() {
             if (parsed?.fields && Array.isArray(parsed.fields)) setSchemaFields(parsed.fields as Phase2SchemaField[]);
           }
         }
+        // Load parser artifact for template
+        if (data.template_id) {
+          const { data: artifactRow } = await supabase
+            .from("template_parser_artifacts")
+            .select("artifact_json")
+            .eq("template_id", data.template_id)
+            .eq("is_active", true)
+            .maybeSingle();
+          if (artifactRow?.artifact_json) {
+            setParserArtifact(artifactRow.artifact_json as unknown as TemplateParserArtifact);
+            if (import.meta.env.DEV) {
+              console.info("[Reviewer] Parser artifact loaded:", {
+                sections: (artifactRow.artifact_json as any)?.sections?.length,
+                checkbox_groups: (artifactRow.artifact_json as any)?.checkbox_groups?.length,
+              });
+            }
+          }
+        }
       } catch { setPageError("Failed to load session"); }
       finally { setPageLoading(false); }
     }
