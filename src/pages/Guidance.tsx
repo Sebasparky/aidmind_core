@@ -155,8 +155,15 @@ export default function Guidance() {
   const handleCopyAll = async () => {
     if (!session?.guidanceOutput) return;
     const output = session.guidanceOutput;
-    const text = GUIDANCE_CATEGORIES.map((cat) => {
-      const qs = output.questions.filter((q) => q.category === cat);
+    // Dynamically group for copy
+    const seen = new Set<string>();
+    const cats: string[] = [];
+    for (const q of output.questions) {
+      const c = q.category || "Other";
+      if (!seen.has(c)) { seen.add(c); cats.push(c); }
+    }
+    const text = cats.map((cat) => {
+      const qs = output.questions.filter((q) => (q.category || "Other") === cat);
       if (qs.length === 0) return "";
       return `## ${cat}\n${qs.map((q, i) => `${i + 1}. ${q.question}`).join("\n")}`;
     })
