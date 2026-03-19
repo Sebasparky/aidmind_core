@@ -297,6 +297,8 @@ export default function Reviewer() {
       setErrorMessage(persisted.errorMessage);
       setRecoveryStats(persisted.recoveryStats);
       setActiveSnippet(persisted.activeSnippet);
+      setReconciliationResult(persisted.reconciliationResult ?? null);
+      setTemplateParseResult(persisted.templateParseResult ?? null);
     } else {
       setToolState("idle");
       setRestoredPages([]);
@@ -308,6 +310,8 @@ export default function Reviewer() {
       setErrorMessage(null);
       setRecoveryStats(null);
       setActiveSnippet(null);
+      setReconciliationResult(null);
+      setTemplateParseResult(null);
     }
     setHydratedSessionId(sessionId);
   }, [sessionId]);
