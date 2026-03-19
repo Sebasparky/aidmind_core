@@ -56,69 +56,203 @@ interface SchemaField {
 
 /**
  * Heuristically detect section headings from template content.
- * Looks for common patterns: markdown headings, numbered sections,
- * ALL-CAPS lines, "Section:" prefixes, bold markers, etc.
+ * Handles real OCR-extracted text, not just clean markdown.
+ *
+ * Patterns recognized:
+ * - "SECTION 1: Source Information"  (labeled numbered)
+ * - "SECTION 2 - Intake Narrative"   (labeled with dash)
+ * - "## Section Name"                (markdown)
+ * - "1. Section Name" / "A. Section" (numbered/lettered)
+ * - "ALL CAPS LINE"                  (all-caps headers)
+ * - "Section: Name" / "Part: Name"   (prefixed)
+ * - "**Bold Name**"                  (bold markers)
+ * - "--- Section Name ---"           (separator-framed)
+ * - "Section Name:" at start of line (colon-terminated title-case)
  */
 function detectTemplateSections(content: string): string[] {
   const lines = content.split("\n");
   const sections: string[] = [];
   const seen = new Set<string>();
 
+  const addSection = (name: string): void => {
+    // Clean trailing punctuation / whitespace
+    name = name.replace(/[\s:\-–—.]+$/, "").replace(/^\s+/, "").trim();
+    if (name.length < 3 || name.length > 80) return;
+    const key = name.toLowerCase().replace(/\s+/g, " ");
+    if (seen.has(key)) return;
+    // Skip lines that look like field values, not headers
+    if (/^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(name)) return; // dates
+    if (/^(yes|no|n\/a|unknown|none|other)$/i.test(name)) return;
+    seen.add(key);
+    sections.push(name);
+  };
+
   for (const rawLine of lines) {
     const line = rawLine.trim();
-    if (!line || line.length < 3 || line.length > 120) continue;
+    if (!line || line.length < 3 || line.length > 150) continue;
 
-    let sectionName: string | null = null;
+    // 1. "SECTION 1: Source Information" / "SECTION 2 - Intake Narrative" / "SECTION III: ..."
+    const sectionLabelMatch = line.match(
+      /^SECTION\s+(?:\d+|[IVXLC]+)\s*[:\-–—.]\s*(.+)/i,
+    );
+    if (sectionLabelMatch) {
+      addSection(sectionLabelMatch[1]);
+      continue;
+    }
 
-    // Markdown headings: ## Section Name
+    // 2. Markdown headings: ## Section Name
     const mdMatch = line.match(/^#{1,3}\s+(.+)/);
     if (mdMatch) {
-      sectionName = mdMatch[1].trim();
+      addSection(mdMatch[1]);
+      continue;
     }
 
-    // Numbered sections: "1. Section Name", "I. Section Name", "A. Section Name"
-    if (!sectionName) {
-      const numMatch = line.match(/^(?:\d+|[IVXLC]+|[A-Z])[\.\)]\s+([A-Z][A-Za-z\s\/\-&]+)/);
-      if (numMatch && numMatch[1].length > 3) {
-        sectionName = numMatch[1].trim();
+    // 3. Numbered/lettered sections: "1. Section Name", "I. Section", "A. Section", "1) Section"
+    const numMatch = line.match(
+      /^(?:\d{1,3}|[IVXLC]{1,5}|[A-Z])[\.\)]\s+([A-Z][A-Za-z\s\/\-&,()]+)/,
+    );
+    if (numMatch && numMatch[1].trim().length > 3) {
+      // Only accept if it looks like a heading (title-case, not a full sentence)
+      const candidate = numMatch[1].trim();
+      if (candidate.split(" ").length <= 10 && !/[.!?]$/.test(candidate)) {
+        addSection(candidate);
+        continue;
       }
     }
 
-    // ALL-CAPS lines (likely section headers): "CHILD ISSUES", "INTAKE NARRATIVE"
-    if (!sectionName && line === line.toUpperCase() && line.length > 4 && line.length < 60 && /^[A-Z\s\/\-&]+$/.test(line)) {
-      sectionName = line;
+    // 4. ALL-CAPS lines: "CHILD ISSUES", "INTAKE NARRATIVE", "DEMOGRAPHICS"
+    if (
+      line === line.toUpperCase() &&
+      line.length > 4 &&
+      line.length < 80 &&
+      /^[A-Z][A-Z\s\/\-&,()0-9]+$/.test(line) &&
+      // Must have at least one letter sequence > 2 chars (avoid "N/A", "ID")
+      /[A-Z]{3,}/.test(line)
+    ) {
+      addSection(line);
+      continue;
     }
 
-    // "Section:" or "Part:" prefixed
-    if (!sectionName) {
-      const prefixMatch = line.match(/^(?:Section|Part|Category|Area)\s*[:\-]\s*(.+)/i);
-      if (prefixMatch) {
-        sectionName = prefixMatch[1].trim();
+    // 5. "Section:" / "Part:" / "Category:" / "Area:" prefixed
+    const prefixMatch = line.match(
+      /^(?:Section|Part|Category|Area|Block|Tab)\s*[:\-–—]\s*(.+)/i,
+    );
+    if (prefixMatch) {
+      addSection(prefixMatch[1]);
+      continue;
+    }
+
+    // 6. Bold markers: **Section Name**
+    const boldMatch = line.match(/^\*\*(.+?)\*\*/);
+    if (boldMatch && boldMatch[1].length > 3 && boldMatch[1].length < 60) {
+      const candidate = boldMatch[1].trim();
+      if (/^[A-Z]/.test(candidate) && candidate.split(" ").length <= 8) {
+        addSection(candidate);
+        continue;
       }
     }
 
-    // Bold markers: **Section Name** at start of line
-    if (!sectionName) {
-      const boldMatch = line.match(/^\*\*(.+?)\*\*/);
-      if (boldMatch && boldMatch[1].length > 3 && boldMatch[1].length < 60) {
-        const candidate = boldMatch[1].trim();
-        if (/^[A-Z]/.test(candidate) && !candidate.includes(". ") && candidate.split(" ").length <= 8) {
-          sectionName = candidate;
-        }
-      }
+    // 7. Separator-framed: "--- Section Name ---" or "=== Section Name ==="
+    const sepMatch = line.match(/^[-=]{2,}\s*(.+?)\s*[-=]{2,}$/);
+    if (sepMatch && sepMatch[1].length > 3) {
+      addSection(sepMatch[1]);
+      continue;
     }
 
-    if (sectionName) {
-      sectionName = sectionName.replace(/[\s:\-]+$/, "").trim();
-      const key = sectionName.toLowerCase();
-      if (!seen.has(key) && sectionName.length > 2) {
-        seen.add(key);
-        sections.push(sectionName);
-      }
+    // 8. Colon-terminated title-case header at start of line (common in OCR):
+    //    "Source Information:" / "Intake Narrative:" / "Family Issues:"
+    //    Must be title-case, 2-6 words, ending with colon, and be the whole line or nearly
+    const colonHeaderMatch = line.match(
+      /^([A-Z][A-Za-z]+(?:\s+[A-Za-z&\/\-]+){0,6})\s*:\s*$/,
+    );
+    if (colonHeaderMatch && colonHeaderMatch[1].length > 5) {
+      addSection(colonHeaderMatch[1]);
+      continue;
+    }
+
+    // 9. OCR-style: lines that are short, title-cased, standalone (no punctuation except maybe colon)
+    //    e.g., "Behavioral Concerns and Family Issues"
+    //    Heuristic: title-case, 2-7 words, no sentence punctuation, preceded by blank line
+    if (
+      /^[A-Z][a-z]+(?:\s+(?:and|or|of|the|for|in|to|&|\/|-|[A-Z][a-z]+|[A-Z]+))+$/.test(line) &&
+      line.split(" ").length >= 2 &&
+      line.split(" ").length <= 8 &&
+      line.length < 60
+    ) {
+      addSection(line);
+      continue;
     }
   }
 
   return sections;
+}
+
+// ============================================================
+// CONTENT COMPLEXITY ESTIMATION (fallback)
+// ============================================================
+
+/**
+ * Estimate template complexity even when section detection fails.
+ * Uses content signals: length, keyword density, checkbox markers, etc.
+ */
+function estimateTemplateComplexity(content: string): {
+  estimatedSections: number;
+  isComplex: boolean;
+  signals: string[];
+} {
+  const signals: string[] = [];
+
+  // Count "section"-like markers even if they didn't parse cleanly
+  const sectionMarkerCount = (
+    content.match(/\b(?:SECTION|Part|Category|Block)\s*\d/gi) ?? []
+  ).length;
+  if (sectionMarkerCount > 0) {
+    signals.push(`${sectionMarkerCount} section markers found`);
+  }
+
+  // Count distinct ALL-CAPS lines (even short ones)
+  const capsLines = content.split("\n").filter((l) => {
+    const t = l.trim();
+    return t.length > 4 && t === t.toUpperCase() && /[A-Z]{3,}/.test(t);
+  }).length;
+  if (capsLines > 3) {
+    signals.push(`${capsLines} all-caps lines`);
+  }
+
+  // Content length as proxy
+  const charCount = content.length;
+  if (charCount > 10000) signals.push(`large template (${charCount} chars)`);
+
+  // Checkbox-like markers
+  const checkboxCount = (
+    content.match(/\[\s*\]|\byes\s*\/\s*no\b|☐|☑|□|■/gi) ?? []
+  ).length;
+  if (checkboxCount > 10) {
+    signals.push(`${checkboxCount} checkbox markers`);
+  }
+
+  // Colon-terminated lines (potential field labels)
+  const colonLines = content.split("\n").filter((l) =>
+    /^[A-Z][A-Za-z\s\/\-&]+:\s*$/.test(l.trim()),
+  ).length;
+  if (colonLines > 5) {
+    signals.push(`${colonLines} colon-terminated label lines`);
+  }
+
+  const estimatedSections = Math.max(
+    sectionMarkerCount,
+    Math.floor(capsLines * 0.7),
+    charCount > 20000 ? 8 : charCount > 10000 ? 5 : 3,
+  );
+
+  const isComplex =
+    sectionMarkerCount >= 3 ||
+    capsLines >= 5 ||
+    charCount > 15000 ||
+    checkboxCount > 15 ||
+    colonLines > 10;
+
+  return { estimatedSections, isComplex, signals };
 }
 
 // ============================================================
@@ -132,39 +266,83 @@ interface SchemaQualityResult {
   sectionsCovered: number;
   sectionsExpected: number;
   narrativeCount: number;
+  complexitySignals: string[];
 }
 
 function validateSchemaQuality(
   fields: SchemaField[],
   detectedSections: string[],
   templateContent: string,
+  llmSections: string[],
 ): SchemaQualityResult {
   const issues: string[] = [];
   const fieldCount = fields.length;
-  const sectionsExpected = detectedSections.length;
 
-  const fieldSections = new Set(fields.map(f => f.section.toLowerCase()));
+  // Use detected sections first; fall back to LLM-reported sections; fall back to complexity estimation
+  const complexity = estimateTemplateComplexity(templateContent);
+  let sectionsExpected = detectedSections.length;
+  let sectionSource = "detected";
+
+  if (sectionsExpected === 0 && llmSections.length > 0) {
+    // Fallback 1: trust the LLM's own section list
+    sectionsExpected = llmSections.length;
+    sectionSource = "llm-reported";
+  }
+
+  if (sectionsExpected === 0 && complexity.isComplex) {
+    // Fallback 2: use complexity estimation
+    sectionsExpected = complexity.estimatedSections;
+    sectionSource = "estimated";
+  }
+
+  // Absolute minimum: if content is substantial, expect at least 5 sections
+  if (sectionsExpected < 5 && templateContent.length > 8000) {
+    sectionsExpected = Math.max(sectionsExpected, 5);
+    if (sectionSource === "detected") sectionSource = "length-floor";
+  }
+
+  const fieldSections = new Set(fields.map((f) => f.section.toLowerCase()));
   const sectionsCovered = fieldSections.size;
 
-  const narrativeCount = fields.filter(f => f.content_type === "narrative").length;
+  const narrativeCount = fields.filter((f) => f.content_type === "narrative").length;
 
-  if (sectionsExpected >= 5 && fieldCount < sectionsExpected) {
-    issues.push(`Only ${fieldCount} fields for ${sectionsExpected} detected sections — schema is too shallow`);
+  // ── Field count checks ──
+
+  // Hard floor: complex templates need at least 15 fields
+  if (sectionsExpected >= 5 && fieldCount < 15) {
+    issues.push(
+      `Only ${fieldCount} fields for a template with ~${sectionsExpected} sections (${sectionSource}) — minimum 15 for complex forms`,
+    );
   }
 
+  // Density check: at least 1.5 fields per expected section
   if (sectionsExpected >= 5 && fieldCount < sectionsExpected * 1.5) {
-    issues.push(`Average of ${(fieldCount / sectionsExpected).toFixed(1)} fields per section — expected at least 2-3 for complex forms`);
+    issues.push(
+      `${(fieldCount / sectionsExpected).toFixed(1)} fields/section — expected ≥1.5 (${sectionSource})`,
+    );
   }
+
+  // ── Section coverage checks ──
 
   if (sectionsExpected >= 5 && sectionsCovered < Math.ceil(sectionsExpected * 0.5)) {
-    issues.push(`Only ${sectionsCovered} sections covered out of ${sectionsExpected} detected — many sections have no fields`);
+    issues.push(
+      `Only ${sectionsCovered} sections covered out of ~${sectionsExpected} expected — many sections have no fields`,
+    );
   }
 
-  const hasNarrativeContent = /narrative|summary|description|comments|explanation|notes|reason/i.test(templateContent);
+  // ── Narrative checks ──
+  const hasNarrativeContent =
+    /narrative|summary|description|comments|explanation|notes|reason/i.test(templateContent);
   if (hasNarrativeContent && narrativeCount === 0) {
-    issues.push(`No narrative fields generated despite template containing narrative sections`);
+    issues.push("No narrative fields despite template containing narrative sections");
+  }
+  if (sectionsExpected >= 5 && hasNarrativeContent && narrativeCount < 2) {
+    issues.push(
+      `Only ${narrativeCount} narrative field(s) — complex templates with narrative sections should have ≥2`,
+    );
   }
 
+  // ── Distribution checks ──
   if (fieldCount >= 5) {
     const sectionCounts = new Map<string, number>();
     for (const f of fields) {
@@ -172,11 +350,39 @@ function validateSchemaQuality(
       sectionCounts.set(s, (sectionCounts.get(s) ?? 0) + 1);
     }
     const maxInOne = Math.max(...sectionCounts.values());
-    if (maxInOne > fieldCount * 0.6 && sectionsExpected >= 5) {
-      issues.push(`${maxInOne} of ${fieldCount} fields concentrated in one section — poor distribution`);
+    if (maxInOne > fieldCount * 0.5 && sectionsExpected >= 5) {
+      issues.push(
+        `${maxInOne} of ${fieldCount} fields concentrated in one section — poor distribution`,
+      );
     }
   }
 
+  // ── Subgroup checks ──
+  // If template mentions child/caretaker/family issues distinctly, check schema has them
+  const hasChildIssues = /child\s+issues/i.test(templateContent);
+  const hasCaretakerIssues = /caretaker\s+issues|caregiver\s+issues/i.test(templateContent);
+  const hasFamilyIssues = /family\s+issues/i.test(templateContent);
+  const issueSubgroups = [hasChildIssues, hasCaretakerIssues, hasFamilyIssues].filter(Boolean).length;
+
+  if (issueSubgroups >= 2) {
+    const fieldSectionsLower = Array.from(fieldSections);
+    const fieldLabels = fields.map((f) => f.label.toLowerCase() + " " + f.field_key.toLowerCase());
+    const allFieldText = [...fieldSectionsLower, ...fieldLabels].join(" ");
+
+    const coveredSubgroups = [
+      hasChildIssues && /child/i.test(allFieldText),
+      hasCaretakerIssues && /caretaker|caregiver/i.test(allFieldText),
+      hasFamilyIssues && /family/i.test(allFieldText),
+    ].filter(Boolean).length;
+
+    if (coveredSubgroups < issueSubgroups) {
+      issues.push(
+        `Template has ${issueSubgroups} distinct issue subgroups (child/caretaker/family) but only ${coveredSubgroups} represented in schema`,
+      );
+    }
+  }
+
+  // ── Absolute floor ──
   if (fieldCount < 5) {
     issues.push(`Only ${fieldCount} fields — absolute minimum is 5`);
   }
@@ -188,6 +394,7 @@ function validateSchemaQuality(
     sectionsCovered,
     sectionsExpected,
     narrativeCount,
+    complexitySignals: complexity.signals,
   };
 }
 
@@ -199,6 +406,7 @@ async function generateSchemaFromTemplate(
   templateName: string,
   templateContent: string,
   templateMetadata: Record<string, unknown>,
+  retryContext?: { issues: string[]; previousFieldCount: number },
 ): Promise<{ fields: SchemaField[]; model: string; sections: string[]; detectedSections: string[] }> {
   const apiKey = Deno.env.get("OPENAI_API_KEY");
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
@@ -384,13 +592,26 @@ Return JSON:
 
   // Pre-analyze: detect section headings to give the LLM explicit expectations
   const detectedSections = detectTemplateSections(templateContent);
+  const complexity = estimateTemplateComplexity(templateContent);
+
   const sectionHint = detectedSections.length > 0
     ? `\n\nDETECTED TEMPLATE SECTIONS (${detectedSections.length} found — ensure each gets meaningful field representation):\n${detectedSections.map((s, i) => `${i + 1}. ${s}`).join("\n")}`
-    : "";
+    : complexity.isComplex
+      ? `\n\nTEMPLATE COMPLEXITY SIGNALS:\n${complexity.signals.join("\n")}\nThis is a complex template — generate fields for ALL distinct areas even if section headings are not cleanly formatted.`
+      : "";
 
-  const fieldCountGuidance = detectedSections.length > 0
-    ? `This template has approximately ${detectedSections.length} major sections. You should generate AT LEAST ${Math.max(detectedSections.length * 2, 15)} fields total, with at least 1-3 fields per section depending on section complexity. Sections with multiple checkboxes, subgroups, or distinct prompts should generate multiple fields. Do NOT produce fewer than ${Math.max(detectedSections.length, 10)} fields for a template this complex.`
-    : `Generate a thorough set of fields. For templates with multiple sections, aim for 15-50+ fields depending on complexity.`;
+  const minFields = detectedSections.length > 0
+    ? Math.max(detectedSections.length * 2, 15)
+    : complexity.isComplex
+      ? Math.max(complexity.estimatedSections * 2, 15)
+      : 15;
+
+  const fieldCountGuidance = `You should generate AT LEAST ${minFields} fields total. Each major section or area should have 1-3+ fields depending on complexity. Sections with multiple checkboxes, subgroups, or distinct prompts should generate multiple fields. Do NOT produce fewer than ${Math.max(Math.floor(minFields * 0.7), 10)} fields.`;
+
+  // On retry, inject corrective context
+  const retryHint = retryContext
+    ? `\n\nCORRECTIVE FEEDBACK FROM PREVIOUS ATTEMPT:\nYour previous attempt produced only ${retryContext.previousFieldCount} fields. Quality validation failed with:\n${retryContext.issues.map((i) => `- ${i}`).join("\n")}\n\nYou MUST fix these issues. Generate MORE fields, cover MORE sections, include MORE narrative fields, and decompose checkbox-heavy sections into distinct subgroups (e.g., Child Issues, Caretaker Issues, Family Issues as SEPARATE fields).`
+    : "";
 
   const userPrompt = `TEMPLATE NAME: ${templateName}
 
@@ -398,6 +619,7 @@ TEMPLATE CONTENT:
 ${contentPreview}
 ${existingFieldsHint}
 ${sectionHint}
+${retryHint}
 
 FIELD COUNT GUIDANCE:
 ${fieldCountGuidance}
@@ -671,30 +893,35 @@ async function generateAndStoreSchema(
   },
   version: number,
 ): Promise<string> {
-  const MAX_ATTEMPTS = 2;
+  const MAX_ATTEMPTS = 3;
   let lastResult: { fields: SchemaField[]; model: string; sections: string[]; detectedSections: string[] } | null = null;
   let lastQuality: SchemaQualityResult | null = null;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const retryContext = (attempt > 1 && lastQuality)
+      ? { issues: lastQuality.issues, previousFieldCount: lastQuality.fieldCount }
+      : undefined;
+
     const result = await generateSchemaFromTemplate(
       template.name,
       template.content,
       (template.metadata as Record<string, unknown>) ?? {},
+      retryContext,
     );
 
-    const quality = validateSchemaQuality(result.fields, result.detectedSections, template.content);
+    const quality = validateSchemaQuality(result.fields, result.detectedSections, template.content, result.sections);
     lastResult = result;
     lastQuality = quality;
 
     if (quality.pass) {
-      console.log(`[${SERVICE_NAME}] Schema quality passed on attempt ${attempt}: ${result.fields.length} fields, ${quality.sectionsCovered} sections covered, ${quality.narrativeCount} narrative`);
+      console.log(`[${SERVICE_NAME}] Schema quality passed on attempt ${attempt}: ${result.fields.length} fields, ${quality.sectionsCovered} sections covered, ${quality.narrativeCount} narrative, signals: ${quality.complexitySignals.join(", ") || "none"}`);
       break;
     }
 
     console.warn(`[${SERVICE_NAME}] Schema quality FAILED on attempt ${attempt}:`, quality.issues.join("; "));
 
     if (attempt < MAX_ATTEMPTS) {
-      console.log(`[${SERVICE_NAME}] Retrying schema generation (attempt ${attempt + 1})...`);
+      console.log(`[${SERVICE_NAME}] Retrying schema generation (attempt ${attempt + 1}) with corrective context...`);
     }
   }
 
@@ -702,7 +929,6 @@ async function generateAndStoreSchema(
 
   const { fields, model, sections, detectedSections } = lastResult;
 
-  // Log quality warning if still failing after retries (but don't block — accept best effort)
   if (lastQuality && !lastQuality.pass) {
     console.warn(`[${SERVICE_NAME}] Accepting schema despite quality issues after ${MAX_ATTEMPTS} attempts: ${lastQuality.issues.join("; ")}`);
   }
@@ -723,6 +949,7 @@ async function generateAndStoreSchema(
     schema_contract_version: "2.1",
     sections,
     detected_sections: detectedSections,
+    complexity_signals: lastQuality?.complexitySignals ?? [],
     quality: lastQuality ? {
       pass: lastQuality.pass,
       issues: lastQuality.issues,
