@@ -24,9 +24,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import {
   type GuidanceQuestion,
-  type GuidanceCategory,
   type TimelineConsideration,
-  GUIDANCE_CATEGORIES,
 } from "@/lib/tools/guidance-types";
 import { useGuidanceSession } from "@/hooks/useGuidanceSession";
 import { useEyeLogger } from "@/hooks/useEyeLogger";
