@@ -592,13 +592,26 @@ Return JSON:
 
   // Pre-analyze: detect section headings to give the LLM explicit expectations
   const detectedSections = detectTemplateSections(templateContent);
+  const complexity = estimateTemplateComplexity(templateContent);
+
   const sectionHint = detectedSections.length > 0
     ? `\n\nDETECTED TEMPLATE SECTIONS (${detectedSections.length} found — ensure each gets meaningful field representation):\n${detectedSections.map((s, i) => `${i + 1}. ${s}`).join("\n")}`
-    : "";
+    : complexity.isComplex
+      ? `\n\nTEMPLATE COMPLEXITY SIGNALS:\n${complexity.signals.join("\n")}\nThis is a complex template — generate fields for ALL distinct areas even if section headings are not cleanly formatted.`
+      : "";
 
-  const fieldCountGuidance = detectedSections.length > 0
-    ? `This template has approximately ${detectedSections.length} major sections. You should generate AT LEAST ${Math.max(detectedSections.length * 2, 15)} fields total, with at least 1-3 fields per section depending on section complexity. Sections with multiple checkboxes, subgroups, or distinct prompts should generate multiple fields. Do NOT produce fewer than ${Math.max(detectedSections.length, 10)} fields for a template this complex.`
-    : `Generate a thorough set of fields. For templates with multiple sections, aim for 15-50+ fields depending on complexity.`;
+  const minFields = detectedSections.length > 0
+    ? Math.max(detectedSections.length * 2, 15)
+    : complexity.isComplex
+      ? Math.max(complexity.estimatedSections * 2, 15)
+      : 15;
+
+  const fieldCountGuidance = `You should generate AT LEAST ${minFields} fields total. Each major section or area should have 1-3+ fields depending on complexity. Sections with multiple checkboxes, subgroups, or distinct prompts should generate multiple fields. Do NOT produce fewer than ${Math.max(Math.floor(minFields * 0.7), 10)} fields.`;
+
+  // On retry, inject corrective context
+  const retryHint = retryContext
+    ? `\n\nCORRECTIVE FEEDBACK FROM PREVIOUS ATTEMPT:\nYour previous attempt produced only ${retryContext.previousFieldCount} fields. Quality validation failed with:\n${retryContext.issues.map((i) => `- ${i}`).join("\n")}\n\nYou MUST fix these issues. Generate MORE fields, cover MORE sections, include MORE narrative fields, and decompose checkbox-heavy sections into distinct subgroups (e.g., Child Issues, Caretaker Issues, Family Issues as SEPARATE fields).`
+    : "";
 
   const userPrompt = `TEMPLATE NAME: ${templateName}
 
@@ -606,6 +619,7 @@ TEMPLATE CONTENT:
 ${contentPreview}
 ${existingFieldsHint}
 ${sectionHint}
+${retryHint}
 
 FIELD COUNT GUIDANCE:
 ${fieldCountGuidance}
