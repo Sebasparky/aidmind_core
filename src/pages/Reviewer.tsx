@@ -331,6 +331,8 @@ export default function Reviewer() {
       recoveryStats,
       activeSnippet,
       copiedCategory: null,
+      reconciliationResult,
+      templateParseResult,
     });
   }, [sessionId, hydratedSessionId, toolState, selectedFile, restoredFileName, restoredFileSize, extractedPages, extractedFullText, pageCount, output, errorMessage, recoveryStats, activeSnippet]);
 
