@@ -197,11 +197,11 @@ Return JSON only:
 ---------------
 ${interviewNotes}
 
-FIELDS TO EXTRACT
------------------
+FIELDS TO EXTRACT (grouped by template section)
+-------------------------------------------------
 ${fieldsJson}
 
-For each field, use the matching_mode to determine how to extract. Return JSON now.`;
+For each field, use the matching_mode to determine how to extract. Fields are grouped by their template section — use section context to better understand what each field is asking for. Return JSON now.`;
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
