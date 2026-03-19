@@ -4,14 +4,31 @@
  * Architecture:
  *   1. Client extracts text locally from uploaded PDF/DOCX
  *   2. Client runs schema-aware field recovery (deterministic heuristics)
- *   3. Client sends transient payload to run-reviewer v2
- *   4. Backend runs LLM reviewer on structured packet (not raw blob)
- *   5. Only the review report is persisted; source text is never stored
+ *   3. Client separates review_worthy_answers from structure-only fields
+ *   4. Client sends transient payload to run-reviewer v2
+ *   5. Backend runs LLM reviewer on structured packet (not raw blob)
+ *   6. Only the review report is returned; source text is never stored
  */
 
-// ── Recovery types (client-side) ──────────────────────────────────────────
+// ── Recovery metadata ─────────────────────────────────────────────────────
 
 export type RecoveryConfidence = "high" | "medium" | "low" | "unrecovered";
+
+export type RecoveryMethod =
+  | "label_same_line"
+  | "label_next_line"
+  | "allowed_value_local_match"
+  | "template_prompt_local_match"
+  | "partial_label_local_match"
+  | "unresolved";
+
+/**
+ * Whether a field's content is worth tone/bias/policy-language analysis
+ * or only useful for completeness/consistency checks.
+ */
+export type ReviewRelevance = "review_worthy" | "structure_only";
+
+// ── Recovered field ───────────────────────────────────────────────────────
 
 export interface RecoveredField {
   field_key: string;
@@ -19,8 +36,11 @@ export interface RecoveredField {
   template_prompt: string;
   answer: string | null;
   recovery_confidence: RecoveryConfidence;
+  recovery_method: RecoveryMethod;
+  anchor_used: string | null;
   source_excerpt: string | null;
   matching_mode: string;
+  review_relevance: ReviewRelevance;
   requires_human_review: boolean;
   missing: boolean;
 }
@@ -29,6 +49,7 @@ export interface UnansweredField {
   field_key: string;
   label: string;
   matching_mode: string;
+  review_relevance: ReviewRelevance;
 }
 
 export interface HumanReviewField {
@@ -59,19 +80,37 @@ export interface Phase2SchemaField {
   extraction_priority: "high" | "medium" | "low";
 }
 
+// ── Review relevance classifier ──────────────────────────────────────────
+
+const STRUCTURE_ONLY_MODES = new Set([
+  "select_one",
+  "select_many",
+  "boolean_decision",
+  "extract_number",
+  "extract_date",
+]);
+
+export function classifyReviewRelevance(field: Phase2SchemaField): ReviewRelevance {
+  if (field.requires_human_review) return "structure_only";
+  if (STRUCTURE_ONLY_MODES.has(field.matching_mode)) return "structure_only";
+  // extract_short_text and extract_literal_span contain authored language
+  return "review_worthy";
+}
+
 // ── Reviewer v2 request payload (sent to run-reviewer) ───────────────────
 
 export interface ReviewerV2Request {
-  session_id: string;         // UUID (resolved)
-  template_id: string;        // UUID
-  phase2_schema_id: string;   // UUID
-  document_text: string;      // raw extracted text (transient, not persisted)
+  session_id: string;
+  template_id?: string;
+  phase2_schema_id?: string;
+  document_text: string;
   structured_answers: RecoveredField[];
+  review_worthy_answers: RecoveredField[];
   unanswered_fields: UnansweredField[];
   human_review_fields: HumanReviewField[];
 }
 
-// ── Reviewer v2 response (new structured report) ─────────────────────────
+// ── Reviewer v2 response (structured report) ─────────────────────────────
 
 export type ReviewIssueType =
   | "completeness"
@@ -87,7 +126,6 @@ export interface ReviewIssue {
   severity: ReviewSeverity;
   excerpt: string;
   explanation: string;
-  /** Optional: which field_key this issue relates to */
   field_key?: string;
 }
 

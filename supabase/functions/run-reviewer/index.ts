@@ -1,15 +1,14 @@
 /**
- * run-reviewer v2 Edge Function
+ * run-reviewer v2 Edge Function (hardened)
  *
- * Accepts a TRANSIENT structured reviewer payload:
- *   - document_text (raw extracted text, NOT persisted)
- *   - structured_answers (schema-aware field recovery results)
+ * Accepts a TRANSIENT structured reviewer payload with:
+ *   - document_text: raw text for tone/bias/policy-language review
+ *   - structured_answers: ALL recovered fields for completeness/consistency
+ *   - review_worthy_answers: only authored-text fields for tone/bias analysis
  *   - unanswered_fields / human_review_fields
  *
- * Runs an LLM reviewer that JUDGES the structured packet.
- * Only the final review report is persisted (optionally).
- *
- * Privacy: source text is never stored. Only report metadata is written.
+ * The reviewer model focuses linguistic analysis on review_worthy_answers
+ * and uses structured_answers primarily for completeness/consistency.
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -56,35 +55,36 @@ async function eye(
   }
 }
 
-// ── Reviewer v2 Prompt ─────────────────────────────────────────────────────
+// ── Reviewer v2 Prompt (hardened) ──────────────────────────────────────────
 
 const REVIEWER_V2_SYSTEM_PROMPT = `You are AidMind Reviewer, a compliance and quality auditor for social-services case documentation.
 
 You receive a STRUCTURED REVIEW PACKET containing:
-1. "document_text" — the raw extracted text from a completed case document
-2. "structured_answers" — a list of template fields with recovered answers (some may be missing)
-3. "unanswered_fields" — fields where no answer was recovered from the document
-4. "human_review_fields" — fields flagged as requiring manual human verification
+1. "review_worthy_answers" — short-answer and free-text fields containing AUTHORED LANGUAGE. These are your PRIMARY targets for tone, bias, and policy-language analysis.
+2. "structured_answers" — ALL recovered field values (including checkbox, categorical, boolean, number, date). Use these primarily for COMPLETENESS and CONSISTENCY checks.
+3. "unanswered_fields" — fields where no answer was recovered.
+4. "human_review_fields" — fields requiring manual human verification (do NOT flag as missing).
+5. "document_text" — raw document text as backup context.
 
-Your job is to AUDIT this packet for quality and compliance issues.
+ISSUE CATEGORIES AND WHAT TO USE FOR EACH:
 
-ISSUE CATEGORIES:
-- completeness: Missing required fields, incomplete sections, gaps in documentation. USE the structured_answers and unanswered_fields to identify these efficiently.
-- policy_language: Language that conflicts with policy requirements, prohibited terms, incorrect terminology. USE the document_text for this.
-- tone: Unprofessional, judgmental, or emotionally charged language. USE the document_text for this.
-- bias: Assumptions, stereotypes, stigmatizing language, or subjective judgments without evidence. USE the document_text for this.
-- consistency: Internal contradictions between structured answers, conflicting information, logical inconsistencies. USE both structured_answers and document_text.
+- completeness: Use structured_answers + unanswered_fields. Check for missing required fields, incomplete sections, gaps.
+- consistency: Use structured_answers. Check for contradictions between field values, logical inconsistencies.
+- tone: Use review_worthy_answers + document_text. Check for unprofessional, judgmental, or emotionally charged AUTHORED language.
+- bias: Use review_worthy_answers + document_text. Check for assumptions, stereotypes, stigmatizing language in AUTHORED text.
+- policy_language: Use review_worthy_answers + document_text. Check for prohibited terms, incorrect terminology in AUTHORED text.
+
+CRITICAL EFFICIENCY RULES:
+1. Do NOT analyze checkbox/categorical/boolean/number/date fields for tone or bias. They are structured selections, not authored language.
+2. Focus tone/bias/policy-language analysis on review_worthy_answers (short-answer, free-text, narrative content).
+3. Use document_text as backup context when review_worthy_answers are insufficient.
+4. Treat low-confidence recovered values cautiously — note uncertainty rather than treating them as definitive.
+5. human_review_fields are intentionally excluded from auto-recovery; do NOT flag their absence as completeness issues.
 
 SEVERITY LEVELS:
 - "low": Minor issue, may want to address
 - "medium": Should address before finalising
 - "high": Must address — critical compliance or quality risk
-
-EFFICIENCY RULES:
-1. For COMPLETENESS checks: primarily use structured_answers + unanswered_fields. These tell you exactly what was and wasn't filled in.
-2. For TONE/BIAS/POLICY checks: scan the document_text for problematic language.
-3. For CONSISTENCY checks: cross-reference structured_answers against each other and against document_text.
-4. human_review_fields are fields that require manual verification (e.g., SSNs, IDs). Flag them as informational but do NOT treat their absence as a completeness failure.
 
 STRICT RULES:
 1. Produce ONLY a JSON report. No markdown, no commentary.
@@ -96,7 +96,7 @@ STRICT RULES:
 7. Keep excerpts short (≤ 30 words).
 8. Focus on concrete, identifiable issues — not vague impressions.
 9. If the document is well-written and compliant, return zero issues.
-10. When reporting completeness issues, include the field_key in the issue.
+10. When reporting completeness issues, include the field_key.
 
 OUTPUT SCHEMA (return ONLY this JSON):
 {
@@ -156,13 +156,16 @@ function validateReviewReport(parsed: unknown): boolean {
   return true;
 }
 
-// ── Input validation ──────────────────────────────────────────────────────
+// ── Input types ───────────────────────────────────────────────────────────
 
 interface StructuredAnswer {
   field_key: string;
   label: string;
   answer: string | null;
   recovery_confidence: string;
+  recovery_method?: string;
+  matching_mode?: string;
+  review_relevance?: string;
   missing: boolean;
   requires_human_review: boolean;
 }
@@ -173,36 +176,48 @@ interface V2Body {
   phase2_schema_id?: string;
   document_text: string;
   structured_answers?: StructuredAnswer[];
-  unanswered_fields?: Array<{ field_key: string; label: string }>;
+  review_worthy_answers?: StructuredAnswer[];
+  unanswered_fields?: Array<{ field_key: string; label: string; review_relevance?: string }>;
   human_review_fields?: Array<{ field_key: string; label: string; reason: string }>;
 }
 
 function validateV2Body(body: unknown): body is V2Body {
   if (typeof body !== "object" || body === null) return false;
   const b = body as Record<string, unknown>;
-
   if (typeof b.session_id !== "string") return false;
   if (typeof b.document_text !== "string") return false;
-
   if (b.structured_answers !== undefined && !Array.isArray(b.structured_answers)) return false;
+  if (b.review_worthy_answers !== undefined && !Array.isArray(b.review_worthy_answers)) return false;
   if (b.unanswered_fields !== undefined && !Array.isArray(b.unanswered_fields)) return false;
   if (b.human_review_fields !== undefined && !Array.isArray(b.human_review_fields)) return false;
-
   return true;
 }
 
-// ── Build LLM user message ────────────────────────────────────────────────
+// ── Build LLM user message (separated by purpose) ─────────────────────────
 
 function buildUserMessage(body: V2Body): string {
   const parts: string[] = [];
 
   parts.push("Review the following completed case document.\n");
 
-  // Structured answers summary
+  // Review-worthy answers (tone/bias/policy-language targets)
+  const reviewWorthy = body.review_worthy_answers ?? [];
+  if (reviewWorthy.length > 0) {
+    parts.push("REVIEW-WORTHY ANSWERS (authored text — check for tone, bias, policy language):");
+    for (const a of reviewWorthy) {
+      if (a.requires_human_review) continue;
+      const conf = a.recovery_confidence === "low" ? " [low confidence]" : "";
+      const val = a.missing ? "(blank — not recovered)" : (a.answer || "(blank)");
+      parts.push(`  ${a.label}: ${val}${conf}`);
+    }
+    parts.push("");
+  }
+
+  // Structured answers summary (completeness/consistency)
   if (body.structured_answers && body.structured_answers.length > 0) {
-    parts.push("STRUCTURED FIELD ANSWERS (recovered from document):");
+    parts.push("ALL STRUCTURED FIELDS (for completeness and consistency checks):");
     for (const a of body.structured_answers) {
-      if (a.requires_human_review) continue; // handled separately
+      if (a.requires_human_review) continue;
       const status = a.missing ? "[MISSING]" : `[${a.recovery_confidence}]`;
       const val = a.answer || "(blank)";
       parts.push(`  ${status} ${a.label}: ${val}`);
@@ -228,8 +243,8 @@ function buildUserMessage(body: V2Body): string {
     parts.push("");
   }
 
-  // Raw document text
-  parts.push("DOCUMENT TEXT:");
+  // Raw document text (backup context)
+  parts.push("DOCUMENT TEXT (backup context for tone/bias/policy-language review):");
   const docText = body.document_text.length > MAX_DOC_TEXT_CHARS
     ? body.document_text.slice(0, MAX_DOC_TEXT_CHARS)
     : body.document_text;
@@ -252,8 +267,6 @@ serve(async (req) => {
 
   const supabase = createClient(supabaseUrl, serviceKey);
 
-  // ── Parse & validate input ───────────────────────────────────────────────
-
   let body: unknown;
   try {
     body = await req.json();
@@ -261,32 +274,25 @@ serve(async (req) => {
     return errJson(400, "INVALID_JSON", "Request body must be valid JSON");
   }
 
-  // ── V2 path: transient structured payload ────────────────────────────────
-
   if (!validateV2Body(body)) {
     return errJson(400, "INVALID_PAYLOAD", "Missing required fields: session_id, document_text");
   }
 
   const v2 = body as V2Body;
 
-  // Validate session_id format
   if (!UUID_RE.test(v2.session_id)) {
     return errJson(400, "INVALID_SESSION_ID", "session_id must be a valid UUID");
   }
 
-  // Validate document_text length
   if (v2.document_text.trim().length < MIN_DOC_TEXT_CHARS) {
     return errJson(400, "TEXT_TOO_SHORT", `document_text must be at least ${MIN_DOC_TEXT_CHARS} characters`);
   }
 
-  // Cap structured_answers
   if (v2.structured_answers && v2.structured_answers.length > MAX_STRUCTURED_ANSWERS) {
     return errJson(400, "TOO_MANY_FIELDS", `structured_answers exceeds max of ${MAX_STRUCTURED_ANSWERS}`);
   }
 
   try {
-    // ── 1. Verify session exists ─────────────────────────────────────────
-
     const { data: session, error: sessErr } = await supabase
       .from("sessions")
       .select("id, tenant_id")
@@ -297,22 +303,16 @@ serve(async (req) => {
     if (!session) return errJson(404, "SESSION_NOT_FOUND", "Session not found");
     if (!session.tenant_id) return errJson(409, "NO_TENANT", "Session has no tenant_id");
 
-    // ── 2. Eye: started ──────────────────────────────────────────────────
-
     await eye(supabase, v2.session_id, "reviewer_v2.started", {
       tenant_id: session.tenant_id,
       doc_text_length: v2.document_text.length,
       structured_answers_count: v2.structured_answers?.length ?? 0,
+      review_worthy_count: v2.review_worthy_answers?.length ?? 0,
       unanswered_count: v2.unanswered_fields?.length ?? 0,
       human_review_count: v2.human_review_fields?.length ?? 0,
-      has_schema: !!v2.phase2_schema_id,
     });
 
-    // ── 3. Build LLM message ─────────────────────────────────────────────
-
     const userMessage = buildUserMessage(v2);
-
-    // ── 4. Call OpenAI ───────────────────────────────────────────────────
 
     const llmResponse = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -343,8 +343,6 @@ serve(async (req) => {
       throw new Error("OpenAI response missing message content");
     }
 
-    // ── 5. Parse & validate report ───────────────────────────────────────
-
     let report: unknown;
     try {
       report = JSON.parse(rawContent);
@@ -356,8 +354,6 @@ serve(async (req) => {
       throw new Error("LLM output does not match expected review report schema");
     }
 
-    // ── 6. Eye: completed ────────────────────────────────────────────────
-
     const reportObj = report as Record<string, any>;
 
     await eye(supabase, v2.session_id, "reviewer_v2.completed", {
@@ -366,8 +362,6 @@ serve(async (req) => {
       high_severity_count: reportObj.metrics.high_severity_count,
       overall_risk: reportObj.summary.overall_risk,
     });
-
-    // ── 7. Return report (NOT persisted — transient) ─────────────────────
 
     return json(200, {
       success: true,
