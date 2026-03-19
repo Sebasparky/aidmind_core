@@ -107,27 +107,40 @@ function extractFactBasedFieldsLegacy(metadata: Record<string, unknown>): Legacy
 /**
  * Build the extraction prompt fields list, giving the LLM explicit
  * matching_mode instructions per field so it does constrained matching.
+ * v2.1: Groups fields by section for better context.
  */
 function buildFieldInstructions(fields: SchemaFieldInput[]): string {
-  return JSON.stringify(
-    fields.map((f) => {
-      const instruction: Record<string, unknown> = {
-        field_key: f.field_key,
-        label: f.label,
-        matching_mode: f.matching_mode,
-        matching_guidance: f.matching_guidance,
-      };
-      if (f.allowed_values && f.allowed_values.length > 0) {
-        instruction.allowed_values = f.allowed_values;
-      }
-      if (f.requires_direct_statement) {
-        instruction.requires_direct_statement = true;
-      }
-      return instruction;
-    }),
-    null,
-    2,
-  );
+  // Group fields by section for better extraction context
+  const sectionMap = new Map<string, SchemaFieldInput[]>();
+  for (const f of fields) {
+    const section = (f as any).section ?? "General";
+    if (!sectionMap.has(section)) sectionMap.set(section, []);
+    sectionMap.get(section)!.push(f);
+  }
+
+  const sections: Record<string, unknown>[] = [];
+  for (const [sectionName, sectionFields] of sectionMap) {
+    sections.push({
+      section: sectionName,
+      fields: sectionFields.map((f) => {
+        const instruction: Record<string, unknown> = {
+          field_key: f.field_key,
+          label: f.label,
+          matching_mode: f.matching_mode,
+          matching_guidance: f.matching_guidance,
+        };
+        if (f.allowed_values && f.allowed_values.length > 0) {
+          instruction.allowed_values = f.allowed_values;
+        }
+        if (f.requires_direct_statement) {
+          instruction.requires_direct_statement = true;
+        }
+        return instruction;
+      }),
+    });
+  }
+
+  return JSON.stringify(sections, null, 2);
 }
 
 async function generatePhase2Answers(
