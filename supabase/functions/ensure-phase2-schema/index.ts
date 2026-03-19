@@ -893,30 +893,35 @@ async function generateAndStoreSchema(
   },
   version: number,
 ): Promise<string> {
-  const MAX_ATTEMPTS = 2;
+  const MAX_ATTEMPTS = 3;
   let lastResult: { fields: SchemaField[]; model: string; sections: string[]; detectedSections: string[] } | null = null;
   let lastQuality: SchemaQualityResult | null = null;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const retryContext = (attempt > 1 && lastQuality)
+      ? { issues: lastQuality.issues, previousFieldCount: lastQuality.fieldCount }
+      : undefined;
+
     const result = await generateSchemaFromTemplate(
       template.name,
       template.content,
       (template.metadata as Record<string, unknown>) ?? {},
+      retryContext,
     );
 
-    const quality = validateSchemaQuality(result.fields, result.detectedSections, template.content);
+    const quality = validateSchemaQuality(result.fields, result.detectedSections, template.content, result.sections);
     lastResult = result;
     lastQuality = quality;
 
     if (quality.pass) {
-      console.log(`[${SERVICE_NAME}] Schema quality passed on attempt ${attempt}: ${result.fields.length} fields, ${quality.sectionsCovered} sections covered, ${quality.narrativeCount} narrative`);
+      console.log(`[${SERVICE_NAME}] Schema quality passed on attempt ${attempt}: ${result.fields.length} fields, ${quality.sectionsCovered} sections covered, ${quality.narrativeCount} narrative, signals: ${quality.complexitySignals.join(", ") || "none"}`);
       break;
     }
 
     console.warn(`[${SERVICE_NAME}] Schema quality FAILED on attempt ${attempt}:`, quality.issues.join("; "));
 
     if (attempt < MAX_ATTEMPTS) {
-      console.log(`[${SERVICE_NAME}] Retrying schema generation (attempt ${attempt + 1})...`);
+      console.log(`[${SERVICE_NAME}] Retrying schema generation (attempt ${attempt + 1}) with corrective context...`);
     }
   }
 
@@ -924,7 +929,6 @@ async function generateAndStoreSchema(
 
   const { fields, model, sections, detectedSections } = lastResult;
 
-  // Log quality warning if still failing after retries (but don't block — accept best effort)
   if (lastQuality && !lastQuality.pass) {
     console.warn(`[${SERVICE_NAME}] Accepting schema despite quality issues after ${MAX_ATTEMPTS} attempts: ${lastQuality.issues.join("; ")}`);
   }
@@ -945,6 +949,7 @@ async function generateAndStoreSchema(
     schema_contract_version: "2.1",
     sections,
     detected_sections: detectedSections,
+    complexity_signals: lastQuality?.complexitySignals ?? [],
     quality: lastQuality ? {
       pass: lastQuality.pass,
       issues: lastQuality.issues,
