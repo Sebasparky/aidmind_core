@@ -1,11 +1,12 @@
 /**
- * ensure-phase2-schema
+ * ensure-phase2-schema (v2.1 — section-aware)
  *
  * Checks if an active Phase 2 extraction schema exists for a given template.
  * If not, generates one using an LLM and stores it in template_phase2_schemas.
  * Links the schema to the session via sessions.phase2_schema_id.
  *
- * Called during the Guidance Phase 1 flow after template selection.
+ * v2.1: Schema fields now include section/field_group/content_type metadata
+ * to preserve template structure for guidance, extraction, and reviewer.
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -22,25 +23,9 @@ function json(status: number, body: Record<string, unknown>) {
 }
 
 // ============================================================
-// SCHEMA FIELD CONTRACT
+// SCHEMA FIELD CONTRACT (v2.1 — section-aware)
 // ============================================================
 
-/**
- * The canonical field shape stored in template_phase2_schemas.schema_json.fields[].
- *
- * matching_mode tells the local extraction model HOW to match:
- *   select_one          — pick exactly one allowed_value
- *   select_many         — pick one or more allowed_values
- *   boolean_decision    — return true / false
- *   extract_number      — return a numeric value
- *   extract_date        — return a date string
- *   extract_literal_span — copy an exact text span from notes
- *   extract_short_text  — extract a short factual phrase
- *   human_review_only   — do NOT auto-extract; flag for human
- *
- * sensitivity_level / ambiguity_level / extraction_priority give the
- * consumer additional safety signals for gating or ordering extraction.
- */
 interface SchemaField {
   field_key: string;
   label: string;
@@ -58,17 +43,22 @@ interface SchemaField {
   sensitivity_level: "low" | "medium" | "high";
   ambiguity_level: "low" | "medium" | "high";
   extraction_priority: "high" | "medium" | "low";
+  // v2.1 section-aware fields
+  section: string;
+  field_group: string | null;
+  content_type: "checkbox" | "narrative" | "factual" | "identifier" | "categorical";
+  field_purpose: string[];
 }
 
 // ============================================================
-// SCHEMA GENERATION
+// SCHEMA GENERATION (v2.1)
 // ============================================================
 
 async function generateSchemaFromTemplate(
   templateName: string,
   templateContent: string,
   templateMetadata: Record<string, unknown>,
-): Promise<{ fields: SchemaField[]; model: string }> {
+): Promise<{ fields: SchemaField[]; model: string; sections: string[] }> {
   const apiKey = Deno.env.get("OPENAI_API_KEY");
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
 
@@ -100,7 +90,33 @@ async function generateSchemaFromTemplate(
 
 Your task is to analyze a program template and produce a structured extraction schema that defines what factual information can safely be extracted from interview notes by a narrow local model.
 
-The local model will NOT reason about the form. It will perform constrained matching:
+CRITICAL: You must PRESERVE THE TEMPLATE'S REAL STRUCTURE. Complex templates have distinct sections, subsections, and field groups. Your schema must reflect this structure — do NOT flatten everything into a single flat list.
+
+SECTION AND STRUCTURE RULES (CRITICAL):
+
+1. "section" (REQUIRED): The major section of the template this field belongs to. Use the template's own section names when they exist. Examples: "Source Information", "Intake Narrative", "Child Issues", "Caretaker Issues", "Family Issues", "Emergency Services", "Demographics", "Decision Summary", "Services Required".
+
+2. "field_group" (optional): A subsection or logical grouping within a section. Use when a section contains distinct subgroups. Examples: "Physical Address", "Mailing Address", "Primary Caretaker", "Secondary Caretaker", "Alleged Perpetrator".
+
+3. "content_type" (REQUIRED): What kind of content this field holds:
+   - "checkbox": A yes/no selection, checkmark, or boolean toggle
+   - "categorical": A selection from a list of predefined options (single or multi-select)
+   - "narrative": Free-text, description, summary, or authored language that may span multiple sentences
+   - "factual": A specific fact like a name, date, number, or short factual phrase
+   - "identifier": A sensitive identifier like SSN, ID number, phone, email, address
+
+4. "field_purpose" (REQUIRED): An array of which downstream stages benefit from this field. Include one or more of:
+   - "guidance": This field helps shape what questions to ask in an interview
+   - "extraction": This field can be extracted from interview notes
+   - "reviewer": This field is important for document review/audit
+   Examples:
+   - A narrative field about behavioral concerns → ["guidance", "extraction", "reviewer"]
+   - A checkbox for "Pregnant: Yes/No" → ["extraction"]
+   - A date of birth field → ["extraction"]
+   - A free-text intake narrative → ["guidance", "extraction", "reviewer"]
+   - A decision summary field → ["guidance", "reviewer"]
+
+The local extraction model will NOT reason about the form. It will perform constrained matching:
 - For categorical fields: select one or more allowed values
 - For boolean fields: return true/false
 - For numeric fields: extract a number
@@ -128,7 +144,7 @@ FIELD CLASSIFICATION RULES:
    - "low": general categorical questions (pregnant?, substance use?, housing type?)
 
 3. ambiguity_level:
-   - "high": field could easily be confused with another similar field (e.g., physical city vs mailing city), or notes rarely contain clear evidence
+   - "high": field could easily be confused with another similar field, or notes rarely contain clear evidence
    - "medium": field is usually present but can be stated ambiguously
    - "low": field is typically stated clearly and unambiguously
 
@@ -140,68 +156,75 @@ FIELD CLASSIFICATION RULES:
 5. requires_human_review — set to true for ANY of:
    - sensitivity_level = "high" (sensitive identifiers)
    - The field requires professional judgment
-   - The field is structurally ambiguous (e.g., physical vs mailing address that are easily confused)
+   - The field is structurally ambiguous
    - Mistakes would be costly or harmful
-   - The field is rarely documented clearly in narrative notes
 
-6. human_review_reason — when requires_human_review is true, explain WHY:
-   - "Sensitive identifier — requires verification"
-   - "Structurally ambiguous — easily confused with similar field"
-   - "Rarely documented clearly in narrative notes"
-   - "Mistakes would be costly to the client"
+6. human_review_reason — when requires_human_review is true, explain WHY
 
 7. DUPLICATE / SIMILAR FIELD HANDLING:
-   - If the template has both physical and mailing address fields, prefix field_keys clearly: physical_city, physical_state, mailing_city, mailing_state
-   - Make matching_guidance explicitly distinguish them: "Extract the PHYSICAL address city only, not the mailing address"
+   - If the template has both physical and mailing address fields, prefix field_keys clearly
+   - Make matching_guidance explicitly distinguish them
    - Set ambiguity_level = "high" for both
 
 8. answer_type should be one of: "text", "categorical_single", "categorical_multi", "boolean", "date", "number"
-   - If answer_type is categorical, provide allowed_values
 
 9. fact_based = true ONLY if the field can be answered by direct factual statements in notes
-   - Fields requiring judgment → fact_based = false, requires_human_review = true
 
 10. A field CAN be fact_based = true AND requires_human_review = true simultaneously.
-    This means: "yes it's factual, but it's too sensitive/ambiguous for auto-extraction."
 
 MATCHING_GUIDANCE QUALITY RULES (CRITICAL for extraction accuracy):
 
 For select_many fields, matching_guidance MUST include:
 - "Return ALL allowed values that are clearly supported by the notes, not just the first match."
-- Mention that the model should scan the full notes for each allowed value.
 
 For extract_literal_span fields, matching_guidance MUST include:
-- "Return the smallest sufficient exact span — just the value itself (e.g., a name, a single number), not the surrounding sentence."
-- Specify what kind of span to look for (e.g., "a single person's name", "a nickname only").
+- "Return the smallest sufficient exact span — just the value itself."
 
 For extract_date fields, matching_guidance MUST include:
 - "Normalize the date to YYYY-MM-DD format."
-- Note common source formats to expect (e.g., "MM/DD/YYYY", "Month DD, YYYY").
 
 For extract_short_text fields, matching_guidance MUST include:
-- "Return compact factual content only, stripping narrative wrappers like 'she mentioned that…' or 'I wrote down…'."
+- "Return compact factual content only, stripping narrative wrappers."
+
+NARRATIVE FIELD RULES (CRITICAL):
+- Templates often contain important narrative/free-text sections (e.g., "Intake Narrative", "Decision Summary", "Emergency Actions Taken", "Sensitive Case Comments")
+- These MUST be represented as fields with content_type = "narrative" and matching_mode = "extract_short_text" or "extract_literal_span"
+- Set field_purpose to include "guidance" and "reviewer" — these are high-value for both
+- Do NOT skip narrative sections just because they are open-ended
+
+SECTION COVERAGE RULES:
+- Generate fields for ALL major sections of the template, not just the easiest ones
+- If a template has 10+ sections, the schema should have fields from most of them
+- Checkbox-heavy sections should generate select_many or boolean_decision fields
+- Narrative sections should generate extract_short_text or extract_literal_span fields
+- Identity/factual sections should generate appropriate literal_span or human_review_only fields
 
 IMPORTANT: Do NOT mark all fields as safely extractable. Be conservative.
 Expect that for a typical intake form:
-- 30-60% of fields should be safely auto-extractable (requires_human_review = false)
-- 20-40% should be fact-based but human-review-preferred (requires_human_review = true)
-- 10-20% should require professional judgment (fact_based = false)
+- 30-60% of fields should be safely auto-extractable
+- 20-40% should be fact-based but human-review-preferred
+- 10-20% should require professional judgment
 
 Return JSON:
 {
+  "sections": ["Section Name 1", "Section Name 2", ...],
   "fields": [
     {
       "field_key": "string (snake_case, disambiguated)",
       "label": "string (human-readable label)",
       "template_prompt": "string (original prompt from template)",
+      "section": "string (section name from template)",
+      "field_group": "string or null (subsection grouping)",
+      "content_type": "checkbox|narrative|factual|identifier|categorical",
+      "field_purpose": ["guidance", "extraction", "reviewer"],
       "fact_based": true/false,
       "answer_type": "text|categorical_single|categorical_multi|boolean|date|number",
       "matching_mode": "select_one|select_many|boolean_decision|extract_number|extract_date|extract_literal_span|extract_short_text|human_review_only",
       "allowed_values": ["array"] or null,
       "requires_direct_statement": true/false,
       "return_null_if_missing": true,
-      "matching_guidance": "string (specific instruction for narrow extraction model)",
-      "examples": ["example note excerpt 1", "example 2"],
+      "matching_guidance": "string",
+      "examples": ["example 1", "example 2"],
       "requires_human_review": true/false,
       "human_review_reason": "string or null",
       "sensitivity_level": "low|medium|high",
@@ -211,8 +234,8 @@ Return JSON:
   ]
 }`;
 
-  const contentPreview = templateContent.length > 8000
-    ? templateContent.slice(0, 8000) + "\n\n[... truncated ...]"
+  const contentPreview = templateContent.length > 12000
+    ? templateContent.slice(0, 12000) + "\n\n[... truncated ...]"
     : templateContent;
 
   const userPrompt = `TEMPLATE NAME: ${templateName}
@@ -222,6 +245,7 @@ ${contentPreview}
 ${existingFieldsHint}
 
 Analyze this template and produce the Phase 2 extraction schema.
+IMPORTANT: Preserve the template's real section structure. Generate fields for ALL major sections, not just the easy ones. Include narrative/free-text sections as fields.
 Remember: be conservative about auto-extraction. Sensitive identifiers, ambiguous duplicates, and rarely-documented fields should be marked requires_human_review = true.
 Return JSON only.`;
 
@@ -253,7 +277,7 @@ Return JSON only.`;
     throw new Error("OpenAI returned empty content");
   }
 
-  let parsed: { fields?: unknown };
+  let parsed: { fields?: unknown; sections?: unknown };
   try {
     parsed = JSON.parse(rawContent);
   } catch {
@@ -264,6 +288,8 @@ Return JSON only.`;
     throw new Error("OpenAI response missing or empty 'fields' array");
   }
 
+  const sections = Array.isArray(parsed.sections) ? parsed.sections.map(String) : [];
+
   const VALID_MATCHING_MODES = new Set([
     "select_one", "select_many", "boolean_decision",
     "extract_number", "extract_date", "extract_literal_span",
@@ -271,6 +297,8 @@ Return JSON only.`;
   ]);
   const VALID_SENSITIVITY = new Set(["low", "medium", "high"]);
   const VALID_PRIORITY = new Set(["high", "medium", "low"]);
+  const VALID_CONTENT_TYPES = new Set(["checkbox", "narrative", "factual", "identifier", "categorical"]);
+  const VALID_PURPOSES = new Set(["guidance", "extraction", "reviewer"]);
 
   // Validate/normalize fields
   const fields: SchemaField[] = parsed.fields.map((f: Record<string, unknown>) => {
@@ -295,6 +323,26 @@ Return JSON only.`;
       ? "human_review_only"
       : matchingMode;
 
+    // v2.1: section metadata
+    const section = typeof f.section === "string" && f.section.trim().length > 0
+      ? f.section.trim()
+      : "General";
+
+    const fieldGroup = typeof f.field_group === "string" && f.field_group.trim().length > 0
+      ? f.field_group.trim()
+      : null;
+
+    const rawContentType = String(f.content_type ?? "factual");
+    const contentType = VALID_CONTENT_TYPES.has(rawContentType)
+      ? rawContentType as "checkbox" | "narrative" | "factual" | "identifier" | "categorical"
+      : "factual";
+
+    const rawPurpose = Array.isArray(f.field_purpose) ? f.field_purpose : ["extraction"];
+    const fieldPurpose = rawPurpose
+      .map(String)
+      .filter((p: string) => VALID_PURPOSES.has(p));
+    if (fieldPurpose.length === 0) fieldPurpose.push("extraction");
+
     return {
       field_key: String(f.field_key ?? ""),
       label: String(f.label ?? ""),
@@ -314,10 +362,14 @@ Return JSON only.`;
       sensitivity_level: sensitivityLevel,
       ambiguity_level: ambiguityLevel,
       extraction_priority: extractionPriority,
+      section,
+      field_group: fieldGroup,
+      content_type: contentType,
+      field_purpose: fieldPurpose,
     };
   });
 
-  return { fields, model };
+  return { fields, model, sections };
 }
 
 // ============================================================
@@ -381,15 +433,12 @@ Deno.serve(async (req) => {
     let schemaId: string;
 
     if (existingSchema && existingSchema.status === "ready") {
-      // Check staleness: if template hash changed, regenerate
       const hashMatch = !template.content_hash || existingSchema.source_template_hash === template.content_hash;
 
       if (hashMatch) {
-        // Reuse existing schema
         schemaId = existingSchema.id;
         console.log(`[${SERVICE_NAME}] Reusing existing schema ${schemaId} (v${existingSchema.schema_version})`);
       } else {
-        // Template changed — archive old, generate new
         console.log(`[${SERVICE_NAME}] Template hash changed, regenerating schema`);
         await supabase
           .from("template_phase2_schemas")
@@ -399,7 +448,6 @@ Deno.serve(async (req) => {
         schemaId = await generateAndStoreSchema(supabase, template, existingSchema.schema_version + 1);
       }
     } else {
-      // No active schema — generate
       console.log(`[${SERVICE_NAME}] No active schema found, generating for template ${templateId}`);
       schemaId = await generateAndStoreSchema(supabase, template, 1);
     }
@@ -457,7 +505,7 @@ async function generateAndStoreSchema(
   },
   version: number,
 ): Promise<string> {
-  const { fields, model } = await generateSchemaFromTemplate(
+  const { fields, model, sections } = await generateSchemaFromTemplate(
     template.name,
     template.content,
     (template.metadata as Record<string, unknown>) ?? {},
@@ -468,10 +516,12 @@ async function generateAndStoreSchema(
   const humanReviewCount = fields.filter((f) => f.requires_human_review).length;
   const autoExtractCount = fields.filter((f) => f.fact_based && !f.requires_human_review).length;
   const humanReviewOnlyCount = fields.filter((f) => f.matching_mode === "human_review_only").length;
+  const narrativeCount = fields.filter((f) => f.content_type === "narrative").length;
 
   const schemaJson = {
     generated_at: now,
-    schema_contract_version: "2.0",
+    schema_contract_version: "2.1",
+    sections,
     fields,
   };
 
@@ -486,7 +536,7 @@ async function generateAndStoreSchema(
       schema_json: schemaJson,
       model,
       source_template_hash: template.content_hash,
-      generation_notes: `Generated ${fields.length} fields: ${autoExtractCount} auto-extractable, ${humanReviewCount} human-review, ${humanReviewOnlyCount} human-review-only, ${factCount} fact-based total`,
+      generation_notes: `v2.1 — ${fields.length} fields across ${sections.length} sections: ${autoExtractCount} auto-extractable, ${humanReviewCount} human-review, ${humanReviewOnlyCount} human-review-only, ${narrativeCount} narrative, ${factCount} fact-based total`,
       generated_at: now,
     })
     .select("id")
@@ -495,6 +545,6 @@ async function generateAndStoreSchema(
   if (insertErr) throw new Error(`Failed to store schema: ${insertErr.message}`);
   if (!inserted) throw new Error("Schema insert returned no data");
 
-  console.log(`[${SERVICE_NAME}] Schema ${inserted.id} generated (v${version}, ${fields.length} fields, ${autoExtractCount} auto-extractable, ${humanReviewCount} human-review)`);
+  console.log(`[${SERVICE_NAME}] Schema ${inserted.id} generated (v${version}, ${fields.length} fields across ${sections.length} sections, ${autoExtractCount} auto-extractable, ${narrativeCount} narrative)`);
   return inserted.id;
 }
