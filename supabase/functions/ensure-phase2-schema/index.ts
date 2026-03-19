@@ -671,11 +671,41 @@ async function generateAndStoreSchema(
   },
   version: number,
 ): Promise<string> {
-  const { fields, model, sections } = await generateSchemaFromTemplate(
-    template.name,
-    template.content,
-    (template.metadata as Record<string, unknown>) ?? {},
-  );
+  const MAX_ATTEMPTS = 2;
+  let lastResult: { fields: SchemaField[]; model: string; sections: string[]; detectedSections: string[] } | null = null;
+  let lastQuality: SchemaQualityResult | null = null;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const result = await generateSchemaFromTemplate(
+      template.name,
+      template.content,
+      (template.metadata as Record<string, unknown>) ?? {},
+    );
+
+    const quality = validateSchemaQuality(result.fields, result.detectedSections, template.content);
+    lastResult = result;
+    lastQuality = quality;
+
+    if (quality.pass) {
+      console.log(`[${SERVICE_NAME}] Schema quality passed on attempt ${attempt}: ${result.fields.length} fields, ${quality.sectionsCovered} sections covered, ${quality.narrativeCount} narrative`);
+      break;
+    }
+
+    console.warn(`[${SERVICE_NAME}] Schema quality FAILED on attempt ${attempt}:`, quality.issues.join("; "));
+
+    if (attempt < MAX_ATTEMPTS) {
+      console.log(`[${SERVICE_NAME}] Retrying schema generation (attempt ${attempt + 1})...`);
+    }
+  }
+
+  if (!lastResult) throw new Error("Schema generation produced no result");
+
+  const { fields, model, sections, detectedSections } = lastResult;
+
+  // Log quality warning if still failing after retries (but don't block — accept best effort)
+  if (lastQuality && !lastQuality.pass) {
+    console.warn(`[${SERVICE_NAME}] Accepting schema despite quality issues after ${MAX_ATTEMPTS} attempts: ${lastQuality.issues.join("; ")}`);
+  }
 
   const now = new Date().toISOString();
   const factCount = fields.filter((f) => f.fact_based).length;
@@ -684,10 +714,23 @@ async function generateAndStoreSchema(
   const humanReviewOnlyCount = fields.filter((f) => f.matching_mode === "human_review_only").length;
   const narrativeCount = fields.filter((f) => f.content_type === "narrative").length;
 
+  const qualityNote = lastQuality?.pass
+    ? "quality: PASS"
+    : `quality: WARN (${lastQuality?.issues.join("; ")})`;
+
   const schemaJson = {
     generated_at: now,
     schema_contract_version: "2.1",
     sections,
+    detected_sections: detectedSections,
+    quality: lastQuality ? {
+      pass: lastQuality.pass,
+      issues: lastQuality.issues,
+      field_count: lastQuality.fieldCount,
+      sections_covered: lastQuality.sectionsCovered,
+      sections_expected: lastQuality.sectionsExpected,
+      narrative_count: lastQuality.narrativeCount,
+    } : null,
     fields,
   };
 
@@ -702,7 +745,7 @@ async function generateAndStoreSchema(
       schema_json: schemaJson,
       model,
       source_template_hash: template.content_hash,
-      generation_notes: `v2.1 — ${fields.length} fields across ${sections.length} sections: ${autoExtractCount} auto-extractable, ${humanReviewCount} human-review, ${humanReviewOnlyCount} human-review-only, ${narrativeCount} narrative, ${factCount} fact-based total`,
+      generation_notes: `v2.1 — ${fields.length} fields across ${sections.length} sections (${detectedSections.length} detected): ${autoExtractCount} auto-extractable, ${humanReviewCount} human-review, ${humanReviewOnlyCount} human-review-only, ${narrativeCount} narrative, ${factCount} fact-based total — ${qualityNote}`,
       generated_at: now,
     })
     .select("id")
@@ -711,6 +754,6 @@ async function generateAndStoreSchema(
   if (insertErr) throw new Error(`Failed to store schema: ${insertErr.message}`);
   if (!inserted) throw new Error("Schema insert returned no data");
 
-  console.log(`[${SERVICE_NAME}] Schema ${inserted.id} generated (v${version}, ${fields.length} fields across ${sections.length} sections, ${autoExtractCount} auto-extractable, ${narrativeCount} narrative)`);
+  console.log(`[${SERVICE_NAME}] Schema ${inserted.id} generated (v${version}, ${fields.length} fields across ${sections.length} sections, ${detectedSections.length} detected, ${autoExtractCount} auto-extractable, ${narrativeCount} narrative — ${qualityNote})`);
   return inserted.id;
 }
