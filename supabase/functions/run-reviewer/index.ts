@@ -1,14 +1,15 @@
 /**
- * run-reviewer Edge Function
+ * run-reviewer v2 Edge Function
  *
- * Accepts { session_id }, resolves the linked review_document,
- * reads pre-extracted text from review_documents.extracted_text,
- * runs an LLM review, and writes the structured report back.
+ * Accepts a TRANSIENT structured reviewer payload:
+ *   - document_text (raw extracted text, NOT persisted)
+ *   - structured_answers (schema-aware field recovery results)
+ *   - unanswered_fields / human_review_fields
  *
- * Text extraction is handled upstream by upload-review-document.
- * This function does NOT download PDFs or perform extraction.
+ * Runs an LLM reviewer that JUDGES the structured packet.
+ * Only the final review report is persisted (optionally).
  *
- * Status transitions: extracted → reviewing → completed | failed
+ * Privacy: source text is never stored. Only report metadata is written.
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -19,8 +20,9 @@ import { logEyeEvent } from "../_shared/eye.ts";
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const MAX_EXTRACTED_CHARS = 120_000; // truncate before sending to LLM
-const MIN_TEXT_LENGTH = 50; // minimum chars to attempt review
+const MAX_DOC_TEXT_CHARS = 120_000;
+const MIN_DOC_TEXT_CHARS = 50;
+const MAX_STRUCTURED_ANSWERS = 200;
 const SERVICE_NAME = "run-reviewer";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -36,7 +38,6 @@ function errJson(status: number, code: string, message: string) {
   return json(status, { error: { code, message } });
 }
 
-/** Fire-and-forget eye event – failures must never break the pipeline */
 async function eye(
   supabase: any,
   sessionId: string,
@@ -55,61 +56,64 @@ async function eye(
   }
 }
 
-/** Update review_documents row */
-async function updateReviewDoc(
-  supabase: any,
-  docId: string,
-  fields: Record<string, unknown>,
-) {
-  const { error } = await supabase
-    .from("review_documents")
-    .update({ ...fields, updated_at: new Date().toISOString() })
-    .eq("id", docId);
-  if (error) throw new Error(`DB update review_documents failed: ${error.message}`);
-}
+// ── Reviewer v2 Prompt ─────────────────────────────────────────────────────
 
-// ── Reviewer Prompt ────────────────────────────────────────────────────────
+const REVIEWER_V2_SYSTEM_PROMPT = `You are AidMind Reviewer, a compliance and quality auditor for social-services case documentation.
 
-const REVIEWER_SYSTEM_PROMPT = `You are AidMind Reviewer, a compliance and quality reviewer for social-services case documentation.
+You receive a STRUCTURED REVIEW PACKET containing:
+1. "document_text" — the raw extracted text from a completed case document
+2. "structured_answers" — a list of template fields with recovered answers (some may be missing)
+3. "unanswered_fields" — fields where no answer was recovered from the document
+4. "human_review_fields" — fields flagged as requiring manual human verification
 
-You analyze a completed case document and produce a STRUCTURED REVIEW REPORT identifying concrete issues.
+Your job is to AUDIT this packet for quality and compliance issues.
 
 ISSUE CATEGORIES:
-- completeness: Missing required fields, incomplete sections, gaps in documentation
-- policy_language: Language that conflicts with policy requirements, prohibited terms, incorrect terminology
-- tone: Unprofessional, judgmental, or emotionally charged language
-- bias: Assumptions, stereotypes, stigmatizing language, or subjective judgments without evidence
-- consistency: Internal contradictions, conflicting information, logical inconsistencies
+- completeness: Missing required fields, incomplete sections, gaps in documentation. USE the structured_answers and unanswered_fields to identify these efficiently.
+- policy_language: Language that conflicts with policy requirements, prohibited terms, incorrect terminology. USE the document_text for this.
+- tone: Unprofessional, judgmental, or emotionally charged language. USE the document_text for this.
+- bias: Assumptions, stereotypes, stigmatizing language, or subjective judgments without evidence. USE the document_text for this.
+- consistency: Internal contradictions between structured answers, conflicting information, logical inconsistencies. USE both structured_answers and document_text.
 
 SEVERITY LEVELS:
 - "low": Minor issue, may want to address
 - "medium": Should address before finalising
 - "high": Must address — critical compliance or quality risk
 
+EFFICIENCY RULES:
+1. For COMPLETENESS checks: primarily use structured_answers + unanswered_fields. These tell you exactly what was and wasn't filled in.
+2. For TONE/BIAS/POLICY checks: scan the document_text for problematic language.
+3. For CONSISTENCY checks: cross-reference structured_answers against each other and against document_text.
+4. human_review_fields are fields that require manual verification (e.g., SSNs, IDs). Flag them as informational but do NOT treat their absence as a completeness failure.
+
 STRICT RULES:
 1. Produce ONLY a JSON report. No markdown, no commentary.
 2. Do NOT rewrite any text from the document.
 3. Do NOT suggest replacement text or alternative wording.
-4. Do NOT recommend wording changes.
-5. Do NOT act like an editor — you are an auditor.
-6. Do NOT provide suggestions of any kind.
-7. Only identify and explain issues found in the document.
-8. Keep excerpts short (≤ 30 words).
-9. Focus on concrete, identifiable issues — not vague impressions.
-10. If the document is well-written and compliant, return zero issues.
+4. Do NOT act like an editor — you are an auditor.
+5. Do NOT provide suggestions of any kind.
+6. Only identify and explain issues found.
+7. Keep excerpts short (≤ 30 words).
+8. Focus on concrete, identifiable issues — not vague impressions.
+9. If the document is well-written and compliant, return zero issues.
+10. When reporting completeness issues, include the field_key in the issue.
 
 OUTPUT SCHEMA (return ONLY this JSON):
 {
   "summary": {
     "overall_risk": "low" | "medium" | "high",
-    "key_findings": ["finding 1", "finding 2"]
+    "key_findings": ["finding 1", "finding 2"],
+    "fields_reviewed": <int>,
+    "fields_missing": <int>,
+    "fields_human_review": <int>
   },
   "issues": [
     {
       "type": "completeness | policy_language | tone | bias | consistency",
       "severity": "low | medium | high",
-      "excerpt": "short excerpt from the document",
-      "explanation": "why this is problematic"
+      "excerpt": "short excerpt from the document (if applicable)",
+      "explanation": "why this is problematic",
+      "field_key": "optional — the field this relates to"
     }
   ],
   "metrics": {
@@ -125,21 +129,15 @@ No additional keys. No markdown fences. No commentary outside the JSON.`;
 const VALID_ISSUE_TYPES = new Set(["completeness", "policy_language", "tone", "bias", "consistency"]);
 const VALID_SEVERITIES = new Set(["low", "medium", "high"]);
 
-function validateReviewReport(parsed: unknown): parsed is {
-  summary: { overall_risk: string; key_findings: string[] };
-  issues: Array<{ type: string; severity: string; excerpt: string; explanation: string }>;
-  metrics: { issue_count: number; high_severity_count: number };
-} {
+function validateReviewReport(parsed: unknown): boolean {
   if (typeof parsed !== "object" || parsed === null) return false;
   const obj = parsed as Record<string, unknown>;
 
-  // summary
   if (typeof obj.summary !== "object" || obj.summary === null) return false;
   const summary = obj.summary as Record<string, unknown>;
   if (!VALID_SEVERITIES.has(summary.overall_risk as string)) return false;
   if (!Array.isArray(summary.key_findings)) return false;
 
-  // issues
   if (!Array.isArray(obj.issues)) return false;
   for (const issue of obj.issues) {
     if (typeof issue !== "object" || issue === null) return false;
@@ -150,13 +148,94 @@ function validateReviewReport(parsed: unknown): parsed is {
     if (typeof i.explanation !== "string") return false;
   }
 
-  // metrics
   if (typeof obj.metrics !== "object" || obj.metrics === null) return false;
   const metrics = obj.metrics as Record<string, unknown>;
   if (typeof metrics.issue_count !== "number") return false;
   if (typeof metrics.high_severity_count !== "number") return false;
 
   return true;
+}
+
+// ── Input validation ──────────────────────────────────────────────────────
+
+interface StructuredAnswer {
+  field_key: string;
+  label: string;
+  answer: string | null;
+  recovery_confidence: string;
+  missing: boolean;
+  requires_human_review: boolean;
+}
+
+interface V2Body {
+  session_id: string;
+  template_id?: string;
+  phase2_schema_id?: string;
+  document_text: string;
+  structured_answers?: StructuredAnswer[];
+  unanswered_fields?: Array<{ field_key: string; label: string }>;
+  human_review_fields?: Array<{ field_key: string; label: string; reason: string }>;
+}
+
+function validateV2Body(body: unknown): body is V2Body {
+  if (typeof body !== "object" || body === null) return false;
+  const b = body as Record<string, unknown>;
+
+  if (typeof b.session_id !== "string") return false;
+  if (typeof b.document_text !== "string") return false;
+
+  if (b.structured_answers !== undefined && !Array.isArray(b.structured_answers)) return false;
+  if (b.unanswered_fields !== undefined && !Array.isArray(b.unanswered_fields)) return false;
+  if (b.human_review_fields !== undefined && !Array.isArray(b.human_review_fields)) return false;
+
+  return true;
+}
+
+// ── Build LLM user message ────────────────────────────────────────────────
+
+function buildUserMessage(body: V2Body): string {
+  const parts: string[] = [];
+
+  parts.push("Review the following completed case document.\n");
+
+  // Structured answers summary
+  if (body.structured_answers && body.structured_answers.length > 0) {
+    parts.push("STRUCTURED FIELD ANSWERS (recovered from document):");
+    for (const a of body.structured_answers) {
+      if (a.requires_human_review) continue; // handled separately
+      const status = a.missing ? "[MISSING]" : `[${a.recovery_confidence}]`;
+      const val = a.answer || "(blank)";
+      parts.push(`  ${status} ${a.label}: ${val}`);
+    }
+    parts.push("");
+  }
+
+  // Unanswered fields
+  if (body.unanswered_fields && body.unanswered_fields.length > 0) {
+    parts.push("UNANSWERED FIELDS (not found in document):");
+    for (const f of body.unanswered_fields) {
+      parts.push(`  - ${f.label}`);
+    }
+    parts.push("");
+  }
+
+  // Human review fields
+  if (body.human_review_fields && body.human_review_fields.length > 0) {
+    parts.push("HUMAN-REVIEW-ONLY FIELDS (require manual verification, do NOT flag as missing):");
+    for (const f of body.human_review_fields) {
+      parts.push(`  - ${f.label}: ${f.reason}`);
+    }
+    parts.push("");
+  }
+
+  // Raw document text
+  parts.push("DOCUMENT TEXT:");
+  const docText = body.document_text.length > MAX_DOC_TEXT_CHARS
+    ? body.document_text.slice(0, MAX_DOC_TEXT_CHARS)
+    : body.document_text;
+  parts.push(docText);
+
+  return parts.join("\n");
 }
 
 // ── Main Handler ───────────────────────────────────────────────────────────
@@ -175,88 +254,65 @@ serve(async (req) => {
 
   // ── Parse & validate input ───────────────────────────────────────────────
 
-  let body: { session_id?: string };
+  let body: unknown;
   try {
     body = await req.json();
   } catch {
     return errJson(400, "INVALID_JSON", "Request body must be valid JSON");
   }
 
-  const { session_id } = body;
-  if (!session_id || typeof session_id !== "string" || !UUID_RE.test(session_id)) {
-    return errJson(400, "INVALID_SESSION_ID", "session_id is required and must be a valid UUID");
+  // ── V2 path: transient structured payload ────────────────────────────────
+
+  if (!validateV2Body(body)) {
+    return errJson(400, "INVALID_PAYLOAD", "Missing required fields: session_id, document_text");
   }
 
-  let reviewDocId: string | null = null;
+  const v2 = body as V2Body;
+
+  // Validate session_id format
+  if (!UUID_RE.test(v2.session_id)) {
+    return errJson(400, "INVALID_SESSION_ID", "session_id must be a valid UUID");
+  }
+
+  // Validate document_text length
+  if (v2.document_text.trim().length < MIN_DOC_TEXT_CHARS) {
+    return errJson(400, "TEXT_TOO_SHORT", `document_text must be at least ${MIN_DOC_TEXT_CHARS} characters`);
+  }
+
+  // Cap structured_answers
+  if (v2.structured_answers && v2.structured_answers.length > MAX_STRUCTURED_ANSWERS) {
+    return errJson(400, "TOO_MANY_FIELDS", `structured_answers exceeds max of ${MAX_STRUCTURED_ANSWERS}`);
+  }
 
   try {
-    // ── 1. Fetch session ─────────────────────────────────────────────────
+    // ── 1. Verify session exists ─────────────────────────────────────────
 
     const { data: session, error: sessErr } = await supabase
       .from("sessions")
-      .select("id, tenant_id, review_document_id")
-      .eq("id", session_id)
+      .select("id, tenant_id")
+      .eq("id", v2.session_id)
       .maybeSingle();
 
-    if (sessErr) throw new Error(`DB error fetching session: ${sessErr.message}`);
+    if (sessErr) throw new Error(`DB error: ${sessErr.message}`);
     if (!session) return errJson(404, "SESSION_NOT_FOUND", "Session not found");
-    if (!session.review_document_id) {
-      return errJson(409, "NO_REVIEW_DOCUMENT", "Session has no review_document_id attached");
-    }
-    if (!session.tenant_id) {
-      return errJson(409, "NO_TENANT", "Session has no tenant_id");
-    }
+    if (!session.tenant_id) return errJson(409, "NO_TENANT", "Session has no tenant_id");
 
-    reviewDocId = session.review_document_id as string;
+    // ── 2. Eye: started ──────────────────────────────────────────────────
 
-    // ── 2. Fetch review document ─────────────────────────────────────────
-
-    const { data: doc, error: docErr } = await supabase
-      .from("review_documents")
-      .select("id, tenant_id, status, extracted_text, extraction_metadata")
-      .eq("id", reviewDocId)
-      .maybeSingle();
-
-    if (docErr) throw new Error(`DB error fetching review document: ${docErr.message}`);
-    if (!doc) return errJson(404, "REVIEW_DOC_NOT_FOUND", "Review document not found");
-
-    // Tenant guard
-    if (doc.tenant_id !== session.tenant_id) {
-      return errJson(403, "TENANT_MISMATCH", "Review document tenant does not match session tenant");
-    }
-
-    // ── 3. Validate extracted_text ───────────────────────────────────────
-
-    const extractedText = doc.extracted_text;
-
-    if (!extractedText || typeof extractedText !== "string" || extractedText.trim().length === 0) {
-      throw new Error("No extracted text available for review. Ensure upload-review-document completed extraction successfully.");
-    }
-
-    if (extractedText.trim().length < MIN_TEXT_LENGTH) {
-      throw new Error(
-        `Extracted text too short for meaningful review (${extractedText.trim().length} chars, minimum ${MIN_TEXT_LENGTH}). ` +
-        "The document may be image-only or extraction may have failed."
-      );
-    }
-
-    // ── 4. Eye: started ──────────────────────────────────────────────────
-
-    await eye(supabase, session_id, "review_document.review_started", {
-      review_document_id: reviewDocId,
+    await eye(supabase, v2.session_id, "reviewer_v2.started", {
       tenant_id: session.tenant_id,
-      input_char_count: extractedText.length,
+      doc_text_length: v2.document_text.length,
+      structured_answers_count: v2.structured_answers?.length ?? 0,
+      unanswered_count: v2.unanswered_fields?.length ?? 0,
+      human_review_count: v2.human_review_fields?.length ?? 0,
+      has_schema: !!v2.phase2_schema_id,
     });
 
-    // ── 5. Status → reviewing ────────────────────────────────────────────
+    // ── 3. Build LLM message ─────────────────────────────────────────────
 
-    await updateReviewDoc(supabase, reviewDocId, { status: "reviewing", error: null });
+    const userMessage = buildUserMessage(v2);
 
-    // ── 6. Call OpenAI ───────────────────────────────────────────────────
-
-    const textForReview = extractedText.length > MAX_EXTRACTED_CHARS
-      ? extractedText.slice(0, MAX_EXTRACTED_CHARS)
-      : extractedText;
+    // ── 4. Call OpenAI ───────────────────────────────────────────────────
 
     const llmResponse = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -268,11 +324,8 @@ serve(async (req) => {
         model: "gpt-4o-mini",
         temperature: 0.2,
         messages: [
-          { role: "system", content: REVIEWER_SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: `Review the following completed case document and produce a structured review report.\n\nDOCUMENT TEXT:\n${textForReview}`,
-          },
+          { role: "system", content: REVIEWER_V2_SYSTEM_PROMPT },
+          { role: "user", content: userMessage },
         ],
         response_format: { type: "json_object" },
       }),
@@ -290,7 +343,7 @@ serve(async (req) => {
       throw new Error("OpenAI response missing message content");
     }
 
-    // ── 7. Parse & validate report ───────────────────────────────────────
+    // ── 5. Parse & validate report ───────────────────────────────────────
 
     let report: unknown;
     try {
@@ -303,57 +356,29 @@ serve(async (req) => {
       throw new Error("LLM output does not match expected review report schema");
     }
 
-    // ── 8. Persist results & complete ────────────────────────────────────
+    // ── 6. Eye: completed ────────────────────────────────────────────────
 
-    const reviewMeta = {
-      reviewed_at: new Date().toISOString(),
-      model: "gpt-4o-mini",
-      input_char_count: textForReview.length,
-      reviewer_version: "1.0.0",
-    };
+    const reportObj = report as Record<string, any>;
 
-    await updateReviewDoc(supabase, reviewDocId, {
-      status: "completed",
-      reviewer_model: "gpt-4o-mini",
-      review_report: report,
-      review_metadata: reviewMeta,
-      error: null,
-    });
-
-    // ── 9. Eye: completed ────────────────────────────────────────────────
-
-    await eye(supabase, session_id, "review_document.review_completed", {
-      review_document_id: reviewDocId,
+    await eye(supabase, v2.session_id, "reviewer_v2.completed", {
       tenant_id: session.tenant_id,
-      issue_count: (report as any).metrics.issue_count,
-      high_severity_count: (report as any).metrics.high_severity_count,
-      overall_risk: (report as any).summary.overall_risk,
+      issue_count: reportObj.metrics.issue_count,
+      high_severity_count: reportObj.metrics.high_severity_count,
+      overall_risk: reportObj.summary.overall_risk,
     });
+
+    // ── 7. Return report (NOT persisted — transient) ─────────────────────
 
     return json(200, {
       success: true,
-      review_document_id: reviewDocId,
-      status: "completed",
-      review_report: report as Record<string, unknown>,
+      review_report: reportObj,
     });
 
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[run-reviewer] error:", message);
 
-    if (reviewDocId) {
-      try {
-        await updateReviewDoc(supabase, reviewDocId, {
-          status: "failed",
-          error: message.slice(0, 1000),
-        });
-      } catch (e2) {
-        console.error("[run-reviewer] failed to mark doc as failed:", e2);
-      }
-    }
-
-    await eye(supabase, session_id, "review_document.review_failed", {
-      review_document_id: reviewDocId,
+    await eye(supabase, v2.session_id, "reviewer_v2.failed", {
       reason: message.slice(0, 250),
     });
 
