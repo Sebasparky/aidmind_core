@@ -22,6 +22,9 @@ import { cn } from "@/lib/utils";
 import { useEyeLogger } from "@/hooks/useEyeLogger";
 import { usePdfTextExtractor, type PageText } from "@/hooks/usePdfTextExtractor";
 import { recoverFieldsFromDocument } from "@/lib/tools/field-recovery";
+import { parseCompletedTemplate } from "@/lib/tools/completed-template-parser";
+import { reconcileNotesAndTemplate } from "@/lib/tools/reconciliation-engine";
+import { ReconciliationPanel } from "@/components/session/ReconciliationPanel";
 import type {
   ReviewerV2Report,
   ReviewIssue,
@@ -29,6 +32,11 @@ import type {
   ReviewIssueType,
   Phase2SchemaField,
 } from "@/lib/tools/reviewer-v2-types";
+import type {
+  TemplateParserArtifact,
+  ReconciliationResult,
+  CompletedTemplateParse,
+} from "@/lib/tools/parser-artifact-types";
 
 // ─── Types ───────────────────────────────────────────────
 type ToolState = "idle" | "ready" | "recovering" | "running" | "success" | "error";
