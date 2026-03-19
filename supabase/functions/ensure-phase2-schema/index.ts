@@ -51,6 +51,147 @@ interface SchemaField {
 }
 
 // ============================================================
+// TEMPLATE SECTION DETECTION
+// ============================================================
+
+/**
+ * Heuristically detect section headings from template content.
+ * Looks for common patterns: markdown headings, numbered sections,
+ * ALL-CAPS lines, "Section:" prefixes, bold markers, etc.
+ */
+function detectTemplateSections(content: string): string[] {
+  const lines = content.split("\n");
+  const sections: string[] = [];
+  const seen = new Set<string>();
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.length < 3 || line.length > 120) continue;
+
+    let sectionName: string | null = null;
+
+    // Markdown headings: ## Section Name
+    const mdMatch = line.match(/^#{1,3}\s+(.+)/);
+    if (mdMatch) {
+      sectionName = mdMatch[1].trim();
+    }
+
+    // Numbered sections: "1. Section Name", "I. Section Name", "A. Section Name"
+    if (!sectionName) {
+      const numMatch = line.match(/^(?:\d+|[IVXLC]+|[A-Z])[\.\)]\s+([A-Z][A-Za-z\s\/\-&]+)/);
+      if (numMatch && numMatch[1].length > 3) {
+        sectionName = numMatch[1].trim();
+      }
+    }
+
+    // ALL-CAPS lines (likely section headers): "CHILD ISSUES", "INTAKE NARRATIVE"
+    if (!sectionName && line === line.toUpperCase() && line.length > 4 && line.length < 60 && /^[A-Z\s\/\-&]+$/.test(line)) {
+      sectionName = line;
+    }
+
+    // "Section:" or "Part:" prefixed
+    if (!sectionName) {
+      const prefixMatch = line.match(/^(?:Section|Part|Category|Area)\s*[:\-]\s*(.+)/i);
+      if (prefixMatch) {
+        sectionName = prefixMatch[1].trim();
+      }
+    }
+
+    // Bold markers: **Section Name** at start of line
+    if (!sectionName) {
+      const boldMatch = line.match(/^\*\*(.+?)\*\*/);
+      if (boldMatch && boldMatch[1].length > 3 && boldMatch[1].length < 60) {
+        const candidate = boldMatch[1].trim();
+        if (/^[A-Z]/.test(candidate) && !candidate.includes(". ") && candidate.split(" ").length <= 8) {
+          sectionName = candidate;
+        }
+      }
+    }
+
+    if (sectionName) {
+      sectionName = sectionName.replace(/[\s:\-]+$/, "").trim();
+      const key = sectionName.toLowerCase();
+      if (!seen.has(key) && sectionName.length > 2) {
+        seen.add(key);
+        sections.push(sectionName);
+      }
+    }
+  }
+
+  return sections;
+}
+
+// ============================================================
+// SCHEMA QUALITY VALIDATION
+// ============================================================
+
+interface SchemaQualityResult {
+  pass: boolean;
+  issues: string[];
+  fieldCount: number;
+  sectionsCovered: number;
+  sectionsExpected: number;
+  narrativeCount: number;
+}
+
+function validateSchemaQuality(
+  fields: SchemaField[],
+  detectedSections: string[],
+  templateContent: string,
+): SchemaQualityResult {
+  const issues: string[] = [];
+  const fieldCount = fields.length;
+  const sectionsExpected = detectedSections.length;
+
+  const fieldSections = new Set(fields.map(f => f.section.toLowerCase()));
+  const sectionsCovered = fieldSections.size;
+
+  const narrativeCount = fields.filter(f => f.content_type === "narrative").length;
+
+  if (sectionsExpected >= 5 && fieldCount < sectionsExpected) {
+    issues.push(`Only ${fieldCount} fields for ${sectionsExpected} detected sections — schema is too shallow`);
+  }
+
+  if (sectionsExpected >= 5 && fieldCount < sectionsExpected * 1.5) {
+    issues.push(`Average of ${(fieldCount / sectionsExpected).toFixed(1)} fields per section — expected at least 2-3 for complex forms`);
+  }
+
+  if (sectionsExpected >= 5 && sectionsCovered < Math.ceil(sectionsExpected * 0.5)) {
+    issues.push(`Only ${sectionsCovered} sections covered out of ${sectionsExpected} detected — many sections have no fields`);
+  }
+
+  const hasNarrativeContent = /narrative|summary|description|comments|explanation|notes|reason/i.test(templateContent);
+  if (hasNarrativeContent && narrativeCount === 0) {
+    issues.push(`No narrative fields generated despite template containing narrative sections`);
+  }
+
+  if (fieldCount >= 5) {
+    const sectionCounts = new Map<string, number>();
+    for (const f of fields) {
+      const s = f.section.toLowerCase();
+      sectionCounts.set(s, (sectionCounts.get(s) ?? 0) + 1);
+    }
+    const maxInOne = Math.max(...sectionCounts.values());
+    if (maxInOne > fieldCount * 0.6 && sectionsExpected >= 5) {
+      issues.push(`${maxInOne} of ${fieldCount} fields concentrated in one section — poor distribution`);
+    }
+  }
+
+  if (fieldCount < 5) {
+    issues.push(`Only ${fieldCount} fields — absolute minimum is 5`);
+  }
+
+  return {
+    pass: issues.length === 0,
+    issues,
+    fieldCount,
+    sectionsCovered,
+    sectionsExpected,
+    narrativeCount,
+  };
+}
+
+// ============================================================
 // SCHEMA GENERATION (v2.1)
 // ============================================================
 
@@ -58,7 +199,7 @@ async function generateSchemaFromTemplate(
   templateName: string,
   templateContent: string,
   templateMetadata: Record<string, unknown>,
-): Promise<{ fields: SchemaField[]; model: string; sections: string[] }> {
+): Promise<{ fields: SchemaField[]; model: string; sections: string[]; detectedSections: string[] }> {
   const apiKey = Deno.env.get("OPENAI_API_KEY");
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
 
@@ -234,19 +375,44 @@ Return JSON:
   ]
 }`;
 
-  const contentPreview = templateContent.length > 12000
-    ? templateContent.slice(0, 12000) + "\n\n[... truncated ...]"
+  // Allow much more content through — gpt-4o has 128k context.
+  // Complex intake forms can be 15-40k chars; truncating at 12k was the #1 cause of shallow schemas.
+  const MAX_CONTENT_CHARS = 60000;
+  const contentPreview = templateContent.length > MAX_CONTENT_CHARS
+    ? templateContent.slice(0, MAX_CONTENT_CHARS) + "\n\n[... truncated ...]"
     : templateContent;
+
+  // Pre-analyze: detect section headings to give the LLM explicit expectations
+  const detectedSections = detectTemplateSections(templateContent);
+  const sectionHint = detectedSections.length > 0
+    ? `\n\nDETECTED TEMPLATE SECTIONS (${detectedSections.length} found — ensure each gets meaningful field representation):\n${detectedSections.map((s, i) => `${i + 1}. ${s}`).join("\n")}`
+    : "";
+
+  const fieldCountGuidance = detectedSections.length > 0
+    ? `This template has approximately ${detectedSections.length} major sections. You should generate AT LEAST ${Math.max(detectedSections.length * 2, 15)} fields total, with at least 1-3 fields per section depending on section complexity. Sections with multiple checkboxes, subgroups, or distinct prompts should generate multiple fields. Do NOT produce fewer than ${Math.max(detectedSections.length, 10)} fields for a template this complex.`
+    : `Generate a thorough set of fields. For templates with multiple sections, aim for 15-50+ fields depending on complexity.`;
 
   const userPrompt = `TEMPLATE NAME: ${templateName}
 
 TEMPLATE CONTENT:
 ${contentPreview}
 ${existingFieldsHint}
+${sectionHint}
+
+FIELD COUNT GUIDANCE:
+${fieldCountGuidance}
 
 Analyze this template and produce the Phase 2 extraction schema.
-IMPORTANT: Preserve the template's real section structure. Generate fields for ALL major sections, not just the easy ones. Include narrative/free-text sections as fields.
-Remember: be conservative about auto-extraction. Sensitive identifiers, ambiguous duplicates, and rarely-documented fields should be marked requires_human_review = true.
+
+CRITICAL REQUIREMENTS:
+1. Preserve the template's real section structure. Generate fields for ALL major sections, not just the easy ones.
+2. Include narrative/free-text sections as fields with content_type = "narrative".
+3. Checkbox-heavy sections should decompose into MULTIPLE fields when they contain distinct subgroups (e.g., "Child Issues" vs "Caretaker Issues" vs "Family Issues" should be SEPARATE fields, not one catch-all).
+4. Each major section should have AT LEAST 1-3 fields. Sections with many prompts or subgroups should have more.
+5. Do NOT flatten a multi-section form into a handful of generic fields.
+6. Narrative areas like "Intake Narrative", "Decision Summary", "Emergency Actions", "Sensitive Case Comments" must each be their own field.
+7. Be conservative about auto-extraction. Sensitive identifiers, ambiguous duplicates, and rarely-documented fields should be marked requires_human_review = true.
+
 Return JSON only.`;
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -369,7 +535,7 @@ Return JSON only.`;
     };
   });
 
-  return { fields, model, sections };
+  return { fields, model, sections, detectedSections };
 }
 
 // ============================================================
@@ -505,11 +671,41 @@ async function generateAndStoreSchema(
   },
   version: number,
 ): Promise<string> {
-  const { fields, model, sections } = await generateSchemaFromTemplate(
-    template.name,
-    template.content,
-    (template.metadata as Record<string, unknown>) ?? {},
-  );
+  const MAX_ATTEMPTS = 2;
+  let lastResult: { fields: SchemaField[]; model: string; sections: string[]; detectedSections: string[] } | null = null;
+  let lastQuality: SchemaQualityResult | null = null;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const result = await generateSchemaFromTemplate(
+      template.name,
+      template.content,
+      (template.metadata as Record<string, unknown>) ?? {},
+    );
+
+    const quality = validateSchemaQuality(result.fields, result.detectedSections, template.content);
+    lastResult = result;
+    lastQuality = quality;
+
+    if (quality.pass) {
+      console.log(`[${SERVICE_NAME}] Schema quality passed on attempt ${attempt}: ${result.fields.length} fields, ${quality.sectionsCovered} sections covered, ${quality.narrativeCount} narrative`);
+      break;
+    }
+
+    console.warn(`[${SERVICE_NAME}] Schema quality FAILED on attempt ${attempt}:`, quality.issues.join("; "));
+
+    if (attempt < MAX_ATTEMPTS) {
+      console.log(`[${SERVICE_NAME}] Retrying schema generation (attempt ${attempt + 1})...`);
+    }
+  }
+
+  if (!lastResult) throw new Error("Schema generation produced no result");
+
+  const { fields, model, sections, detectedSections } = lastResult;
+
+  // Log quality warning if still failing after retries (but don't block — accept best effort)
+  if (lastQuality && !lastQuality.pass) {
+    console.warn(`[${SERVICE_NAME}] Accepting schema despite quality issues after ${MAX_ATTEMPTS} attempts: ${lastQuality.issues.join("; ")}`);
+  }
 
   const now = new Date().toISOString();
   const factCount = fields.filter((f) => f.fact_based).length;
@@ -518,10 +714,23 @@ async function generateAndStoreSchema(
   const humanReviewOnlyCount = fields.filter((f) => f.matching_mode === "human_review_only").length;
   const narrativeCount = fields.filter((f) => f.content_type === "narrative").length;
 
+  const qualityNote = lastQuality?.pass
+    ? "quality: PASS"
+    : `quality: WARN (${lastQuality?.issues.join("; ")})`;
+
   const schemaJson = {
     generated_at: now,
     schema_contract_version: "2.1",
     sections,
+    detected_sections: detectedSections,
+    quality: lastQuality ? {
+      pass: lastQuality.pass,
+      issues: lastQuality.issues,
+      field_count: lastQuality.fieldCount,
+      sections_covered: lastQuality.sectionsCovered,
+      sections_expected: lastQuality.sectionsExpected,
+      narrative_count: lastQuality.narrativeCount,
+    } : null,
     fields,
   };
 
@@ -536,7 +745,7 @@ async function generateAndStoreSchema(
       schema_json: schemaJson,
       model,
       source_template_hash: template.content_hash,
-      generation_notes: `v2.1 — ${fields.length} fields across ${sections.length} sections: ${autoExtractCount} auto-extractable, ${humanReviewCount} human-review, ${humanReviewOnlyCount} human-review-only, ${narrativeCount} narrative, ${factCount} fact-based total`,
+      generation_notes: `v2.1 — ${fields.length} fields across ${sections.length} sections (${detectedSections.length} detected): ${autoExtractCount} auto-extractable, ${humanReviewCount} human-review, ${humanReviewOnlyCount} human-review-only, ${narrativeCount} narrative, ${factCount} fact-based total — ${qualityNote}`,
       generated_at: now,
     })
     .select("id")
@@ -545,6 +754,6 @@ async function generateAndStoreSchema(
   if (insertErr) throw new Error(`Failed to store schema: ${insertErr.message}`);
   if (!inserted) throw new Error("Schema insert returned no data");
 
-  console.log(`[${SERVICE_NAME}] Schema ${inserted.id} generated (v${version}, ${fields.length} fields across ${sections.length} sections, ${autoExtractCount} auto-extractable, ${narrativeCount} narrative)`);
+  console.log(`[${SERVICE_NAME}] Schema ${inserted.id} generated (v${version}, ${fields.length} fields across ${sections.length} sections, ${detectedSections.length} detected, ${autoExtractCount} auto-extractable, ${narrativeCount} narrative — ${qualityNote})`);
   return inserted.id;
 }
