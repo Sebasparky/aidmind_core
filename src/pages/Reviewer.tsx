@@ -31,11 +31,13 @@ import type {
   ReviewSeverity,
   ReviewIssueType,
   Phase2SchemaField,
+  RecoveredField,
 } from "@/lib/tools/reviewer-v2-types";
 import type {
   TemplateParserArtifact,
   ReconciliationResult,
   CompletedTemplateParse,
+  FieldReconciliation,
 } from "@/lib/tools/parser-artifact-types";
 
 // ─── Types ───────────────────────────────────────────────
@@ -47,6 +49,7 @@ interface SessionInfo {
   sessionUuid: string;
   templateId: string | null;
   phase2SchemaId: string | null;
+  tenantId: string | null;
 }
 
 interface SelectedFile {
@@ -96,7 +99,6 @@ function loadReviewerState(sessionId: string): PersistedReviewerState | null {
     const raw = sessionStorage.getItem(reviewerStorageKey(sessionId));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as PersistedReviewerState;
-    // Normalize in-flight states
     if (parsed.toolState === "running" || parsed.toolState === "recovering") {
       parsed.toolState = parsed.output ? "success" : "ready";
     }
@@ -189,6 +191,147 @@ function ReadinessRow({ label, state, detail }: { label: string; state: Readines
   );
 }
 
+// ─── Reconciliation-aware completeness filtering ─────────
+/**
+ * Post-process reviewer issues using reconciliation results.
+ * - confirmed_match fields → suppress completeness issues
+ * - likely_correction → suppress completeness issues
+ * - possible_discrepancy → reclassify as consistency, not completeness
+ * - unresolved + low parse confidence → downgrade severity
+ */
+function applyReconciliationToIssues(
+  issues: ReviewIssue[],
+  reconciliation: ReconciliationResult | null,
+): ReviewIssue[] {
+  if (!reconciliation || !reconciliation.reliable_for_review) return issues;
+
+  const fieldResolutionMap = new Map<string, FieldReconciliation>();
+  for (const f of reconciliation.fields) {
+    fieldResolutionMap.set(f.field_key, f);
+  }
+
+  return issues.filter((issue) => {
+    if (issue.type !== "completeness" || !issue.field_key) return true;
+    const recon = fieldResolutionMap.get(issue.field_key);
+    if (!recon) return true;
+
+    // Suppress false positives
+    if (recon.resolution === "confirmed_match") return false;
+    if (recon.resolution === "likely_correction") return false;
+
+    return true;
+  }).map((issue) => {
+    if (!issue.field_key) return issue;
+    const recon = fieldResolutionMap.get(issue.field_key);
+    if (!recon) return issue;
+
+    // Reclassify discrepancies
+    if (issue.type === "completeness" && recon.resolution === "possible_discrepancy") {
+      return {
+        ...issue,
+        type: "consistency" as ReviewIssueType,
+        explanation: `${issue.explanation} (Notes and completed form differ — possible discrepancy)`,
+      };
+    }
+
+    // Downgrade unresolved
+    if (issue.type === "completeness" && recon.resolution === "unresolved" && reconciliation.template_parse_confidence === "low") {
+      return {
+        ...issue,
+        severity: "low" as ReviewSeverity,
+        explanation: `${issue.explanation} (Low parse confidence — manual verification recommended)`,
+      };
+    }
+
+    return issue;
+  });
+}
+
+// ─── Auto-ensure parser artifact ─────────────────────────
+async function ensureParserArtifact(
+  templateId: string,
+  tenantId: string,
+): Promise<TemplateParserArtifact | null> {
+  // 1. Check if active artifact exists
+  const { data: existing } = await supabase
+    .from("template_parser_artifacts")
+    .select("artifact_json")
+    .eq("template_id", templateId)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (existing?.artifact_json) {
+    if (import.meta.env.DEV) console.info("[Reviewer] Parser artifact found in DB");
+    return existing.artifact_json as unknown as TemplateParserArtifact;
+  }
+
+  // 2. Auto-generate via edge function
+  if (import.meta.env.DEV) console.info("[Reviewer] No parser artifact — auto-generating…");
+  try {
+    const { data, error } = await supabase.functions.invoke("generate-parser-artifacts", {
+      body: { template_id: templateId, tenant_id: tenantId },
+    });
+    if (error) throw error;
+    if (data?.status === "generated" || data?.status === "exists") {
+      // Re-fetch the artifact
+      const { data: fresh } = await supabase
+        .from("template_parser_artifacts")
+        .select("artifact_json")
+        .eq("template_id", templateId)
+        .eq("is_active", true)
+        .maybeSingle();
+      if (fresh?.artifact_json) {
+        if (import.meta.env.DEV) console.info("[Reviewer] Parser artifact auto-generated successfully");
+        return fresh.artifact_json as unknown as TemplateParserArtifact;
+      }
+    }
+  } catch (err) {
+    console.warn("[Reviewer] Failed to auto-generate parser artifact:", err);
+  }
+  return null;
+}
+
+// ─── Load Phase 2 note extraction from session ──────────
+async function loadNotesExtraction(sessionUuid: string): Promise<RecoveredField[] | null> {
+  try {
+    const { data, error } = await supabase
+      .from("sessions")
+      .select("metadata")
+      .eq("id", sessionUuid)
+      .maybeSingle();
+
+    if (error || !data?.metadata) return null;
+    const meta = data.metadata as Record<string, any>;
+
+    // Phase 2 extraction stored in metadata.guidance_phase2
+    const phase2 = meta.guidance_phase2;
+    if (!phase2) return null;
+
+    // Extract structured answers from phase2 output
+    const answers = phase2.answers || phase2.extracted_answers;
+    if (!Array.isArray(answers) || answers.length === 0) return null;
+
+    // Convert phase2 answers to RecoveredField format for reconciliation
+    return answers.map((a: any) => ({
+      field_key: a.field_key,
+      label: a.label || a.field_key,
+      template_prompt: a.question || a.template_prompt || "",
+      answer: a.answer ?? null,
+      recovery_confidence: a.confidence || a.recovery_confidence || "medium",
+      recovery_method: "phase2_extraction" as any,
+      anchor_used: null,
+      source_excerpt: a.supporting_excerpt || a.source_excerpt || null,
+      matching_mode: a.matching_mode || "extract_short_text",
+      review_relevance: "review_worthy" as const,
+      requires_human_review: false,
+      missing: !a.answer,
+    })) as RecoveredField[];
+  } catch (err) {
+    console.warn("[Reviewer] Failed to load notes extraction:", err);
+    return null;
+  }
+}
+
 // ─── Main Page ───────────────────────────────────────────
 export default function Reviewer() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -214,8 +357,10 @@ export default function Reviewer() {
   const [reconciliationResult, setReconciliationResult] = useState<ReconciliationResult | null>(null);
   const [templateParseResult, setTemplateParseResult] = useState<CompletedTemplateParse | null>(null);
   const [parserArtifact, setParserArtifact] = useState<TemplateParserArtifact | null>(null);
+  const [notesExtraction, setNotesExtraction] = useState<RecoveredField[] | null>(null);
+  const [artifactStatus, setArtifactStatus] = useState<"loading" | "ready" | "missing" | "generating">("loading");
 
-  // Restored state (for when File object isn't available)
+  // Restored state
   const [restoredPages, setRestoredPages] = useState<PageText[]>([]);
   const [restoredFullText, setRestoredFullText] = useState("");
   const [restoredPageCount, setRestoredPageCount] = useState(0);
@@ -227,7 +372,6 @@ export default function Reviewer() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textPanelRef = useRef<HTMLDivElement>(null);
 
-  // PDF text extraction hook
   const {
     pages: livePages,
     fullText: liveFullText,
@@ -238,7 +382,6 @@ export default function Reviewer() {
     clearText,
   } = usePdfTextExtractor();
 
-  // Unified accessors - prefer live data, fall back to restored
   const extractedPages = livePages.length > 0 ? livePages : restoredPages;
   const extractedFullText = liveFullText || restoredFullText;
   const pageCount = livePageCount || restoredPageCount;
@@ -246,14 +389,14 @@ export default function Reviewer() {
   const fileSize = selectedFile?.file.size ?? restoredFileSize;
   const hasDocument = selectedFile !== null || restoredFullText.length > 0;
 
-  // ─── Load session info + schema ────────────────────────
+  // ─── Load session info + schema + auto-ensure artifacts ─
   useEffect(() => {
     async function fetchSession() {
       if (!sessionId) { setPageError("No session ID provided"); setPageLoading(false); return; }
       try {
         const { data, error } = await supabase
           .from("sessions")
-          .select("id, case_label, interaction_type, template_id, phase2_schema_id")
+          .select("id, case_label, interaction_type, template_id, phase2_schema_id, tenant_id")
           .eq("session_id", sessionId)
           .maybeSingle();
         if (error) throw error;
@@ -264,7 +407,10 @@ export default function Reviewer() {
           sessionUuid: data.id,
           templateId: data.template_id,
           phase2SchemaId: data.phase2_schema_id,
+          tenantId: data.tenant_id,
         });
+
+        // Load schema
         if (data.phase2_schema_id) {
           const { data: schema, error: schemaErr } = await supabase
             .from("template_phase2_schemas")
@@ -276,24 +422,34 @@ export default function Reviewer() {
             if (parsed?.fields && Array.isArray(parsed.fields)) setSchemaFields(parsed.fields as Phase2SchemaField[]);
           }
         }
-        // Load parser artifact for template
-        if (data.template_id) {
-          const { data: artifactRow } = await supabase
-            .from("template_parser_artifacts")
-            .select("artifact_json")
-            .eq("template_id", data.template_id)
-            .eq("is_active", true)
-            .maybeSingle();
-          if (artifactRow?.artifact_json) {
-            setParserArtifact(artifactRow.artifact_json as unknown as TemplateParserArtifact);
+
+        // Auto-ensure parser artifact
+        if (data.template_id && data.tenant_id) {
+          setArtifactStatus("generating");
+          const artifact = await ensureParserArtifact(data.template_id, data.tenant_id);
+          if (artifact) {
+            setParserArtifact(artifact);
+            setArtifactStatus("ready");
             if (import.meta.env.DEV) {
-              console.info("[Reviewer] Parser artifact loaded:", {
-                sections: (artifactRow.artifact_json as any)?.sections?.length,
-                checkbox_groups: (artifactRow.artifact_json as any)?.checkbox_groups?.length,
+              console.info("[Reviewer] Parser artifact ready:", {
+                sections: artifact.sections?.length,
+                checkbox_groups: artifact.checkbox_groups?.length,
               });
             }
+          } else {
+            setArtifactStatus("missing");
           }
+        } else {
+          setArtifactStatus("missing");
         }
+
+        // Load Phase 2 note extraction
+        const notes = await loadNotesExtraction(data.id);
+        setNotesExtraction(notes);
+        if (import.meta.env.DEV) {
+          console.info("[Reviewer] Notes extraction:", notes ? `${notes.length} fields` : "not available");
+        }
+
       } catch { setPageError("Failed to load session"); }
       finally { setPageLoading(false); }
     }
@@ -352,9 +508,8 @@ export default function Reviewer() {
       reconciliationResult,
       templateParseResult,
     });
-  }, [sessionId, hydratedSessionId, toolState, selectedFile, restoredFileName, restoredFileSize, extractedPages, extractedFullText, pageCount, output, errorMessage, recoveryStats, activeSnippet]);
+  }, [sessionId, hydratedSessionId, toolState, selectedFile, restoredFileName, restoredFileSize, extractedPages, extractedFullText, pageCount, output, errorMessage, recoveryStats, activeSnippet, reconciliationResult, templateParseResult]);
 
-  // Cleanup object URL on unmount
   useEffect(() => {
     return () => { if (selectedFile) URL.revokeObjectURL(selectedFile.objectUrl); };
   }, [selectedFile]);
@@ -423,10 +578,23 @@ export default function Reviewer() {
     setActiveSnippet(null);
 
     setToolState("recovering");
-    let structured_answers: any[] = [];
-    let review_worthy_answers: any[] = [];
+    let structured_answers: RecoveredField[] = [];
+    let review_worthy_answers: RecoveredField[] = [];
     let unanswered_fields: any[] = [];
     let human_review_fields: any[] = [];
+    let localReconciliation: ReconciliationResult | null = null;
+    let localTemplateParse: CompletedTemplateParse | null = null;
+
+    // Diagnostics object
+    const diagnostics: Record<string, any> = {
+      has_schema: !!schemaFields,
+      has_parser_artifact: !!parserArtifact,
+      has_notes_extraction: !!notesExtraction,
+      notes_extraction_count: notesExtraction?.length ?? 0,
+      artifact_status: artifactStatus,
+      reconciliation_used: false,
+      fallback_path: false,
+    };
 
     if (schemaFields && schemaFields.length > 0) {
       try {
@@ -441,32 +609,53 @@ export default function Reviewer() {
           humanReview: human_review_fields.length,
         });
 
-        // Run completed-template parser + reconciliation if artifact available
+        // Run completed-template parser + reconciliation
         if (parserArtifact) {
           try {
-            const tParse = parseCompletedTemplate(extractedFullText, parserArtifact, schemaFields);
-            setTemplateParseResult(tParse);
-            const reconResult = reconcileNotesAndTemplate(
-              structured_answers,
-              tParse.fields,
-              tParse.overall_confidence,
+            localTemplateParse = parseCompletedTemplate(extractedFullText, parserArtifact, schemaFields);
+            setTemplateParseResult(localTemplateParse);
+            diagnostics.template_parse_confidence = localTemplateParse.overall_confidence;
+            diagnostics.fields_parsed = localTemplateParse.fields.length;
+            diagnostics.sections_parsed = localTemplateParse.sections_parsed.length;
+
+            // Use notes extraction if available, otherwise fall back to field recovery
+            const notesSource = notesExtraction && notesExtraction.length > 0
+              ? notesExtraction
+              : structured_answers;
+
+            diagnostics.reconciliation_notes_source = notesExtraction ? "phase2_extraction" : "field_recovery";
+
+            localReconciliation = reconcileNotesAndTemplate(
+              notesSource,
+              localTemplateParse.fields,
+              localTemplateParse.overall_confidence,
             );
-            setReconciliationResult(reconResult);
+            setReconciliationResult(localReconciliation);
+            diagnostics.reconciliation_used = true;
+            diagnostics.reconciliation_matches = localReconciliation.matches;
+            diagnostics.reconciliation_mismatches = localReconciliation.mismatches;
+            diagnostics.reconciliation_discrepancies = localReconciliation.possible_discrepancies;
+            diagnostics.reconciliation_omissions = localReconciliation.likely_omissions;
+            diagnostics.reconciliation_corrections = localReconciliation.likely_corrections;
+            diagnostics.reconciliation_reliable = localReconciliation.reliable_for_review;
+
             if (import.meta.env.DEV) {
-              console.info("[Reviewer] Reconciliation:", {
-                matches: reconResult.matches,
-                mismatches: reconResult.mismatches,
-                discrepancies: reconResult.possible_discrepancies,
-                omissions: reconResult.likely_omissions,
-                parse_confidence: tParse.overall_confidence,
-              });
+              console.info("[Reviewer] Reconciliation complete:", diagnostics);
             }
           } catch (err) {
             console.warn("[Reviewer] Template parse/reconciliation failed:", err);
+            diagnostics.reconciliation_error = err instanceof Error ? err.message : "unknown";
+          }
+        } else {
+          diagnostics.fallback_path = true;
+          if (import.meta.env.DEV) {
+            console.info("[Reviewer] No parser artifact — using fallback field recovery only");
           }
         }
       } catch (err) {
         console.warn("[Reviewer] Field recovery failed, proceeding with text-only:", err);
+        diagnostics.recovery_error = err instanceof Error ? err.message : "unknown";
+        diagnostics.fallback_path = true;
       }
     }
 
@@ -482,16 +671,56 @@ export default function Reviewer() {
         unanswered_count: unanswered_fields.length,
         human_review_count: human_review_fields.length,
         has_schema: !!schemaFields,
+        ...diagnostics,
       },
     });
 
     try {
+      // Build reconciliation-aware payload for Reviewer
+      const reconciliationContext = localReconciliation && localReconciliation.reliable_for_review ? {
+        reconciliation_summary: {
+          matches: localReconciliation.matches,
+          mismatches: localReconciliation.mismatches,
+          likely_corrections: localReconciliation.likely_corrections,
+          possible_discrepancies: localReconciliation.possible_discrepancies,
+          likely_omissions: localReconciliation.likely_omissions,
+          unresolved: localReconciliation.unresolved,
+          template_parse_confidence: localReconciliation.template_parse_confidence,
+        },
+        confirmed_fields: localReconciliation.fields
+          .filter(f => f.resolution === "confirmed_match")
+          .map(f => f.field_key),
+        likely_corrections: localReconciliation.fields
+          .filter(f => f.resolution === "likely_correction")
+          .map(f => ({ field_key: f.field_key, notes: f.notes_value, form: f.template_value })),
+        discrepancies: localReconciliation.fields
+          .filter(f => f.resolution === "possible_discrepancy")
+          .map(f => ({ field_key: f.field_key, notes: f.notes_value, form: f.template_value, section: f.section })),
+        omissions: localReconciliation.fields
+          .filter(f => f.resolution === "likely_omission")
+          .map(f => ({ field_key: f.field_key, notes_value: f.notes_value, section: f.section })),
+      } : undefined;
+
+      // Remove confirmed_match and likely_correction fields from unanswered_fields
+      let adjustedUnanswered = unanswered_fields;
+      if (localReconciliation?.reliable_for_review) {
+        const suppressedKeys = new Set(
+          localReconciliation.fields
+            .filter(f => f.resolution === "confirmed_match" || f.resolution === "likely_correction")
+            .map(f => f.field_key)
+        );
+        adjustedUnanswered = unanswered_fields.filter(f => !suppressedKeys.has(f.field_key));
+      }
+
       const payload = {
         session_id: sessionInfo.sessionUuid,
         template_id: sessionInfo.templateId || undefined,
         phase2_schema_id: sessionInfo.phase2SchemaId || undefined,
         document_text: extractedFullText,
-        structured_answers, review_worthy_answers, unanswered_fields, human_review_fields,
+        structured_answers, review_worthy_answers,
+        unanswered_fields: adjustedUnanswered,
+        human_review_fields,
+        reconciliation_context: reconciliationContext,
       };
       const { data, error } = await supabase.functions.invoke("run-reviewer", { body: payload });
       if (error) throw new Error(error.message || "Edge function invocation failed");
@@ -504,8 +733,31 @@ export default function Reviewer() {
         return;
       }
       if (!data?.review_report) throw new Error("Invalid response from reviewer");
-      const report = data.review_report as ReviewerV2Report;
-      logEvent({ eventType: "tool.run.completed", sessionId, requestId, toolName: "run_reviewer_v2", result: "success", metadata: { issue_count: report.metrics.issue_count, high_severity_count: report.metrics.high_severity_count, overall_risk: report.summary.overall_risk } });
+      let report = data.review_report as ReviewerV2Report;
+
+      // Post-process: apply reconciliation-aware filtering
+      report = {
+        ...report,
+        issues: applyReconciliationToIssues(report.issues, localReconciliation),
+        metrics: {
+          issue_count: 0,
+          high_severity_count: 0,
+        },
+      };
+      // Recalculate metrics after filtering
+      report.metrics.issue_count = report.issues.length;
+      report.metrics.high_severity_count = report.issues.filter(i => i.severity === "high").length;
+
+      logEvent({
+        eventType: "tool.run.completed", sessionId, requestId, toolName: "run_reviewer_v2",
+        result: "success",
+        metadata: {
+          issue_count: report.metrics.issue_count,
+          high_severity_count: report.metrics.high_severity_count,
+          overall_risk: report.summary.overall_risk,
+          reconciliation_filtered: localReconciliation?.reliable_for_review ?? false,
+        },
+      });
       setOutput(report);
       setToolState("success");
     } catch (err: any) {
@@ -514,13 +766,12 @@ export default function Reviewer() {
       setErrorMessage(err?.message || "An unexpected error occurred.");
       setToolState("error");
     }
-  }, [sessionId, sessionInfo, extractedFullText, fileSize, pageCount, schemaFields, logEvent]);
+  }, [sessionId, sessionInfo, extractedFullText, fileSize, pageCount, schemaFields, logEvent, parserArtifact, notesExtraction, artifactStatus]);
 
   const handleClear = () => {
     handleRemoveFile();
   };
 
-  // ─── Highlight / Jump ─────────────────────────────────
   const handleHighlight = useCallback((snippet: string) => {
     setActiveSnippet(snippet);
     setTimeout(() => {
@@ -529,7 +780,6 @@ export default function Reviewer() {
     }, 50);
   }, []);
 
-  // ─── Copy ──────────────────────────────────────────────
   const handleCopyAll = async () => {
     if (!output) return;
     const text = ISSUE_TYPES.map((type) => {
@@ -590,6 +840,8 @@ export default function Reviewer() {
   const docReady: ReadinessState = hasDocument ? "ready" : "missing";
   const extractReady: ReadinessState = extracting ? "attention" : extractedFullText.length > 0 ? "ready" : "missing";
   const schemaReady: ReadinessState = schemaFields ? "ready" : "attention";
+  const artifactReady: ReadinessState = artifactStatus === "ready" ? "ready" : artifactStatus === "generating" ? "attention" : "attention";
+  const notesReady: ReadinessState = notesExtraction ? "ready" : "attention";
   const isRestoredWithoutFile = !selectedFile && restoredFullText.length > 0;
 
   return (
@@ -617,6 +869,11 @@ export default function Reviewer() {
             {schemaFields && (
               <Badge variant="outline" className="text-[10px] text-primary border-primary/30">
                 Schema · {schemaFields.length} fields
+              </Badge>
+            )}
+            {parserArtifact && (
+              <Badge variant="outline" className="text-[10px] text-primary border-primary/30">
+                Parser · {parserArtifact.sections?.length ?? 0} sections
               </Badge>
             )}
           </div>
@@ -774,6 +1031,20 @@ export default function Reviewer() {
                   <ReadinessRow label="Document uploaded" state={docReady} detail={isRestoredWithoutFile ? "Restored from session (re-upload for preview)" : undefined} />
                   <ReadinessRow label="Text extracted" state={extractReady} detail={extracting ? "Extracting…" : extractedFullText.length > 0 ? `${extractedFullText.length.toLocaleString()} characters · ${pageCount} pages` : undefined} />
                   <ReadinessRow label="Template schema" state={schemaReady} detail={schemaFields ? `${schemaFields.length} fields` : "No schema — text-only review"} />
+                  <ReadinessRow
+                    label="Parser artifacts"
+                    state={artifactReady}
+                    detail={
+                      artifactStatus === "ready" ? `${parserArtifact?.sections?.length ?? 0} sections` :
+                      artifactStatus === "generating" ? "Auto-generating…" :
+                      "Not available — basic recovery only"
+                    }
+                  />
+                  <ReadinessRow
+                    label="Notes extraction"
+                    state={notesReady}
+                    detail={notesExtraction ? `${notesExtraction.length} fields from Case Notes` : "Not available — reconciliation will be limited"}
+                  />
                 </div>
 
                 {/* Primary CTA */}
@@ -831,7 +1102,7 @@ export default function Reviewer() {
                     <div className="text-center py-10">
                       <Loader2 className="h-8 w-8 mx-auto text-primary animate-spin mb-3" />
                       <p className="text-sm text-muted-foreground">Recovering field structure…</p>
-                      <p className="text-xs text-muted-foreground/70 mt-1">Matching document content to template fields</p>
+                      <p className="text-xs text-muted-foreground/70 mt-1">Parsing template + reconciling with notes</p>
                     </div>
                   )}
 
@@ -859,11 +1130,30 @@ export default function Reviewer() {
                     </div>
                   )}
 
-                  {/* Reconciliation Panel */}
+                  {/* Reconciliation Panel — shown prominently above findings */}
                   {reconciliationResult && (toolState === "success" || toolState === "running") && (
                     <div className="pb-2">
-                      <ReconciliationPanel result={reconciliationResult} />
+                      <ReconciliationPanel
+                        result={reconciliationResult}
+                        notesSource={notesExtraction ? "case_notes" : "field_recovery"}
+                        artifactStatus={artifactStatus}
+                      />
                       <Separator className="mt-3" />
+                    </div>
+                  )}
+
+                  {/* Fallback warnings when reconciliation unavailable */}
+                  {toolState === "success" && !reconciliationResult && output && (
+                    <div className="flex items-start gap-2 p-2.5 rounded-lg bg-muted/50 border border-border">
+                      <Info className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-[11px] text-muted-foreground font-medium">Limited comparison</p>
+                        <p className="text-[10px] text-muted-foreground/70">
+                          {!parserArtifact ? "No parser artifacts available — " : ""}
+                          {!notesExtraction ? "No case notes extraction — " : ""}
+                          Review based on field recovery only.
+                        </p>
+                      </div>
                     </div>
                   )}
 
