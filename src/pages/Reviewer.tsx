@@ -859,6 +859,14 @@ export default function Reviewer() {
                     </div>
                   )}
 
+                  {/* Reconciliation Panel */}
+                  {reconciliationResult && (toolState === "success" || toolState === "running") && (
+                    <div className="pb-2">
+                      <ReconciliationPanel result={reconciliationResult} />
+                      <Separator className="mt-3" />
+                    </div>
+                  )}
+
                   {/* Success */}
                   {toolState === "success" && output && issuesByType && (
                     <div className="space-y-4">
