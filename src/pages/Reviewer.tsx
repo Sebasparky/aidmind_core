@@ -22,6 +22,9 @@ import { cn } from "@/lib/utils";
 import { useEyeLogger } from "@/hooks/useEyeLogger";
 import { usePdfTextExtractor, type PageText } from "@/hooks/usePdfTextExtractor";
 import { recoverFieldsFromDocument } from "@/lib/tools/field-recovery";
+import { parseCompletedTemplate } from "@/lib/tools/completed-template-parser";
+import { reconcileNotesAndTemplate } from "@/lib/tools/reconciliation-engine";
+import { ReconciliationPanel } from "@/components/session/ReconciliationPanel";
 import type {
   ReviewerV2Report,
   ReviewIssue,
@@ -29,6 +32,11 @@ import type {
   ReviewIssueType,
   Phase2SchemaField,
 } from "@/lib/tools/reviewer-v2-types";
+import type {
+  TemplateParserArtifact,
+  ReconciliationResult,
+  CompletedTemplateParse,
+} from "@/lib/tools/parser-artifact-types";
 
 // ─── Types ───────────────────────────────────────────────
 type ToolState = "idle" | "ready" | "recovering" | "running" | "success" | "error";
@@ -61,6 +69,8 @@ interface PersistedReviewerState {
   recoveryStats: { answered: number; missing: number; humanReview: number } | null;
   activeSnippet: string | null;
   copiedCategory: string | null;
+  reconciliationResult: ReconciliationResult | null;
+  templateParseResult: CompletedTemplateParse | null;
 }
 
 function reviewerStorageKey(sessionId: string) {
@@ -201,6 +211,9 @@ export default function Reviewer() {
   const [isDragging, setIsDragging] = useState(false);
   const [activeSnippet, setActiveSnippet] = useState<string | null>(null);
   const [recoveryStats, setRecoveryStats] = useState<{ answered: number; missing: number; humanReview: number } | null>(null);
+  const [reconciliationResult, setReconciliationResult] = useState<ReconciliationResult | null>(null);
+  const [templateParseResult, setTemplateParseResult] = useState<CompletedTemplateParse | null>(null);
+  const [parserArtifact, setParserArtifact] = useState<TemplateParserArtifact | null>(null);
 
   // Restored state (for when File object isn't available)
   const [restoredPages, setRestoredPages] = useState<PageText[]>([]);
@@ -263,6 +276,24 @@ export default function Reviewer() {
             if (parsed?.fields && Array.isArray(parsed.fields)) setSchemaFields(parsed.fields as Phase2SchemaField[]);
           }
         }
+        // Load parser artifact for template
+        if (data.template_id) {
+          const { data: artifactRow } = await supabase
+            .from("template_parser_artifacts")
+            .select("artifact_json")
+            .eq("template_id", data.template_id)
+            .eq("is_active", true)
+            .maybeSingle();
+          if (artifactRow?.artifact_json) {
+            setParserArtifact(artifactRow.artifact_json as unknown as TemplateParserArtifact);
+            if (import.meta.env.DEV) {
+              console.info("[Reviewer] Parser artifact loaded:", {
+                sections: (artifactRow.artifact_json as any)?.sections?.length,
+                checkbox_groups: (artifactRow.artifact_json as any)?.checkbox_groups?.length,
+              });
+            }
+          }
+        }
       } catch { setPageError("Failed to load session"); }
       finally { setPageLoading(false); }
     }
@@ -284,6 +315,8 @@ export default function Reviewer() {
       setErrorMessage(persisted.errorMessage);
       setRecoveryStats(persisted.recoveryStats);
       setActiveSnippet(persisted.activeSnippet);
+      setReconciliationResult(persisted.reconciliationResult ?? null);
+      setTemplateParseResult(persisted.templateParseResult ?? null);
     } else {
       setToolState("idle");
       setRestoredPages([]);
@@ -295,6 +328,8 @@ export default function Reviewer() {
       setErrorMessage(null);
       setRecoveryStats(null);
       setActiveSnippet(null);
+      setReconciliationResult(null);
+      setTemplateParseResult(null);
     }
     setHydratedSessionId(sessionId);
   }, [sessionId]);
@@ -314,6 +349,8 @@ export default function Reviewer() {
       recoveryStats,
       activeSnippet,
       copiedCategory: null,
+      reconciliationResult,
+      templateParseResult,
     });
   }, [sessionId, hydratedSessionId, toolState, selectedFile, restoredFileName, restoredFileSize, extractedPages, extractedFullText, pageCount, output, errorMessage, recoveryStats, activeSnippet]);
 
@@ -370,6 +407,8 @@ export default function Reviewer() {
     setErrorMessage(null);
     setActiveSnippet(null);
     setRecoveryStats(null);
+    setReconciliationResult(null);
+    setTemplateParseResult(null);
     if (sessionId) clearReviewerState(sessionId);
   };
 
@@ -401,6 +440,31 @@ export default function Reviewer() {
           missing: unanswered_fields.length,
           humanReview: human_review_fields.length,
         });
+
+        // Run completed-template parser + reconciliation if artifact available
+        if (parserArtifact) {
+          try {
+            const tParse = parseCompletedTemplate(extractedFullText, parserArtifact, schemaFields);
+            setTemplateParseResult(tParse);
+            const reconResult = reconcileNotesAndTemplate(
+              structured_answers,
+              tParse.fields,
+              tParse.overall_confidence,
+            );
+            setReconciliationResult(reconResult);
+            if (import.meta.env.DEV) {
+              console.info("[Reviewer] Reconciliation:", {
+                matches: reconResult.matches,
+                mismatches: reconResult.mismatches,
+                discrepancies: reconResult.possible_discrepancies,
+                omissions: reconResult.likely_omissions,
+                parse_confidence: tParse.overall_confidence,
+              });
+            }
+          } catch (err) {
+            console.warn("[Reviewer] Template parse/reconciliation failed:", err);
+          }
+        }
       } catch (err) {
         console.warn("[Reviewer] Field recovery failed, proceeding with text-only:", err);
       }
@@ -792,6 +856,14 @@ export default function Reviewer() {
                       <AlertTriangle className="h-8 w-8 mx-auto text-destructive/50 mb-3" />
                       <p className="text-sm text-destructive font-medium mb-1">Review failed</p>
                       <p className="text-xs text-muted-foreground">{errorMessage}</p>
+                    </div>
+                  )}
+
+                  {/* Reconciliation Panel */}
+                  {reconciliationResult && (toolState === "success" || toolState === "running") && (
+                    <div className="pb-2">
+                      <ReconciliationPanel result={reconciliationResult} />
+                      <Separator className="mt-3" />
                     </div>
                   )}
 

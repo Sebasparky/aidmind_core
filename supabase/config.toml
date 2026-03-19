@@ -56,3 +56,6 @@ verify_jwt = false
 
 [functions.extract-case-note-text]
 verify_jwt = false
+
+[functions.generate-parser-artifacts]
+verify_jwt = false
