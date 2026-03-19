@@ -719,14 +719,9 @@ export default function Reviewer() {
                 )}
 
                 {toolState === "success" && (
-                  <div className="flex gap-2">
-                    <Button variant="outline" onClick={handleRun} disabled={!canRun} className="flex-1 gap-1.5 text-sm">
-                      <RefreshCw className="h-3.5 w-3.5" /> Re-run
-                    </Button>
-                    <Button variant="outline" onClick={handleClear} className="gap-1.5 text-sm">
-                      <RotateCcw className="h-3.5 w-3.5" /> Clear
-                    </Button>
-                  </div>
+                  <Button variant="default" onClick={handleBack} className="w-full gap-2" size="lg">
+                    <CheckCircle2 className="h-4 w-4" /> Done — Back to Dashboard
+                  </Button>
                 )}
 
                 {toolState === "error" && (
