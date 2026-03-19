@@ -637,6 +637,69 @@ export type Database = {
           },
         ]
       }
+      template_parser_artifacts: {
+        Row: {
+          artifact_json: Json
+          artifact_version: number
+          created_at: string
+          generated_at: string | null
+          generation_notes: string | null
+          id: string
+          is_active: boolean
+          model: string | null
+          source_template_hash: string | null
+          status: string
+          template_id: string
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          artifact_json?: Json
+          artifact_version?: number
+          created_at?: string
+          generated_at?: string | null
+          generation_notes?: string | null
+          id?: string
+          is_active?: boolean
+          model?: string | null
+          source_template_hash?: string | null
+          status?: string
+          template_id: string
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          artifact_json?: Json
+          artifact_version?: number
+          created_at?: string
+          generated_at?: string | null
+          generation_notes?: string | null
+          id?: string
+          is_active?: boolean
+          model?: string | null
+          source_template_hash?: string | null
+          status?: string
+          template_id?: string
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "template_parser_artifacts_template_id_fkey"
+            columns: ["template_id"]
+            isOneToOne: false
+            referencedRelation: "kb_templates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "template_parser_artifacts_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       template_phase2_schemas: {
         Row: {
           created_at: string
