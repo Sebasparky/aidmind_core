@@ -624,14 +624,16 @@ export default function Reviewer() {
                       <span className="text-xs text-foreground font-medium truncate">{fileName}</span>
                       {pageCount > 0 && <Badge variant="secondary" className="text-[10px] shrink-0">{pageCount}p</Badge>}
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <Button variant="ghost" size="sm" onClick={handleReplace} className="h-6 px-2 text-[10px] gap-1">
-                        <RefreshCw className="h-3 w-3" /> Replace
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={handleRemoveFile} className="h-6 px-2 text-[10px] gap-1 text-destructive hover:text-destructive">
-                        <X className="h-3 w-3" />
-                      </Button>
-                    </div>
+                    {toolState !== "success" && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button variant="ghost" size="sm" onClick={handleReplace} className="h-6 px-2 text-[10px] gap-1">
+                          <RefreshCw className="h-3 w-3" /> Replace
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={handleRemoveFile} className="h-6 px-2 text-[10px] gap-1 text-destructive hover:text-destructive">
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    )}
                   </div>
                   <div className="flex-1 overflow-hidden bg-muted/30 p-1">
                     <iframe src={selectedFile.objectUrl} title="PDF preview" className="w-full h-full rounded border-0" />
