@@ -440,6 +440,31 @@ export default function Reviewer() {
           missing: unanswered_fields.length,
           humanReview: human_review_fields.length,
         });
+
+        // Run completed-template parser + reconciliation if artifact available
+        if (parserArtifact) {
+          try {
+            const tParse = parseCompletedTemplate(extractedFullText, parserArtifact, schemaFields);
+            setTemplateParseResult(tParse);
+            const reconResult = reconcileNotesAndTemplate(
+              structured_answers,
+              tParse.fields,
+              tParse.overall_confidence,
+            );
+            setReconciliationResult(reconResult);
+            if (import.meta.env.DEV) {
+              console.info("[Reviewer] Reconciliation:", {
+                matches: reconResult.matches,
+                mismatches: reconResult.mismatches,
+                discrepancies: reconResult.possible_discrepancies,
+                omissions: reconResult.likely_omissions,
+                parse_confidence: tParse.overall_confidence,
+              });
+            }
+          } catch (err) {
+            console.warn("[Reviewer] Template parse/reconciliation failed:", err);
+          }
+        }
       } catch (err) {
         console.warn("[Reviewer] Field recovery failed, proceeding with text-only:", err);
       }
