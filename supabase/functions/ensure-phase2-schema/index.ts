@@ -234,19 +234,44 @@ Return JSON:
   ]
 }`;
 
-  const contentPreview = templateContent.length > 12000
-    ? templateContent.slice(0, 12000) + "\n\n[... truncated ...]"
+  // Allow much more content through — gpt-4o has 128k context.
+  // Complex intake forms can be 15-40k chars; truncating at 12k was the #1 cause of shallow schemas.
+  const MAX_CONTENT_CHARS = 60000;
+  const contentPreview = templateContent.length > MAX_CONTENT_CHARS
+    ? templateContent.slice(0, MAX_CONTENT_CHARS) + "\n\n[... truncated ...]"
     : templateContent;
+
+  // Pre-analyze: detect section headings to give the LLM explicit expectations
+  const detectedSections = detectTemplateSections(templateContent);
+  const sectionHint = detectedSections.length > 0
+    ? `\n\nDETECTED TEMPLATE SECTIONS (${detectedSections.length} found — ensure each gets meaningful field representation):\n${detectedSections.map((s, i) => `${i + 1}. ${s}`).join("\n")}`
+    : "";
+
+  const fieldCountGuidance = detectedSections.length > 0
+    ? `This template has approximately ${detectedSections.length} major sections. You should generate AT LEAST ${Math.max(detectedSections.length * 2, 15)} fields total, with at least 1-3 fields per section depending on section complexity. Sections with multiple checkboxes, subgroups, or distinct prompts should generate multiple fields. Do NOT produce fewer than ${Math.max(detectedSections.length, 10)} fields for a template this complex.`
+    : `Generate a thorough set of fields. For templates with multiple sections, aim for 15-50+ fields depending on complexity.`;
 
   const userPrompt = `TEMPLATE NAME: ${templateName}
 
 TEMPLATE CONTENT:
 ${contentPreview}
 ${existingFieldsHint}
+${sectionHint}
+
+FIELD COUNT GUIDANCE:
+${fieldCountGuidance}
 
 Analyze this template and produce the Phase 2 extraction schema.
-IMPORTANT: Preserve the template's real section structure. Generate fields for ALL major sections, not just the easy ones. Include narrative/free-text sections as fields.
-Remember: be conservative about auto-extraction. Sensitive identifiers, ambiguous duplicates, and rarely-documented fields should be marked requires_human_review = true.
+
+CRITICAL REQUIREMENTS:
+1. Preserve the template's real section structure. Generate fields for ALL major sections, not just the easy ones.
+2. Include narrative/free-text sections as fields with content_type = "narrative".
+3. Checkbox-heavy sections should decompose into MULTIPLE fields when they contain distinct subgroups (e.g., "Child Issues" vs "Caretaker Issues" vs "Family Issues" should be SEPARATE fields, not one catch-all).
+4. Each major section should have AT LEAST 1-3 fields. Sections with many prompts or subgroups should have more.
+5. Do NOT flatten a multi-section form into a handful of generic fields.
+6. Narrative areas like "Intake Narrative", "Decision Summary", "Emergency Actions", "Sensitive Case Comments" must each be their own field.
+7. Be conservative about auto-extraction. Sensitive identifiers, ambiguous duplicates, and rarely-documented fields should be marked requires_human_review = true.
+
 Return JSON only.`;
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
