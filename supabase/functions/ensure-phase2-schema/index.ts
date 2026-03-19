@@ -535,7 +535,7 @@ Return JSON only.`;
     };
   });
 
-  return { fields, model, sections };
+  return { fields, model, sections, detectedSections };
 }
 
 // ============================================================
