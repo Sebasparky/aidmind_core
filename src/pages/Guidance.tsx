@@ -208,11 +208,28 @@ export default function Guidance() {
   const isTemplateRequired = runError?.code === "TEMPLATE_REQUIRED";
   const isScopeRequired = runError?.code === "SCOPE_REQUIRED";
 
-  // Group questions by category
-  const groupedQuestions: Record<GuidanceCategory, GuidanceQuestion[]> = {} as any;
+  // Group questions by category — dynamic to handle both old fixed categories
+  // and new schema-driven categories (e.g. template section names)
+  const allCategories: string[] = [];
+  const groupedQuestions: Record<string, GuidanceQuestion[]> = {};
   if (output) {
-    for (const cat of GUIDANCE_CATEGORIES) {
-      groupedQuestions[cat] = output.questions.filter((q) => q.category === cat);
+    // Collect all unique categories in order of appearance
+    for (const q of output.questions) {
+      const cat = q.category || "Other";
+      if (!groupedQuestions[cat]) {
+        groupedQuestions[cat] = [];
+        allCategories.push(cat);
+      }
+      groupedQuestions[cat].push(q);
+    }
+
+    // Debug diagnostics (dev only)
+    if (import.meta.env.DEV) {
+      console.log("[Guidance] payload keys:", Object.keys(output));
+      console.log("[Guidance] questions.length:", output.questions.length);
+      console.log("[Guidance] first question:", output.questions[0]);
+      console.log("[Guidance] categories found:", allCategories);
+      console.log("[Guidance] per-category counts:", Object.fromEntries(allCategories.map(c => [c, groupedQuestions[c].length])));
     }
   }
 
