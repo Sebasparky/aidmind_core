@@ -863,9 +863,9 @@ export default function CaseNotes() {
               <AlertDialogTitle className="text-base">Sensitive content in workspace</AlertDialogTitle>
             </div>
             <AlertDialogDescription className="text-sm text-muted-foreground">
-              Your case notes and any extracted answers are held in memory only.
-              Leaving this page will clear all working content — it will not be
-              available for later return.
+              Your case notes and extracted answers are held in memory only.
+              Leaving without using "Done and secure" will clear all working content.
+              To preserve results for Reviewer comparison, use "Done and secure" first.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
