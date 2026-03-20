@@ -1011,7 +1011,7 @@ export default function CaseNotes() {
           <div className="flex items-center gap-1.5 pl-11">
             <Lock className="h-3 w-3 text-muted-foreground/60" />
             <p className="text-xs text-muted-foreground">
-              Sensitive content is held in memory only and cleared when you leave or finish.
+              Sensitive content is never stored in plain text. When secured, it can only be reopened through protected unlock.
             </p>
           </div>
         </div>
