@@ -866,47 +866,81 @@ export default function CaseNotes() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* ─── Done & Lock Confirmation Dialog ─── */}
-      <AlertDialog open={showDoneDialog} onOpenChange={setShowDoneDialog}>
+      {/* ─── Seal & Done Dialog ─── */}
+      <AlertDialog open={showSealDialog} onOpenChange={setShowSealDialog}>
         <AlertDialogContent className="max-w-md rounded-2xl">
-          <AlertDialogHeader className="space-y-2">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
-                <Lock className="h-4 w-4 text-muted-foreground" />
+          <form onSubmit={(e) => { e.preventDefault(); handleSealAndDone(); }}>
+            <AlertDialogHeader className="space-y-2">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
+                  <Lock className="h-4 w-4 text-muted-foreground" />
+                </div>
+                <AlertDialogTitle className="text-base">Encrypt and complete this step</AlertDialogTitle>
               </div>
-              <AlertDialogTitle className="text-base">Complete and secure this step?</AlertDialogTitle>
-            </div>
-            <AlertDialogDescription className="text-sm text-muted-foreground">
-              Marking this step as done will clear all case-note content from
-              this workspace. AidMind does not retain sensitive notes for
-              casual reopening — returning later will show a secured state.
-              <span className="block mt-2 text-xs text-muted-foreground/70">
-                Copy or download your extraction results before continuing if you need them.
-              </span>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
-            <Button variant="outline" onClick={() => setShowDoneDialog(false)}>
-              Continue working
-            </Button>
-            <Button
-              onClick={handleDone}
-              disabled={isDoneLoading}
-              className="gap-2"
-            >
-              {isDoneLoading ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Securing…
-                </>
-              ) : (
-                <>
-                  <Lock className="h-4 w-4" />
-                  Done and secure
-                </>
+              <AlertDialogDescription className="text-sm text-muted-foreground">
+                <span className="block">
+                  Your extraction results will be encrypted with a password you choose.
+                  This allows you to unlock them securely in the Reviewer step later.
+                </span>
+                <span className="block mt-2 text-xs text-muted-foreground/70">
+                  AidMind does not store your password. If you forget it, the sealed data cannot be recovered.
+                </span>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+
+            <div className="py-4 space-y-3">
+              <div>
+                <label className="text-xs font-medium text-foreground block mb-1">Vault password</label>
+                <Input
+                  ref={sealPasswordRef}
+                  type="password"
+                  placeholder="Choose a password"
+                  value={sealPassword}
+                  onChange={(e) => { setSealPassword(e.target.value); setSealError(null); }}
+                  autoComplete="new-password"
+                  disabled={sealLoading}
+                  className="h-10"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-foreground block mb-1">Confirm password</label>
+                <Input
+                  type="password"
+                  placeholder="Confirm password"
+                  value={sealConfirmPassword}
+                  onChange={(e) => { setSealConfirmPassword(e.target.value); setSealError(null); }}
+                  autoComplete="new-password"
+                  disabled={sealLoading}
+                  className="h-10"
+                />
+              </div>
+              {sealError && (
+                <p className="text-xs text-destructive font-medium">{sealError}</p>
               )}
-            </Button>
-          </AlertDialogFooter>
+            </div>
+
+            <AlertDialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => { setSealPassword(""); setSealConfirmPassword(""); setShowSealDialog(false); }}
+                disabled={sealLoading}
+              >
+                Continue working
+              </Button>
+              <Button
+                type="submit"
+                disabled={!sealPassword || !sealConfirmPassword || sealLoading}
+                className="gap-2"
+              >
+                {sealLoading ? (
+                  <><Loader2 className="h-4 w-4 animate-spin" /> Encrypting…</>
+                ) : (
+                  <><Lock className="h-4 w-4" /> Encrypt and complete</>
+                )}
+              </Button>
+            </AlertDialogFooter>
+          </form>
         </AlertDialogContent>
       </AlertDialog>
 
