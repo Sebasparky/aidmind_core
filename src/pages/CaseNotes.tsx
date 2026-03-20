@@ -320,6 +320,9 @@ export default function CaseNotes() {
   const [session, setSession] = useState<SessionContext | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
 
+  // Vault hook for encrypted persistence
+  const vault = useCaseNotesVault(routeSessionId);
+
   /**
    * SECURITY: All sensitive state is in-memory only.
    * Nothing below is persisted to sessionStorage, localStorage, or the backend.
@@ -338,6 +341,14 @@ export default function CaseNotes() {
     model: string;
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Seal-and-done dialog state
+  const [showSealDialog, setShowSealDialog] = useState(false);
+  const [sealPassword, setSealPassword] = useState("");
+  const [sealConfirmPassword, setSealConfirmPassword] = useState("");
+  const [sealError, setSealError] = useState<string | null>(null);
+  const [sealLoading, setSealLoading] = useState(false);
+  const sealPasswordRef = useRef<HTMLInputElement>(null);
 
   // PDF extraction hook
   const pdfExtractor = usePdfTextExtractor();
