@@ -840,7 +840,12 @@ export default function CaseNotes() {
   if (session.caseNotesCompleted && !hasInProgressWork) {
     return (
       <DashboardLayout>
-        <SecuredState caseLabel={session.caseLabel} onBack={() => navigate(-1)} />
+        <SecuredState
+          caseLabel={session.caseLabel}
+          onBack={() => navigate(-1)}
+          vaultState={vault.vaultState}
+          vaultMetadata={vault.vaultMetadata}
+        />
       </DashboardLayout>
     );
   }
