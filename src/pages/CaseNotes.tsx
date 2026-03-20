@@ -52,6 +52,9 @@ import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 import { usePdfTextExtractor } from "@/hooks/usePdfTextExtractor";
+import { useCaseNotesVault } from "@/hooks/useCaseNotesVault";
+import { VaultStatusIndicator } from "@/components/security/VaultStatusIndicator";
+import type { CaseNotesComparisonPacket } from "@/lib/security/vault-types";
 import mammoth from "mammoth";
 
 // ─── Types ───────────────────────────────────────────────
@@ -232,10 +235,16 @@ const NOTE_HINTS = [
 function SecuredState({
   caseLabel,
   onBack,
+  vaultState,
+  vaultMetadata,
 }: {
   caseLabel: string | null;
   onBack: () => void;
+  vaultState?: string;
+  vaultMetadata?: { field_count: number; answered_count: number; sealed_at: string } | null;
 }) {
+  const hasVault = vaultState === "sealed";
+
   return (
     <div className="max-w-2xl mx-auto py-16 px-4">
       <div className="flex flex-col items-center text-center space-y-6">
@@ -250,29 +259,39 @@ function SecuredState({
             Case notes secured
           </h2>
           <p className="text-sm text-muted-foreground max-w-md">
-            Sensitive case-note content is not retained for casual reopening.
-            This step was completed and the working content has been cleared
-            from this workspace.
+            {hasVault
+              ? "Extraction results are encrypted and available for secure unlock in the Reviewer step."
+              : "Sensitive case-note content is not retained for casual reopening. This step was completed and the working content has been cleared from this workspace."
+            }
           </p>
         </div>
+
+        {/* Vault status */}
+        {hasVault && vaultMetadata && (
+          <Card className="border border-border shadow-none w-full max-w-md">
+            <CardContent className="px-5 py-4 space-y-3">
+              <div className="flex items-start gap-2.5">
+                <ShieldCheck className="h-4 w-4 text-[hsl(var(--status-success))] mt-0.5 shrink-0" />
+                <div className="text-left space-y-1.5">
+                  <p className="text-xs font-medium text-foreground">
+                    Encrypted vault available
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {vaultMetadata.answered_count} of {vaultMetadata.field_count} fields sealed.
+                    Use your vault password in the Reviewer to unlock comparison data.
+                  </p>
+                  <p className="text-[10px] text-muted-foreground/60">
+                    Sealed {new Date(vaultMetadata.sealed_at).toLocaleString()}
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Explanation card */}
         <Card className="border border-border shadow-none w-full max-w-md">
           <CardContent className="px-5 py-4 space-y-3">
-            <div className="flex items-start gap-2.5">
-              <ShieldCheck className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-              <div className="text-left space-y-1.5">
-                <p className="text-xs font-medium text-foreground">
-                  Why is my previous work not visible?
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  AidMind does not store interview notes or extracted answers
-                  in plaintext after you finish working. This protects client
-                  information and aligns with privacy-first data handling.
-                </p>
-              </div>
-            </div>
-            <Separator />
             <div className="flex items-start gap-2.5">
               <Info className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
               <div className="text-left space-y-1.5">
@@ -281,8 +300,8 @@ function SecuredState({
                 </p>
                 <ul className="text-xs text-muted-foreground space-y-1 list-disc pl-4">
                   <li>Return to the session dashboard to continue your workflow</li>
+                  {hasVault && <li>In the Reviewer step, click "Unlock case notes for comparison" to decrypt</li>}
                   <li>Start a new extraction by re-entering notes in this workspace</li>
-                  <li>Proceed to the Reviewer step if extraction is already complete</li>
                 </ul>
               </div>
             </div>
@@ -317,6 +336,9 @@ export default function CaseNotes() {
   const [session, setSession] = useState<SessionContext | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
 
+  // Vault hook for encrypted persistence
+  const vault = useCaseNotesVault(routeSessionId);
+
   /**
    * SECURITY: All sensitive state is in-memory only.
    * Nothing below is persisted to sessionStorage, localStorage, or the backend.
@@ -336,6 +358,14 @@ export default function CaseNotes() {
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Seal-and-done dialog state
+  const [showSealDialog, setShowSealDialog] = useState(false);
+  const [sealPassword, setSealPassword] = useState("");
+  const [sealConfirmPassword, setSealConfirmPassword] = useState("");
+  const [sealError, setSealError] = useState<string | null>(null);
+  const [sealLoading, setSealLoading] = useState(false);
+  const sealPasswordRef = useRef<HTMLInputElement>(null);
+
   // PDF extraction hook
   const pdfExtractor = usePdfTextExtractor();
 
@@ -346,8 +376,7 @@ export default function CaseNotes() {
   // ─── Dialog state ──────────────────────────────────────
   const [showLeaveDialog, setShowLeaveDialog] = useState(false);
   const [showClearDialog, setShowClearDialog] = useState(false);
-  const [showDoneDialog, setShowDoneDialog] = useState(false);
-  const [isDoneLoading, setIsDoneLoading] = useState(false);
+  // showDoneDialog replaced by showSealDialog
 
   /**
    * SECURITY: Purge any legacy sessionStorage entries for case notes.
@@ -433,6 +462,13 @@ export default function CaseNotes() {
       cancelled = true;
     };
   }, [routeSessionId]);
+
+  // Check if a sealed vault artifact already exists
+  useEffect(() => {
+    if (session && !sessionLoading) {
+      vault.checkVaultExists();
+    }
+  }, [session, sessionLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Derived state ─────────────────────────────────────
   const notesLength = form.rawNotes.trim().length;
@@ -606,12 +642,36 @@ export default function CaseNotes() {
     setShowClearDialog(false);
   }, [purgeWorkingContent]);
 
-  // ─── Done handler — marks step complete and purges content ─
-  const handleDone = useCallback(async () => {
-    if (!session) return;
-    setIsDoneLoading(true);
+  // ─── Seal & Done — encrypt extraction results, mark step complete ─
+  const handleSealAndDone = useCallback(async () => {
+    if (!session || !result || !sealPassword) return;
+    if (sealPassword !== sealConfirmPassword) {
+      setSealError("Passwords do not match.");
+      return;
+    }
+    if (sealPassword.length < 4) {
+      setSealError("Password must be at least 4 characters.");
+      return;
+    }
+
+    setSealLoading(true);
+    setSealError(null);
 
     try {
+      // Build comparison packet for vault
+      const packet: CaseNotesComparisonPacket = {
+        answers: result.answers,
+        generated_at: result.generated_at,
+        model: result.model,
+        session_id: session.id,
+        template_id: session.templateId,
+      };
+
+      // Encrypt and store
+      const sealed = await vault.seal(packet, sealPassword);
+      if (!sealed) throw new Error("Seal operation failed");
+
+      // Mark step as complete in session metadata
       const { data: current } = await supabase
         .from("sessions")
         .select("metadata")
@@ -619,40 +679,46 @@ export default function CaseNotes() {
         .maybeSingle();
 
       const existingMeta = (current?.metadata as Record<string, unknown>) ?? {};
-
       const { error } = await supabase
         .from("sessions")
         .update({
           metadata: {
             ...existingMeta,
             case_notes_completed_at: new Date().toISOString(),
+            case_notes_sealed: true,
           },
         })
         .eq("id", session.id);
 
       if (error) throw error;
 
-      // SECURITY: Purge all working content from memory before navigating
+      // SECURITY: Purge all working content and password from memory
+      setSealPassword("");
+      setSealConfirmPassword("");
       purgeWorkingContent();
 
       toast({
-        title: "Case Notes secured",
-        description: "Step marked as done. Sensitive content has been cleared.",
+        title: "Case notes encrypted and secured",
+        description: "Extraction results are sealed. Unlock with your password in Reviewer.",
       });
 
       navigate(-1);
     } catch (err) {
-      console.error("[CaseNotes] Done handler error:", err);
-      toast({
-        title: "Failed to mark as done",
-        description: "Please try again.",
-        variant: "destructive",
-      });
+      console.error("[CaseNotes] Seal & Done error:", err);
+      setSealError(err instanceof Error ? err.message : "Failed to seal case notes.");
     } finally {
-      setIsDoneLoading(false);
-      setShowDoneDialog(false);
+      setSealLoading(false);
     }
-  }, [session, navigate, purgeWorkingContent]);
+  }, [session, result, sealPassword, sealConfirmPassword, vault, navigate, purgeWorkingContent]);
+
+  // Open seal dialog
+  const handleDoneClick = useCallback(() => {
+    setSealPassword("");
+    setSealConfirmPassword("");
+    setSealError(null);
+    setShowSealDialog(true);
+    setTimeout(() => sealPasswordRef.current?.focus(), 100);
+  }, []);
 
   // ─── Back navigation with security guard ───────────────
   const handleBack = useCallback(() => {
@@ -774,7 +840,12 @@ export default function CaseNotes() {
   if (session.caseNotesCompleted && !hasInProgressWork) {
     return (
       <DashboardLayout>
-        <SecuredState caseLabel={session.caseLabel} onBack={() => navigate(-1)} />
+        <SecuredState
+          caseLabel={session.caseLabel}
+          onBack={() => navigate(-1)}
+          vaultState={vault.vaultState}
+          vaultMetadata={vault.vaultMetadata}
+        />
       </DashboardLayout>
     );
   }
@@ -816,47 +887,81 @@ export default function CaseNotes() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* ─── Done & Lock Confirmation Dialog ─── */}
-      <AlertDialog open={showDoneDialog} onOpenChange={setShowDoneDialog}>
+      {/* ─── Seal & Done Dialog ─── */}
+      <AlertDialog open={showSealDialog} onOpenChange={setShowSealDialog}>
         <AlertDialogContent className="max-w-md rounded-2xl">
-          <AlertDialogHeader className="space-y-2">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
-                <Lock className="h-4 w-4 text-muted-foreground" />
+          <form onSubmit={(e) => { e.preventDefault(); handleSealAndDone(); }}>
+            <AlertDialogHeader className="space-y-2">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
+                  <Lock className="h-4 w-4 text-muted-foreground" />
+                </div>
+                <AlertDialogTitle className="text-base">Encrypt and complete this step</AlertDialogTitle>
               </div>
-              <AlertDialogTitle className="text-base">Complete and secure this step?</AlertDialogTitle>
-            </div>
-            <AlertDialogDescription className="text-sm text-muted-foreground">
-              Marking this step as done will clear all case-note content from
-              this workspace. AidMind does not retain sensitive notes for
-              casual reopening — returning later will show a secured state.
-              <span className="block mt-2 text-xs text-muted-foreground/70">
-                Copy or download your extraction results before continuing if you need them.
-              </span>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
-            <Button variant="outline" onClick={() => setShowDoneDialog(false)}>
-              Continue working
-            </Button>
-            <Button
-              onClick={handleDone}
-              disabled={isDoneLoading}
-              className="gap-2"
-            >
-              {isDoneLoading ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Securing…
-                </>
-              ) : (
-                <>
-                  <Lock className="h-4 w-4" />
-                  Done and secure
-                </>
+              <AlertDialogDescription className="text-sm text-muted-foreground">
+                <span className="block">
+                  Your extraction results will be encrypted with a password you choose.
+                  This allows you to unlock them securely in the Reviewer step later.
+                </span>
+                <span className="block mt-2 text-xs text-muted-foreground/70">
+                  AidMind does not store your password. If you forget it, the sealed data cannot be recovered.
+                </span>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+
+            <div className="py-4 space-y-3">
+              <div>
+                <label className="text-xs font-medium text-foreground block mb-1">Vault password</label>
+                <Input
+                  ref={sealPasswordRef}
+                  type="password"
+                  placeholder="Choose a password"
+                  value={sealPassword}
+                  onChange={(e) => { setSealPassword(e.target.value); setSealError(null); }}
+                  autoComplete="new-password"
+                  disabled={sealLoading}
+                  className="h-10"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-foreground block mb-1">Confirm password</label>
+                <Input
+                  type="password"
+                  placeholder="Confirm password"
+                  value={sealConfirmPassword}
+                  onChange={(e) => { setSealConfirmPassword(e.target.value); setSealError(null); }}
+                  autoComplete="new-password"
+                  disabled={sealLoading}
+                  className="h-10"
+                />
+              </div>
+              {sealError && (
+                <p className="text-xs text-destructive font-medium">{sealError}</p>
               )}
-            </Button>
-          </AlertDialogFooter>
+            </div>
+
+            <AlertDialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => { setSealPassword(""); setSealConfirmPassword(""); setShowSealDialog(false); }}
+                disabled={sealLoading}
+              >
+                Continue working
+              </Button>
+              <Button
+                type="submit"
+                disabled={!sealPassword || !sealConfirmPassword || sealLoading}
+                className="gap-2"
+              >
+                {sealLoading ? (
+                  <><Loader2 className="h-4 w-4 animate-spin" /> Encrypting…</>
+                ) : (
+                  <><Lock className="h-4 w-4" /> Encrypt and complete</>
+                )}
+              </Button>
+            </AlertDialogFooter>
+          </form>
         </AlertDialogContent>
       </AlertDialog>
 
@@ -1284,8 +1389,8 @@ export default function CaseNotes() {
                     {/* Done is the only primary action after extraction success */}
                     <Button
                       className="w-full gap-2"
-                      onClick={() => setShowDoneDialog(true)}
-                      disabled={isDoneLoading}
+                      onClick={handleDoneClick}
+                      disabled={sealLoading}
                     >
                       <Lock className="h-4 w-4" />
                       Done and secure

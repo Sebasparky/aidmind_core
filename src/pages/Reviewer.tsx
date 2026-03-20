@@ -4,7 +4,7 @@ import {
   ArrowLeft, Shield, Info, Loader2, Copy, Check, RotateCcw,
   AlertTriangle, MessageSquare, Scale, CheckSquare, Eye,
   Upload, FileText, X, RefreshCw, CheckCircle2, FileWarning,
-  Search, ChevronDown, ChevronRight, Circle, Lock,
+  Search, ChevronDown, ChevronRight, Circle, Lock, Unlock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -21,6 +21,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { useEyeLogger } from "@/hooks/useEyeLogger";
 import { usePdfTextExtractor, type PageText } from "@/hooks/usePdfTextExtractor";
+import { useCaseNotesVault } from "@/hooks/useCaseNotesVault";
+import { ReauthModal } from "@/components/security/ReauthModal";
+import { VaultStatusIndicator } from "@/components/security/VaultStatusIndicator";
 import { recoverFieldsFromDocument } from "@/lib/tools/field-recovery";
 import { parseCompletedTemplate } from "@/lib/tools/completed-template-parser";
 import { reconcileNotesAndTemplate } from "@/lib/tools/reconciliation-engine";
@@ -45,13 +48,11 @@ import type {
  *
  * 1. No sessionStorage/localStorage persistence of extracted text,
  *    reconciliation results, or reviewer output. All state is in-memory only.
- * 2. No backend reads of Phase 2 case-note extraction from session metadata.
- *    The reconciliation engine uses only field recovery from the completed
- *    template text (which is the form itself, not case notes).
- * 3. Parser artifacts are fetched from the DB — these are template-level
+ * 2. Case-note comparison data is accessed only through the encrypted vault.
+ *    The user must explicitly unlock with password (reauth) to access it.
+ * 3. Unlocked data auto-relocks after 5 minutes.
+ * 4. Parser artifacts are fetched from the DB — these are template-level
  *    reusable assets, not sensitive per-session data.
- * 4. When the user navigates away or refreshes, all working content is lost.
- *    This is intentional and aligns with the zero-retention privacy model.
  */
 
 // ─── Types ───────────────────────────────────────────────
@@ -274,6 +275,10 @@ export default function Reviewer() {
   const [pageLoading, setPageLoading] = useState(true);
   const [pageError, setPageError] = useState<string | null>(null);
 
+  // Vault for encrypted case-note comparison
+  const vault = useCaseNotesVault(sessionId);
+  const [showReauthModal, setShowReauthModal] = useState(false);
+
   /**
    * SECURITY: All tool state is in-memory only.
    * No sessionStorage, no localStorage, no backend persistence
@@ -379,6 +384,13 @@ export default function Reviewer() {
     }
     fetchSession();
   }, [sessionId]);
+
+  // Check if vault (encrypted case notes) exists
+  useEffect(() => {
+    if (!pageLoading && sessionInfo) {
+      vault.checkVaultExists();
+    }
+  }, [pageLoading, sessionInfo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => { if (selectedFile) URL.revokeObjectURL(selectedFile.objectUrl); };
@@ -704,7 +716,12 @@ export default function Reviewer() {
 
   return (
     <div className="h-screen bg-[hsl(var(--canvas))] flex flex-col overflow-hidden">
-      {/* ─── Header ──────────────────────────────────────── */}
+      {/* Reauth modal for vault unlock */}
+      <ReauthModal
+        open={showReauthModal}
+        onOpenChange={setShowReauthModal}
+        onAuthenticate={vault.unlock}
+      />
       <header className="border-b border-border bg-card shrink-0">
         <div className="px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -868,6 +885,20 @@ export default function Reviewer() {
 
             {/* ─── Right rail: Action + Results ──────────── */}
             <div className="lg:w-[340px] xl:w-[380px] shrink-0 border-l border-border bg-card flex flex-col overflow-hidden">
+              {/* Vault status */}
+              {(vault.vaultState === "sealed" || vault.vaultState === "unlocked") && (
+                <div className="p-4 border-b border-border shrink-0">
+                  <VaultStatusIndicator
+                    vaultState={vault.vaultState}
+                    metadata={vault.vaultMetadata}
+                    unlockTimeRemaining={vault.unlockTimeRemaining}
+                    onUnlockClick={() => setShowReauthModal(true)}
+                    onRelockClick={vault.relock}
+                    compact
+                  />
+                </div>
+              )}
+
               {/* Readiness + Action area */}
               <div className="p-4 border-b border-border space-y-3 shrink-0">
                 <div className="space-y-0.5">
