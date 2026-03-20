@@ -695,7 +695,6 @@ export default function Reviewer() {
           reconciliation_keys: reconciliationContext ? Object.keys(reconciliationContext) : [],
         });
       }
-      };
       const { data, error } = await supabase.functions.invoke("run-reviewer", { body: payload });
       if (error) throw new Error(error.message || "Edge function invocation failed");
       if (data?.error) {
