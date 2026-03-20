@@ -3,7 +3,7 @@
  *
  * SECURITY:
  * - Plaintext only exists in React state while unlocked
- * - Auto-relocks after UNLOCK_WINDOW_MS or IDLE_RELOCK_MS
+ * - Auto-relocks after UNLOCK_WINDOW_MS (hard deadline) or IDLE_RELOCK_MS (inactivity)
  * - Clearing state scrubs references (best-effort in JS)
  * - Never persists plaintext to storage or backend
  *
@@ -13,6 +13,7 @@
  *   1. Reauth: verify account identity via Supabase signInWithPassword
  *   2. Decrypt: use the vault password to AES-256-GCM decrypt the payload
  * - The server never holds either password or the derived key
+ * - user_id is stored alongside ciphertext for RLS scoping
  */
 
 import { useState, useCallback, useRef, useEffect } from "react";
@@ -43,6 +44,8 @@ interface UseCaseNotesVaultReturn {
   decrypt: (vaultPassword: string) => Promise<{ success: boolean; error?: string }>;
   /** Explicitly relock (clears plaintext) */
   relock: () => void;
+  /** Reset idle timer — call on meaningful user activity while unlocked */
+  resetIdleTimer: () => void;
   /** Check if a sealed artifact exists for this session */
   checkVaultExists: () => Promise<boolean>;
   /** Whether vault operations are in progress */
@@ -86,6 +89,19 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
     clearTimers();
   }, [clearTimers]);
 
+  // ── Reset idle timer (call on user activity) ────────────
+  const resetIdleTimer = useCallback(() => {
+    if (idleTimerRef.current) {
+      clearTimeout(idleTimerRef.current);
+    }
+    // Only set idle timer if we're currently unlocked
+    if (unlockExpiresRef.current !== null) {
+      idleTimerRef.current = setTimeout(() => {
+        relock();
+      }, IDLE_RELOCK_MS);
+    }
+  }, [relock]);
+
   // ── Start auto-relock timers ────────────────────────────
   const startAutoRelock = useCallback(() => {
     clearTimers();
@@ -97,6 +113,11 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
     unlockTimerRef.current = setTimeout(() => {
       relock();
     }, UNLOCK_WINDOW_MS);
+
+    // Idle timer — relocks after IDLE_RELOCK_MS of no activity
+    idleTimerRef.current = setTimeout(() => {
+      relock();
+    }, IDLE_RELOCK_MS);
 
     // Countdown display
     countdownRef.current = setInterval(() => {
@@ -161,6 +182,10 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
     setError(null);
 
     try {
+      // Get current user for RLS scoping
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+
       const plaintext = JSON.stringify(packet);
       const sealed = await sealPayload(plaintext, vaultPassword);
 
@@ -191,6 +216,7 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
           artifact_type: "sealed_case_notes",
           content: JSON.stringify(artifact),
           ttl_expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          user_id: user.id,
         });
 
       if (insertError) throw insertError;
@@ -264,7 +290,7 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
     setError(null);
 
     try {
-      // Fetch sealed artifact
+      // Fetch sealed artifact (RLS ensures only owner can read)
       const { data } = await supabase
         .from("ephemeral_artifacts")
         .select("content")
@@ -290,9 +316,9 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
 
       const packet: CaseNotesComparisonPacket = JSON.parse(plaintext);
 
-      // Verify session integrity
+      // Verify session integrity (log only mismatch fact, no content)
       if (packet.session_id !== sessionId && packet.session_id !== "") {
-        console.warn("[Vault] Session ID mismatch in sealed payload — possible cross-session artifact");
+        console.warn("[Vault] Session ID mismatch in sealed payload");
       }
 
       setUnlockedPacket(packet);
@@ -300,7 +326,7 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
       setVaultState("unlocked");
       reauthCompleteRef.current = false; // Consume the reauth
 
-      // Start auto-relock timers
+      // Start auto-relock timers (hard deadline + idle)
       startAutoRelock();
 
       return { success: true };
@@ -324,6 +350,7 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
     reauthenticate,
     decrypt,
     relock,
+    resetIdleTimer,
     checkVaultExists,
     loading,
     error,

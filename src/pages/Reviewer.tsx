@@ -434,6 +434,23 @@ export default function Reviewer() {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Reset vault idle timer on meaningful user activity ──
+  useEffect(() => {
+    if (vault.vaultState !== "unlocked") return;
+
+    const resetIdle = () => vault.resetIdleTimer();
+    // Track clicks, keypresses, and scrolls as "meaningful activity"
+    window.addEventListener("click", resetIdle);
+    window.addEventListener("keydown", resetIdle);
+    window.addEventListener("scroll", resetIdle, true);
+
+    return () => {
+      window.removeEventListener("click", resetIdle);
+      window.removeEventListener("keydown", resetIdle);
+      window.removeEventListener("scroll", resetIdle, true);
+    };
+  }, [vault.vaultState, vault.resetIdleTimer]);
+
   const canRun = hasDocument && !fileError && !extracting && extractedFullText.length > 0 && toolState !== "running" && toolState !== "recovering";
 
   // ─── File handling ─────────────────────────────────────
@@ -629,13 +646,13 @@ export default function Reviewer() {
           .map(f => f.field_key),
         likely_corrections: localReconciliation.fields
           .filter(f => f.resolution === "likely_correction")
-          .map(f => ({ field_key: f.field_key, section: f.section })),
+          .map(f => ({ field_key: f.field_key, notes: f.notes_value, form: f.template_value })),
         discrepancies: localReconciliation.fields
           .filter(f => f.resolution === "possible_discrepancy")
-          .map(f => ({ field_key: f.field_key, section: f.section })),
+          .map(f => ({ field_key: f.field_key, notes: f.notes_value, form: f.template_value, section: f.section })),
         omissions: localReconciliation.fields
           .filter(f => f.resolution === "likely_omission")
-          .map(f => ({ field_key: f.field_key, section: f.section })),
+          .map(f => ({ field_key: f.field_key, notes_value: f.notes_value, section: f.section })),
       } : undefined;
 
       // Suppress confirmed/corrected fields from unanswered list

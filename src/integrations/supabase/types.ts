@@ -164,6 +164,7 @@ export type Database = {
           id: string
           session_id: string
           ttl_expires_at: string
+          user_id: string | null
         }
         Insert: {
           artifact_type: string
@@ -172,6 +173,7 @@ export type Database = {
           id?: string
           session_id: string
           ttl_expires_at?: string
+          user_id?: string | null
         }
         Update: {
           artifact_type?: string
@@ -180,6 +182,7 @@ export type Database = {
           id?: string
           session_id?: string
           ttl_expires_at?: string
+          user_id?: string | null
         }
         Relationships: [
           {
