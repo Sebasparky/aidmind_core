@@ -360,8 +360,7 @@ export default function CaseNotes() {
   // ─── Dialog state ──────────────────────────────────────
   const [showLeaveDialog, setShowLeaveDialog] = useState(false);
   const [showClearDialog, setShowClearDialog] = useState(false);
-  const [showDoneDialog, setShowDoneDialog] = useState(false);
-  const [isDoneLoading, setIsDoneLoading] = useState(false);
+  // showDoneDialog replaced by showSealDialog
 
   /**
    * SECURITY: Purge any legacy sessionStorage entries for case notes.
