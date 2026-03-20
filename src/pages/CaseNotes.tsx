@@ -260,8 +260,8 @@ function SecuredState({
           </h2>
           <p className="text-sm text-muted-foreground max-w-md">
             {hasVault
-              ? "Extraction results are encrypted and available for secure unlock in the Reviewer step."
-              : "Sensitive case-note content is not retained for casual reopening. This step was completed and the working content has been cleared from this workspace."
+              ? "Extraction results are encrypted and stored securely. They can only be accessed through a protected unlock flow in the Reviewer step — plain text is never retained."
+              : "Sensitive case-note content has been cleared from the workspace. No plain text is retained. To compare notes against a completed form, re-enter notes and use the secure seal option."
             }
           </p>
         </div>
@@ -863,9 +863,9 @@ export default function CaseNotes() {
               <AlertDialogTitle className="text-base">Sensitive content in workspace</AlertDialogTitle>
             </div>
             <AlertDialogDescription className="text-sm text-muted-foreground">
-              Your case notes and any extracted answers are held in memory only.
-              Leaving this page will clear all working content — it will not be
-              available for later return.
+              Your case notes and extracted answers are held in memory only.
+              Leaving without using "Done and secure" will clear all working content.
+              To preserve results for Reviewer comparison, use "Done and secure" first.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
@@ -1011,7 +1011,7 @@ export default function CaseNotes() {
           <div className="flex items-center gap-1.5 pl-11">
             <Lock className="h-3 w-3 text-muted-foreground/60" />
             <p className="text-xs text-muted-foreground">
-              Sensitive content is held in memory only and cleared when you leave or finish.
+              Sensitive content is never stored in plain text. When secured, it can only be reopened through protected unlock.
             </p>
           </div>
         </div>
@@ -1456,8 +1456,8 @@ export default function CaseNotes() {
                   <div className="space-y-1">
                     <p className="text-xs font-medium text-foreground">Privacy notice</p>
                     <p className="text-xs text-muted-foreground">
-                      Sensitive content is not saved for later return. Finish and
-                      secure when ready — leaving clears the workspace.
+                      Sensitive content is never stored in plain text. Use "Done and secure" to
+                      encrypt results for later comparison. Leaving without securing clears the workspace.
                     </p>
                   </div>
                 </div>
