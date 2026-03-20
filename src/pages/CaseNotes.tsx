@@ -1368,8 +1368,8 @@ export default function CaseNotes() {
                     {/* Done is the only primary action after extraction success */}
                     <Button
                       className="w-full gap-2"
-                      onClick={() => setShowDoneDialog(true)}
-                      disabled={isDoneLoading}
+                      onClick={handleDoneClick}
+                      disabled={sealLoading}
                     >
                       <Lock className="h-4 w-4" />
                       Done and secure
