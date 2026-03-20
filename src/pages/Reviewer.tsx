@@ -709,16 +709,31 @@ export default function Reviewer() {
       let report = data.review_report as ReviewerV2Report;
 
       // Post-process: apply reconciliation-aware filtering
+      const issuesBefore = (data.review_report as ReviewerV2Report).issues.length;
+      const filteredIssues = applyReconciliationToIssues(
+        (data.review_report as ReviewerV2Report).issues,
+        localReconciliation,
+      );
+      const completenessSuppressions = issuesBefore - filteredIssues.length;
+      const discrepancyReclassifications = filteredIssues.filter(
+        (i) => i.type === "consistency" && i.explanation.includes("possible discrepancy"),
+      ).length;
+
       report = {
         ...report,
-        issues: applyReconciliationToIssues(report.issues, localReconciliation),
+        issues: filteredIssues,
         metrics: {
-          issue_count: 0,
-          high_severity_count: 0,
+          issue_count: filteredIssues.length,
+          high_severity_count: filteredIssues.filter(i => i.severity === "high").length,
         },
       };
-      report.metrics.issue_count = report.issues.length;
-      report.metrics.high_severity_count = report.issues.filter(i => i.severity === "high").length;
+
+      setPostProcessStats({
+        before: issuesBefore,
+        after: filteredIssues.length,
+        suppressed: completenessSuppressions,
+        reclassified: discrepancyReclassifications,
+      });
 
       logEvent({
         eventType: "tool.run.completed", sessionId, requestId, toolName: "run_reviewer_v2",
