@@ -104,12 +104,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (session?.user) {
+          /**
+           * REAUTH SUPPRESSION: If suppressAuthReloadRef is armed AND the
+           * incoming user is the same as the current user, this is a vault
+           * reauth — skip the loading cycle to prevent page remount.
+           */
+          if (suppressAuthReloadRef.current && user?.id === session.user.id) {
+            suppressAuthReloadRef.current = false;
+            if (import.meta.env.DEV) {
+              console.info("[AuthContext] Suppressed auth reload for same-user reauth");
+            }
+            // Update the user object (token may have refreshed) but do NOT set loading
+            setUser(session.user);
+            return;
+          }
+          suppressAuthReloadRef.current = false;
+
           setUser(session.user);
           // Immediately gate routing while profile resolves
           setLoading(true);
           // Defer profile fetch to avoid Supabase client deadlock
           setTimeout(() => fetchProfile().finally(() => setLoading(false)), 0);
         } else {
+          suppressAuthReloadRef.current = false;
           setUser(null);
           setProfile(null);
           setLoading(false);
