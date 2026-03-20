@@ -627,12 +627,36 @@ export default function CaseNotes() {
     setShowClearDialog(false);
   }, [purgeWorkingContent]);
 
-  // ─── Done handler — marks step complete and purges content ─
-  const handleDone = useCallback(async () => {
-    if (!session) return;
-    setIsDoneLoading(true);
+  // ─── Seal & Done — encrypt extraction results, mark step complete ─
+  const handleSealAndDone = useCallback(async () => {
+    if (!session || !result || !sealPassword) return;
+    if (sealPassword !== sealConfirmPassword) {
+      setSealError("Passwords do not match.");
+      return;
+    }
+    if (sealPassword.length < 4) {
+      setSealError("Password must be at least 4 characters.");
+      return;
+    }
+
+    setSealLoading(true);
+    setSealError(null);
 
     try {
+      // Build comparison packet for vault
+      const packet: CaseNotesComparisonPacket = {
+        answers: result.answers,
+        generated_at: result.generated_at,
+        model: result.model,
+        session_id: session.id,
+        template_id: session.templateId,
+      };
+
+      // Encrypt and store
+      const sealed = await vault.seal(packet, sealPassword);
+      if (!sealed) throw new Error("Seal operation failed");
+
+      // Mark step as complete in session metadata
       const { data: current } = await supabase
         .from("sessions")
         .select("metadata")
@@ -640,40 +664,46 @@ export default function CaseNotes() {
         .maybeSingle();
 
       const existingMeta = (current?.metadata as Record<string, unknown>) ?? {};
-
       const { error } = await supabase
         .from("sessions")
         .update({
           metadata: {
             ...existingMeta,
             case_notes_completed_at: new Date().toISOString(),
+            case_notes_sealed: true,
           },
         })
         .eq("id", session.id);
 
       if (error) throw error;
 
-      // SECURITY: Purge all working content from memory before navigating
+      // SECURITY: Purge all working content and password from memory
+      setSealPassword("");
+      setSealConfirmPassword("");
       purgeWorkingContent();
 
       toast({
-        title: "Case Notes secured",
-        description: "Step marked as done. Sensitive content has been cleared.",
+        title: "Case notes encrypted and secured",
+        description: "Extraction results are sealed. Unlock with your password in Reviewer.",
       });
 
       navigate(-1);
     } catch (err) {
-      console.error("[CaseNotes] Done handler error:", err);
-      toast({
-        title: "Failed to mark as done",
-        description: "Please try again.",
-        variant: "destructive",
-      });
+      console.error("[CaseNotes] Seal & Done error:", err);
+      setSealError(err instanceof Error ? err.message : "Failed to seal case notes.");
     } finally {
-      setIsDoneLoading(false);
-      setShowDoneDialog(false);
+      setSealLoading(false);
     }
-  }, [session, navigate, purgeWorkingContent]);
+  }, [session, result, sealPassword, sealConfirmPassword, vault, navigate, purgeWorkingContent]);
+
+  // Open seal dialog
+  const handleDoneClick = useCallback(() => {
+    setSealPassword("");
+    setSealConfirmPassword("");
+    setSealError(null);
+    setShowSealDialog(true);
+    setTimeout(() => sealPasswordRef.current?.focus(), 100);
+  }, []);
 
   // ─── Back navigation with security guard ───────────────
   const handleBack = useCallback(() => {
