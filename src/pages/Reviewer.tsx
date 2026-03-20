@@ -716,7 +716,12 @@ export default function Reviewer() {
 
   return (
     <div className="h-screen bg-[hsl(var(--canvas))] flex flex-col overflow-hidden">
-      {/* ─── Header ──────────────────────────────────────── */}
+      {/* Reauth modal for vault unlock */}
+      <ReauthModal
+        open={showReauthModal}
+        onOpenChange={setShowReauthModal}
+        onAuthenticate={vault.unlock}
+      />
       <header className="border-b border-border bg-card shrink-0">
         <div className="px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
