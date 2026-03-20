@@ -171,6 +171,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         devRoleOverride,
         setDevRoleOverride,
         refreshProfile: fetchProfile,
+        suppressNextAuthReload,
       }}
     >
       {children}
