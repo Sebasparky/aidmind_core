@@ -29,6 +29,7 @@ import { recoverFieldsFromDocument } from "@/lib/tools/field-recovery";
 import { parseCompletedTemplate } from "@/lib/tools/completed-template-parser";
 import { reconcileNotesAndTemplate } from "@/lib/tools/reconciliation-engine";
 import { ReconciliationPanel } from "@/components/session/ReconciliationPanel";
+import { ReviewerVerificationPanel, type ReviewerDiagnostics, type NotesSourceType } from "@/components/dev/ReviewerVerificationPanel";
 import type {
   ReviewerV2Report,
   ReviewIssue,
