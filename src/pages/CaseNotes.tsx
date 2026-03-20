@@ -448,6 +448,13 @@ export default function CaseNotes() {
     };
   }, [routeSessionId]);
 
+  // Check if a sealed vault artifact already exists
+  useEffect(() => {
+    if (session && !sessionLoading) {
+      vault.checkVaultExists();
+    }
+  }, [session, sessionLoading]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Derived state ─────────────────────────────────────
   const notesLength = form.rawNotes.trim().length;
   const notesReady = notesLength >= MIN_NOTES_LENGTH;
