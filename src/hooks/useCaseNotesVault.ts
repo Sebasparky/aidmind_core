@@ -67,6 +67,8 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
   const [unlockTimeRemaining, setUnlockTimeRemaining] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastRelockReason, setLastRelockReason] = useState<RelockReason>(null);
+  const [idleTimerActive, setIdleTimerActive] = useState(false);
 
   // Track whether reauth has been completed (for two-step unlock)
   const reauthCompleteRef = useRef(false);
