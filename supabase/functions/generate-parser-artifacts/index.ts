@@ -39,13 +39,65 @@ interface DetectedSection {
 }
 
 function detectSections(content: string): DetectedSection[] {
-  const lines = content.split("\n");
   const sections: DetectedSection[] = [];
   const seen = new Set<string>();
   let order = 0;
 
-  const patterns = [
-    /^(?:SECTION|Section)\s+\d+[\s:\-–—]+(.+)/,
+  // ── Pass 0: Inline section extraction ──────────────────────────────
+  // PDF-extracted templates often have section headers mid-line.
+  // Pre-scan the entire content for "SECTION N: Title" patterns anywhere,
+  // not just at line starts.
+  const inlineSectionRe = /(?:SECTION|Section)\s+(\d+)\s*[:.\-–—]\s*([A-Za-z][A-Za-z0-9\s&,/()]+)/g;
+  let inlineMatch: RegExpExecArray | null;
+  const inlineHits: Array<{ num: number; name: string; pos: number }> = [];
+  while ((inlineMatch = inlineSectionRe.exec(content)) !== null) {
+    const rawName = inlineMatch[2].replace(/[\s:\-–—.]+$/, "").trim();
+    if (rawName.length >= 3) {
+      inlineHits.push({ num: parseInt(inlineMatch[1], 10), name: rawName, pos: inlineMatch.index });
+    }
+  }
+
+  // Dedupe by name, keep first occurrence, sort by position
+  const seenInline = new Set<string>();
+  const dedupedHits = inlineHits.filter(h => {
+    const key = h.name.toLowerCase().replace(/\s+/g, " ");
+    if (seenInline.has(key)) return false;
+    seenInline.add(key);
+    return true;
+  }).sort((a, b) => a.pos - b.pos);
+
+  for (const hit of dedupedHits) {
+    const name = hit.name.replace(/\s+/g, " ");
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    let type = "general";
+    if (/\b(narrative|description|summary|reason|comment)\b/.test(key)) type = "narrative";
+    else if (/\b(checkbox|concern|issue|service|behavior)\b/.test(key)) type = "checkbox_group";
+    else if (/\b(demographic|person|individual|participant)\b/.test(key)) type = "demographics";
+    else if (/\b(decision|determination|recommendation|disposition)\b/.test(key)) type = "decision";
+    else if (/\b(signature|sign|approval)\b/.test(key)) type = "signature";
+    else if (/\b(relationship|matrix|family)\b/.test(key)) type = "relationship_matrix";
+
+    const hasRepeated = /\b(person|individual|participant|child)\b/i.test(key) && type === "demographics";
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    sections.push({
+      name,
+      order: order++,
+      type,
+      start_patterns: [escapedName, `SECTION\\s+${hit.num}\\s*[:\\.\\-–—]\\s*${escapedName}`],
+      field_anchors: [],
+      has_repeated_blocks: hasRepeated,
+      expected_repeat_count: hasRepeated ? 3 : undefined,
+    });
+  }
+
+  // ── Pass 1: Line-by-line fallback for non-"SECTION N:" formats ─────
+  const lines = content.split("\n");
+
+  const linePatterns = [
     /^#{1,3}\s+(.+)/,
     /^\d+\.\s+([A-Z][A-Za-z\s&,/]+)/,
     /^[A-Z]\.\s+([A-Z][A-Za-z\s&,/]+)/,
@@ -58,41 +110,35 @@ function detectSections(content: string): DetectedSection[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
-    if (line.length < 3 || line.length > 80) continue;
+    if (line.length < 3 || line.length > 120) continue;
 
-    for (const pat of patterns) {
+    for (const pat of linePatterns) {
       const m = pat.exec(line);
       if (!m) continue;
       let name = (m[1] || line).replace(/[\s:\-–—.]+$/, "").trim();
       if (name.length < 3) continue;
 
-      // Normalize
       name = name.replace(/\s+/g, " ");
       const key = name.toLowerCase();
       if (seen.has(key)) break;
       seen.add(key);
 
-      // Classify section type
       let type = "general";
-      const lk = key;
-      if (/\b(narrative|description|summary|reason|comment)\b/.test(lk)) type = "narrative";
-      else if (/\b(checkbox|concern|issue|service|behavior)\b/.test(lk)) type = "checkbox_group";
-      else if (/\b(demographic|person|individual|participant)\b/.test(lk)) type = "demographics";
-      else if (/\b(decision|determination|recommendation|disposition)\b/.test(lk)) type = "decision";
-      else if (/\b(signature|sign|approval)\b/.test(lk)) type = "signature";
-      else if (/\b(relationship|matrix|family)\b/.test(lk)) type = "relationship_matrix";
+      if (/\b(narrative|description|summary|reason|comment)\b/.test(key)) type = "narrative";
+      else if (/\b(checkbox|concern|issue|service|behavior)\b/.test(key)) type = "checkbox_group";
+      else if (/\b(demographic|person|individual|participant)\b/.test(key)) type = "demographics";
+      else if (/\b(decision|determination|recommendation|disposition)\b/.test(key)) type = "decision";
+      else if (/\b(signature|sign|approval)\b/.test(key)) type = "signature";
+      else if (/\b(relationship|matrix|family)\b/.test(key)) type = "relationship_matrix";
 
-      const hasRepeated = /\b(person|individual|participant|child)\b/i.test(lk) && type === "demographics";
-
-      // Build start pattern as regex string
+      const hasRepeated = /\b(person|individual|participant|child)\b/i.test(key) && type === "demographics";
       const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const startPatterns = [escapedName];
 
       sections.push({
         name,
         order: order++,
         type,
-        start_patterns: startPatterns,
+        start_patterns: [escapedName],
         field_anchors: [],
         has_repeated_blocks: hasRepeated,
         expected_repeat_count: hasRepeated ? 3 : undefined,
