@@ -29,6 +29,7 @@ import { recoverFieldsFromDocument } from "@/lib/tools/field-recovery";
 import { parseCompletedTemplate } from "@/lib/tools/completed-template-parser";
 import { reconcileNotesAndTemplate } from "@/lib/tools/reconciliation-engine";
 import { ReconciliationPanel } from "@/components/session/ReconciliationPanel";
+import { ReviewerVerificationPanel, type ReviewerDiagnostics, type NotesSourceType } from "@/components/dev/ReviewerVerificationPanel";
 import type {
   ReviewerV2Report,
   ReviewIssue,
@@ -329,6 +330,10 @@ export default function Reviewer() {
   const [reviewTier, setReviewTier] = useState<ReviewTier>("basic");
   /** Tracks which notes source was used for reconciliation */
   const [notesSource, setNotesSource] = useState<"case_notes" | "field_recovery" | null>(null);
+  /** Post-processing tracking (dev diagnostics) */
+  const [postProcessStats, setPostProcessStats] = useState<{ before: number; after: number; suppressed: number; reclassified: number }>({ before: 0, after: 0, suppressed: 0, reclassified: 0 });
+  /** Whether reconciliation_context was sent in last run */
+  const [reconContextSent, setReconContextSent] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textPanelRef = useRef<HTMLDivElement>(null);
@@ -430,7 +435,7 @@ export default function Reviewer() {
   // ── Relock vault on unmount (leaving Reviewer) ──────────
   useEffect(() => {
     return () => {
-      vault.relock();
+      vault.relock("unmount");
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -676,6 +681,20 @@ export default function Reviewer() {
         human_review_fields,
         reconciliation_context: reconciliationContext,
       };
+      setReconContextSent(!!reconciliationContext);
+
+      // DIAGNOSTIC: Log payload shape (no sensitive content)
+      if (import.meta.env.DEV) {
+        console.info("[Reviewer][Diag] Payload shape:", {
+          has_document_text: !!payload.document_text,
+          text_length: payload.document_text.length,
+          structured_answers_count: payload.structured_answers.length,
+          review_worthy_count: payload.review_worthy_answers.length,
+          unanswered_count: payload.unanswered_fields.length,
+          has_reconciliation_context: !!reconciliationContext,
+          reconciliation_keys: reconciliationContext ? Object.keys(reconciliationContext) : [],
+        });
+      }
       const { data, error } = await supabase.functions.invoke("run-reviewer", { body: payload });
       if (error) throw new Error(error.message || "Edge function invocation failed");
       if (data?.error) {
@@ -690,16 +709,31 @@ export default function Reviewer() {
       let report = data.review_report as ReviewerV2Report;
 
       // Post-process: apply reconciliation-aware filtering
+      const issuesBefore = (data.review_report as ReviewerV2Report).issues.length;
+      const filteredIssues = applyReconciliationToIssues(
+        (data.review_report as ReviewerV2Report).issues,
+        localReconciliation,
+      );
+      const completenessSuppressions = issuesBefore - filteredIssues.length;
+      const discrepancyReclassifications = filteredIssues.filter(
+        (i) => i.type === "consistency" && i.explanation.includes("possible discrepancy"),
+      ).length;
+
       report = {
         ...report,
-        issues: applyReconciliationToIssues(report.issues, localReconciliation),
+        issues: filteredIssues,
         metrics: {
-          issue_count: 0,
-          high_severity_count: 0,
+          issue_count: filteredIssues.length,
+          high_severity_count: filteredIssues.filter(i => i.severity === "high").length,
         },
       };
-      report.metrics.issue_count = report.issues.length;
-      report.metrics.high_severity_count = report.issues.filter(i => i.severity === "high").length;
+
+      setPostProcessStats({
+        before: issuesBefore,
+        after: filteredIssues.length,
+        suppressed: completenessSuppressions,
+        reclassified: discrepancyReclassifications,
+      });
 
       logEvent({
         eventType: "tool.run.completed", sessionId, requestId, toolName: "run_reviewer_v2",
@@ -756,7 +790,7 @@ export default function Reviewer() {
 
   const handleBack = () => {
     // SECURITY: Relock vault when leaving Reviewer
-    vault.relock();
+    vault.relock("manual");
     navigate("/dashboard");
   };
 
@@ -769,6 +803,42 @@ export default function Reviewer() {
       return acc;
     }, {} as Record<ReviewIssueType, ReviewIssue[]>);
   }, [output]);
+
+  // ─── Dev diagnostics (counts/flags only, no sensitive data) ─
+  const devDiagnostics: ReviewerDiagnostics = useMemo(() => ({
+    reviewTier,
+    notesSource: (notesSource === "case_notes" ? "vault_case_notes" : notesSource === "field_recovery" ? "field_recovery" : "none") as NotesSourceType,
+    toolState,
+    hasSchema: !!schemaFields,
+    schemaFieldCount: schemaFields?.length ?? 0,
+    hasParserArtifact: !!parserArtifact,
+    artifactStatus,
+    parserSectionCount: parserArtifact?.sections?.length ?? 0,
+    vaultState: vault.vaultState,
+    hasUnlockedPacket: !!vault.unlockedPacket,
+    unlockTimeRemainingMs: vault.unlockTimeRemaining,
+    lastRelockReason: vault.lastRelockReason,
+    idleTimerActive: vault.idleTimerActive,
+    reconciliationRan: !!reconciliationResult,
+    reconciliationReliable: reconciliationResult?.reliable_for_review ?? false,
+    reconciliationCounts: reconciliationResult ? {
+      matches: reconciliationResult.matches,
+      corrections: reconciliationResult.likely_corrections,
+      discrepancies: reconciliationResult.possible_discrepancies,
+      omissions: reconciliationResult.likely_omissions,
+      unresolved: reconciliationResult.unresolved,
+    } : null,
+    reconciliationContextSent: reconContextSent,
+    templateParseConfidence: reconciliationResult?.template_parse_confidence ?? null,
+    recoveryFieldsTotal: recoveryStats ? (recoveryStats.answered + recoveryStats.missing + recoveryStats.humanReview) : 0,
+    recoveryAnswered: recoveryStats?.answered ?? 0,
+    recoveryMissing: recoveryStats?.missing ?? 0,
+    recoveryHumanReview: recoveryStats?.humanReview ?? 0,
+    issuesBeforeFilter: postProcessStats.before,
+    issuesAfterFilter: postProcessStats.after,
+    completenessSuppressions: postProcessStats.suppressed,
+    discrepancyReclassifications: postProcessStats.reclassified,
+  }), [reviewTier, notesSource, toolState, schemaFields, parserArtifact, artifactStatus, vault.vaultState, vault.unlockedPacket, vault.unlockTimeRemaining, vault.lastRelockReason, vault.idleTimerActive, reconciliationResult, reconContextSent, recoveryStats, postProcessStats]);
 
   // ─── Page-level loading/error ──────────────────────────
   if (pageLoading) {
@@ -1336,6 +1406,8 @@ export default function Reviewer() {
           </div>
         )}
       </div>
+      {/* Dev-only verification panel */}
+      {import.meta.env.DEV && <ReviewerVerificationPanel diagnostics={devDiagnostics} />}
     </div>
   );
 }

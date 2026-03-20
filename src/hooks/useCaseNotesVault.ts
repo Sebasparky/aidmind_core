@@ -27,6 +27,8 @@ import type {
 } from "@/lib/security/vault-types";
 import { UNLOCK_WINDOW_MS, IDLE_RELOCK_MS } from "@/lib/security/vault-types";
 
+export type RelockReason = "idle_timeout" | "hard_timeout" | "manual" | "unmount" | null;
+
 interface UseCaseNotesVaultReturn {
   /** Current vault state */
   vaultState: VaultState;
@@ -43,7 +45,7 @@ interface UseCaseNotesVaultReturn {
   /** Step 2 of unlock: decrypt with vault password */
   decrypt: (vaultPassword: string) => Promise<{ success: boolean; error?: string }>;
   /** Explicitly relock (clears plaintext) */
-  relock: () => void;
+  relock: (reason?: RelockReason) => void;
   /** Reset idle timer — call on meaningful user activity while unlocked */
   resetIdleTimer: () => void;
   /** Check if a sealed artifact exists for this session */
@@ -52,6 +54,10 @@ interface UseCaseNotesVaultReturn {
   loading: boolean;
   /** Last error message */
   error: string | null;
+  /** Why the vault was last relocked (diagnostic) */
+  lastRelockReason: RelockReason;
+  /** Whether idle timer is currently active (diagnostic) */
+  idleTimerActive: boolean;
 }
 
 export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVaultReturn {
@@ -61,6 +67,8 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
   const [unlockTimeRemaining, setUnlockTimeRemaining] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastRelockReason, setLastRelockReason] = useState<RelockReason>(null);
+  const [idleTimerActive, setIdleTimerActive] = useState(false);
 
   // Track whether reauth has been completed (for two-step unlock)
   const reauthCompleteRef = useRef(false);
@@ -78,10 +86,15 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
     if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null; }
     unlockExpiresRef.current = null;
     setUnlockTimeRemaining(null);
+    setIdleTimerActive(false);
   }, []);
 
   // ── Relock — scrub plaintext from state ─────────────────
-  const relock = useCallback(() => {
+  const relock = useCallback((reason: RelockReason = "manual") => {
+    if (import.meta.env.DEV) {
+      console.info(`[Vault] Relock triggered: reason=${reason}`);
+    }
+    setLastRelockReason(reason);
     setUnlockedPacket(null);
     reauthCompleteRef.current = false;
     setVaultState((prev) => (prev === "unlocked" || prev === "relock_pending") ? "sealed" : prev);
@@ -97,8 +110,9 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
     // Only set idle timer if we're currently unlocked
     if (unlockExpiresRef.current !== null) {
       idleTimerRef.current = setTimeout(() => {
-        relock();
+        relock("idle_timeout");
       }, IDLE_RELOCK_MS);
+      setIdleTimerActive(true);
     }
   }, [relock]);
 
@@ -111,20 +125,21 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
 
     // Hard deadline
     unlockTimerRef.current = setTimeout(() => {
-      relock();
+      relock("hard_timeout");
     }, UNLOCK_WINDOW_MS);
 
     // Idle timer — relocks after IDLE_RELOCK_MS of no activity
     idleTimerRef.current = setTimeout(() => {
-      relock();
+      relock("idle_timeout");
     }, IDLE_RELOCK_MS);
+    setIdleTimerActive(true);
 
     // Countdown display
     countdownRef.current = setInterval(() => {
       const remaining = (unlockExpiresRef.current ?? 0) - Date.now();
       if (remaining <= 0) {
         setUnlockTimeRemaining(0);
-        relock();
+        relock("hard_timeout");
       } else {
         setUnlockTimeRemaining(remaining);
       }
@@ -354,5 +369,7 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
     checkVaultExists,
     loading,
     error,
+    lastRelockReason,
+    idleTimerActive,
   };
 }
