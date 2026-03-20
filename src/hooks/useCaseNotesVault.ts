@@ -369,5 +369,7 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
     checkVaultExists,
     loading,
     error,
+    lastRelockReason,
+    idleTimerActive,
   };
 }
