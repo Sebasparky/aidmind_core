@@ -52,6 +52,9 @@ import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 import { usePdfTextExtractor } from "@/hooks/usePdfTextExtractor";
+import { useCaseNotesVault } from "@/hooks/useCaseNotesVault";
+import { VaultStatusIndicator } from "@/components/security/VaultStatusIndicator";
+import type { CaseNotesComparisonPacket } from "@/lib/security/vault-types";
 import mammoth from "mammoth";
 
 // ─── Types ───────────────────────────────────────────────
