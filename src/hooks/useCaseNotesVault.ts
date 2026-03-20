@@ -125,7 +125,7 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
 
     // Hard deadline
     unlockTimerRef.current = setTimeout(() => {
-      relock();
+      relock("hard_timeout");
     }, UNLOCK_WINDOW_MS);
 
     // Idle timer — relocks after IDLE_RELOCK_MS of no activity
