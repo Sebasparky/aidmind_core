@@ -5,6 +5,7 @@ import {
   AlertTriangle, MessageSquare, Scale, CheckSquare, Eye,
   Upload, FileText, X, RefreshCw, CheckCircle2, FileWarning,
   Search, ChevronDown, ChevronRight, Circle, Lock, Unlock,
+  ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -41,7 +42,9 @@ import type {
   ReconciliationResult,
   CompletedTemplateParse,
   FieldReconciliation,
+  ParsedFieldResult,
 } from "@/lib/tools/parser-artifact-types";
+import type { CaseNotesComparisonPacket } from "@/lib/security/vault-types";
 
 /**
  * SECURITY NOTES — Reviewer Pipeline
@@ -49,10 +52,14 @@ import type {
  * 1. No sessionStorage/localStorage persistence of extracted text,
  *    reconciliation results, or reviewer output. All state is in-memory only.
  * 2. Case-note comparison data is accessed only through the encrypted vault.
- *    The user must explicitly unlock with password (reauth) to access it.
+ *    The user must complete a two-step unlock:
+ *      Step 1: Verify identity with account password
+ *      Step 2: Decrypt vault with vault password
  * 3. Unlocked data auto-relocks after 5 minutes.
  * 4. Parser artifacts are fetched from the DB — these are template-level
  *    reusable assets, not sensitive per-session data.
+ * 5. The unlocked packet is the true notes-side source of truth for
+ *    reconciliation. Without it, only template-only comparison is available.
  */
 
 // ─── Types ───────────────────────────────────────────────
@@ -240,12 +247,34 @@ async function ensureParserArtifact(
   return null;
 }
 
+/**
+ * Convert an unlocked CaseNotesComparisonPacket into RecoveredField[]
+ * for use in the reconciliation engine. This is the secure handoff —
+ * the vault packet is the true notes-side source of truth.
+ */
+function packetToRecoveredFields(packet: CaseNotesComparisonPacket): RecoveredField[] {
+  return packet.answers.map((a) => ({
+    field_key: a.field_key,
+    label: a.label,
+    template_prompt: "",
+    answer: a.answer,
+    recovery_confidence: a.confidence === "high" ? "high" : a.confidence === "medium" ? "medium" : "low",
+    recovery_method: "label_same_line" as const,
+    anchor_used: null,
+    source_excerpt: a.supporting_excerpt,
+    matching_mode: "extract_short_text",
+    review_relevance: "review_worthy" as const,
+    requires_human_review: false,
+    missing: a.answer === null,
+  }));
+}
+
 // ─── Review tier label ──────────────────────────────────
 function ReviewTierBadge({ tier }: { tier: ReviewTier }) {
   if (tier === "full") {
     return (
       <Badge variant="outline" className="text-[10px] text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30">
-        Full comparison
+        Full notes-to-form comparison
       </Badge>
     );
   }
@@ -298,6 +327,8 @@ export default function Reviewer() {
   const [parserArtifact, setParserArtifact] = useState<TemplateParserArtifact | null>(null);
   const [artifactStatus, setArtifactStatus] = useState<"loading" | "ready" | "missing" | "generating">("loading");
   const [reviewTier, setReviewTier] = useState<ReviewTier>("basic");
+  /** Tracks which notes source was used for reconciliation */
+  const [notesSource, setNotesSource] = useState<"case_notes" | "field_recovery" | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textPanelRef = useRef<HTMLDivElement>(null);
@@ -396,6 +427,13 @@ export default function Reviewer() {
     return () => { if (selectedFile) URL.revokeObjectURL(selectedFile.objectUrl); };
   }, [selectedFile]);
 
+  // ── Relock vault on unmount (leaving Reviewer) ──────────
+  useEffect(() => {
+    return () => {
+      vault.relock();
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const canRun = hasDocument && !fileError && !extracting && extractedFullText.length > 0 && toolState !== "running" && toolState !== "recovering";
 
   // ─── File handling ─────────────────────────────────────
@@ -413,6 +451,7 @@ export default function Reviewer() {
     setRecoveryStats(null);
     setReconciliationResult(null);
     setTemplateParseResult(null);
+    setNotesSource(null);
     extractText(file);
   }, [selectedFile, extractText]);
 
@@ -438,6 +477,7 @@ export default function Reviewer() {
     setRecoveryStats(null);
     setReconciliationResult(null);
     setTemplateParseResult(null);
+    setNotesSource(null);
     setReviewTier("basic");
   };
 
@@ -459,6 +499,7 @@ export default function Reviewer() {
     let localReconciliation: ReconciliationResult | null = null;
     let localTemplateParse: CompletedTemplateParse | null = null;
     let tier: ReviewTier = "basic";
+    let usedNotesSource: "case_notes" | "field_recovery" | null = null;
 
     /**
      * SECURITY: Diagnostics log counts and statuses only.
@@ -468,6 +509,8 @@ export default function Reviewer() {
       has_schema: !!schemaFields,
       has_parser_artifact: !!parserArtifact,
       artifact_status: artifactStatus,
+      vault_state: vault.vaultState,
+      has_unlocked_packet: !!vault.unlockedPacket,
       reconciliation_used: false,
       fallback_path: false,
     };
@@ -497,19 +540,37 @@ export default function Reviewer() {
             diagnostics.sections_parsed = localTemplateParse.sections_parsed.length;
 
             /**
-             * SECURITY: Reconciliation uses field recovery from the completed
-             * template text as the comparison source. We do NOT load Phase 2
-             * case-note extraction from backend metadata — that would violate
-             * the zero-retention model. The structured_answers here come from
-             * deterministic parsing of the uploaded document, not from notes.
+             * SECURITY: Determine notes-side comparison source.
+             *
+             * Priority 1: Unlocked vault packet (true notes-side source of truth)
+             *   — This is the secure comparison: notes extraction vs completed form
+             * Priority 2: Field recovery from the uploaded document
+             *   — This compares the document against itself (template-only tier)
+             *
+             * We NEVER fall back to loading Phase 2 data from backend metadata.
              */
+            let notesForReconciliation: RecoveredField[];
+
+            if (vault.unlockedPacket) {
+              // TRUE NOTES-TO-FORM COMPARISON: use the secure vault packet
+              notesForReconciliation = packetToRecoveredFields(vault.unlockedPacket);
+              usedNotesSource = "case_notes";
+              tier = "full";
+              diagnostics.notes_source = "vault_packet";
+              diagnostics.vault_packet_fields = vault.unlockedPacket.answers.length;
+            } else {
+              // TEMPLATE-ONLY COMPARISON: compare form recovery against template parse
+              notesForReconciliation = structured_answers;
+              usedNotesSource = "field_recovery";
+              diagnostics.notes_source = "field_recovery";
+            }
+
             localReconciliation = reconcileNotesAndTemplate(
-              structured_answers,
+              notesForReconciliation,
               localTemplateParse.fields,
               localTemplateParse.overall_confidence,
             );
             setReconciliationResult(localReconciliation);
-            tier = "full";
             diagnostics.reconciliation_used = true;
             diagnostics.reconciliation_matches = localReconciliation.matches;
             diagnostics.reconciliation_mismatches = localReconciliation.mismatches;
@@ -533,6 +594,7 @@ export default function Reviewer() {
     }
 
     setReviewTier(tier);
+    setNotesSource(usedNotesSource);
     setToolState("running");
     logEvent({
       eventType: "tool.run.started", sessionId, requestId,
@@ -545,6 +607,7 @@ export default function Reviewer() {
         unanswered_count: unanswered_fields.length,
         human_review_count: human_review_fields.length,
         review_tier: tier,
+        notes_source: usedNotesSource ?? "none",
         ...diagnostics,
       },
     });
@@ -629,6 +692,7 @@ export default function Reviewer() {
           high_severity_count: report.metrics.high_severity_count,
           overall_risk: report.summary.overall_risk,
           review_tier: tier,
+          notes_source: usedNotesSource ?? "none",
           reconciliation_filtered: localReconciliation?.reliable_for_review ?? false,
         },
       });
@@ -640,7 +704,7 @@ export default function Reviewer() {
       setErrorMessage(err?.message || "An unexpected error occurred.");
       setToolState("error");
     }
-  }, [sessionId, sessionInfo, extractedFullText, fileSize, pageCount, schemaFields, logEvent, parserArtifact, artifactStatus]);
+  }, [sessionId, sessionInfo, extractedFullText, fileSize, pageCount, schemaFields, logEvent, parserArtifact, artifactStatus, vault.vaultState, vault.unlockedPacket]);
 
   const handleClear = () => handleRemoveFile();
 
@@ -673,7 +737,11 @@ export default function Reviewer() {
     setTimeout(() => setCopiedCategory(null), 2000);
   };
 
-  const handleBack = () => navigate("/dashboard");
+  const handleBack = () => {
+    // SECURITY: Relock vault when leaving Reviewer
+    vault.relock();
+    navigate("/dashboard");
+  };
 
   const totalIssues = output ? output.metrics.issue_count : 0;
 
@@ -713,14 +781,19 @@ export default function Reviewer() {
   const extractReady: ReadinessState = extracting ? "attention" : extractedFullText.length > 0 ? "ready" : "missing";
   const schemaReady: ReadinessState = schemaFields ? "ready" : "attention";
   const artifactReady: ReadinessState = artifactStatus === "ready" ? "ready" : artifactStatus === "generating" ? "attention" : "attention";
+  const vaultReady: ReadinessState =
+    vault.vaultState === "unlocked" ? "ready" :
+    vault.vaultState === "sealed" ? "attention" :
+    "missing";
 
   return (
     <div className="h-screen bg-[hsl(var(--canvas))] flex flex-col overflow-hidden">
-      {/* Reauth modal for vault unlock */}
+      {/* Two-step reauth modal for vault unlock */}
       <ReauthModal
         open={showReauthModal}
         onOpenChange={setShowReauthModal}
-        onAuthenticate={vault.unlock}
+        onReauthenticate={vault.reauthenticate}
+        onDecrypt={vault.decrypt}
       />
       <header className="border-b border-border bg-card shrink-0">
         <div className="px-6 py-3 flex items-center justify-between">
@@ -801,6 +874,23 @@ export default function Reviewer() {
                   )}
                 </CardContent>
               </Card>
+
+              {/* Vault status in upload state */}
+              {vault.vaultState === "sealed" && (
+                <Card className="border border-border shadow-none">
+                  <CardContent className="px-5 py-4">
+                    <div className="flex items-start gap-2.5">
+                      <Lock className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                      <div className="space-y-1.5 flex-1">
+                        <p className="text-xs font-medium text-foreground">Encrypted case notes available</p>
+                        <p className="text-xs text-muted-foreground">
+                          Upload a document first, then unlock case notes for full notes-to-form comparison.
+                        </p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
               <Alert className="border-primary/20 bg-primary/5">
                 <Lock className="h-4 w-4 text-primary" />
@@ -885,8 +975,8 @@ export default function Reviewer() {
 
             {/* ─── Right rail: Action + Results ──────────── */}
             <div className="lg:w-[340px] xl:w-[380px] shrink-0 border-l border-border bg-card flex flex-col overflow-hidden">
-              {/* Vault status */}
-              {(vault.vaultState === "sealed" || vault.vaultState === "unlocked") && (
+              {/* Vault status — always show when vault exists */}
+              {vault.vaultState !== "empty" && (
                 <div className="p-4 border-b border-border shrink-0">
                   <VaultStatusIndicator
                     vaultState={vault.vaultState}
@@ -894,8 +984,15 @@ export default function Reviewer() {
                     unlockTimeRemaining={vault.unlockTimeRemaining}
                     onUnlockClick={() => setShowReauthModal(true)}
                     onRelockClick={vault.relock}
-                    compact
+                    compact={vault.vaultState === "unlocked"}
                   />
+                  {/* Contextual hint when sealed and about to run */}
+                  {vault.vaultState === "sealed" && toolState !== "success" && hasDocument && (
+                    <p className="text-[10px] text-muted-foreground mt-2">
+                      Unlock before running for full notes-to-form comparison.
+                      Without it, only template-only comparison is available.
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -914,6 +1011,17 @@ export default function Reviewer() {
                       "Not available — basic recovery only"
                     }
                   />
+                  {vault.vaultState !== "empty" && (
+                    <ReadinessRow
+                      label="Case notes comparison"
+                      state={vaultReady}
+                      detail={
+                        vault.vaultState === "unlocked" ? "Unlocked — full comparison available" :
+                        vault.vaultState === "sealed" ? "Sealed — unlock for full comparison" :
+                        "Not available"
+                      }
+                    />
+                  )}
                 </div>
 
                 {/* Primary CTA */}
@@ -1010,12 +1118,25 @@ export default function Reviewer() {
                         )}
                       </div>
 
-                      {/* Reconciliation panel — full tier only */}
+                      {/* Full tier: notes source indicator */}
+                      {reviewTier === "full" && notesSource === "case_notes" && (
+                        <div className="flex items-start gap-2 p-2.5 rounded-lg bg-[hsl(var(--status-success-muted))]/50 border border-[hsl(var(--status-success))]/15">
+                          <ShieldCheck className="h-3.5 w-3.5 text-[hsl(var(--status-success))] shrink-0 mt-0.5" />
+                          <div>
+                            <p className="text-[11px] text-foreground font-medium">Secure notes-to-form comparison</p>
+                            <p className="text-[10px] text-muted-foreground">
+                              Comparison uses unlocked case notes as the source of truth.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Reconciliation panel */}
                       {reconciliationResult && (
                         <div className="pb-1">
                           <ReconciliationPanel
                             result={reconciliationResult}
-                            notesSource="field_recovery"
+                            notesSource={notesSource ?? "field_recovery"}
                             artifactStatus={artifactStatus}
                           />
                           <Separator className="mt-3" />
@@ -1030,6 +1151,22 @@ export default function Reviewer() {
                             <p className="text-[11px] text-muted-foreground font-medium">Template-only comparison</p>
                             <p className="text-[10px] text-muted-foreground/70">
                               Parser artifacts were not available. Review based on field recovery only.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Sealed vault hint when running without unlock */}
+                      {vault.vaultState === "sealed" && reviewTier !== "full" && (
+                        <div className="flex items-start gap-2 p-2.5 rounded-lg bg-muted/50 border border-border">
+                          <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                          <div>
+                            <p className="text-[11px] text-muted-foreground font-medium">
+                              Notes comparison not included
+                            </p>
+                            <p className="text-[10px] text-muted-foreground/70">
+                              Encrypted case notes are available but were not unlocked before this run.
+                              Unlock and re-run for full notes-to-form comparison.
                             </p>
                           </div>
                         </div>
