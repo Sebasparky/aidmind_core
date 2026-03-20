@@ -275,6 +275,10 @@ export default function Reviewer() {
   const [pageLoading, setPageLoading] = useState(true);
   const [pageError, setPageError] = useState<string | null>(null);
 
+  // Vault for encrypted case-note comparison
+  const vault = useCaseNotesVault(sessionId);
+  const [showReauthModal, setShowReauthModal] = useState(false);
+
   /**
    * SECURITY: All tool state is in-memory only.
    * No sessionStorage, no localStorage, no backend persistence
