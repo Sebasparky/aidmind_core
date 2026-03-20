@@ -1456,8 +1456,8 @@ export default function CaseNotes() {
                   <div className="space-y-1">
                     <p className="text-xs font-medium text-foreground">Privacy notice</p>
                     <p className="text-xs text-muted-foreground">
-                      Sensitive content is not saved for later return. Finish and
-                      secure when ready — leaving clears the workspace.
+                      Sensitive content is never stored in plain text. Use "Done and secure" to
+                      encrypt results for later comparison. Leaving without securing clears the workspace.
                     </p>
                   </div>
                 </div>
