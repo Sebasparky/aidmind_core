@@ -431,7 +431,7 @@ export default function Reviewer() {
   // ── Relock vault on unmount (leaving Reviewer) ──────────
   useEffect(() => {
     return () => {
-      vault.relock();
+      vault.relock("unmount");
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
