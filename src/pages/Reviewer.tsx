@@ -629,13 +629,13 @@ export default function Reviewer() {
           .map(f => f.field_key),
         likely_corrections: localReconciliation.fields
           .filter(f => f.resolution === "likely_correction")
-          .map(f => ({ field_key: f.field_key, section: f.section })),
+          .map(f => ({ field_key: f.field_key, notes: f.notes_value, form: f.template_value })),
         discrepancies: localReconciliation.fields
           .filter(f => f.resolution === "possible_discrepancy")
-          .map(f => ({ field_key: f.field_key, section: f.section })),
+          .map(f => ({ field_key: f.field_key, notes: f.notes_value, form: f.template_value, section: f.section })),
         omissions: localReconciliation.fields
           .filter(f => f.resolution === "likely_omission")
-          .map(f => ({ field_key: f.field_key, section: f.section })),
+          .map(f => ({ field_key: f.field_key, notes_value: f.notes_value, section: f.section })),
       } : undefined;
 
       // Suppress confirmed/corrected fields from unanswered list
