@@ -42,6 +42,12 @@ interface AuthContextType {
   setDevRoleOverride: (role: AppRole | null) => void;
   /** Re-fetch profile from backend */
   refreshProfile: () => Promise<void>;
+  /**
+   * Suppress the next auth state change from triggering a loading/remount cycle.
+   * Used by vault reauth to prevent signInWithPassword() from destroying page state.
+   * Call before the reauth signIn, and it auto-resets after the next auth event.
+   */
+  suppressNextAuthReload: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
