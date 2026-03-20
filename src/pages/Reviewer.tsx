@@ -4,7 +4,7 @@ import {
   ArrowLeft, Shield, Info, Loader2, Copy, Check, RotateCcw,
   AlertTriangle, MessageSquare, Scale, CheckSquare, Eye,
   Upload, FileText, X, RefreshCw, CheckCircle2, FileWarning,
-  Search, ChevronDown, ChevronRight, Circle,
+  Search, ChevronDown, ChevronRight, Circle, Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -40,8 +40,25 @@ import type {
   FieldReconciliation,
 } from "@/lib/tools/parser-artifact-types";
 
+/**
+ * SECURITY NOTES — Reviewer Pipeline
+ *
+ * 1. No sessionStorage/localStorage persistence of extracted text,
+ *    reconciliation results, or reviewer output. All state is in-memory only.
+ * 2. No backend reads of Phase 2 case-note extraction from session metadata.
+ *    The reconciliation engine uses only field recovery from the completed
+ *    template text (which is the form itself, not case notes).
+ * 3. Parser artifacts are fetched from the DB — these are template-level
+ *    reusable assets, not sensitive per-session data.
+ * 4. When the user navigates away or refreshes, all working content is lost.
+ *    This is intentional and aligns with the zero-retention privacy model.
+ */
+
 // ─── Types ───────────────────────────────────────────────
 type ToolState = "idle" | "ready" | "recovering" | "running" | "success" | "error";
+
+/** Describes the quality tier of the current review run */
+type ReviewTier = "full" | "template_only" | "basic";
 
 interface SessionInfo {
   caseLabel: string;
@@ -55,64 +72,6 @@ interface SessionInfo {
 interface SelectedFile {
   file: File;
   objectUrl: string;
-}
-
-// ─── Persistence ─────────────────────────────────────────
-const PERSIST_DEBUG = import.meta.env.DEV;
-
-interface PersistedReviewerState {
-  toolState: ToolState;
-  fileName: string | null;
-  fileSize: number | null;
-  extractedPages: PageText[];
-  extractedFullText: string;
-  pageCount: number;
-  output: ReviewerV2Report | null;
-  errorMessage: string | null;
-  recoveryStats: { answered: number; missing: number; humanReview: number } | null;
-  activeSnippet: string | null;
-  copiedCategory: string | null;
-  reconciliationResult: ReconciliationResult | null;
-  templateParseResult: CompletedTemplateParse | null;
-}
-
-function reviewerStorageKey(sessionId: string) {
-  return `aidmind:reviewer:${sessionId}`;
-}
-
-function logPersist(event: string, payload?: Record<string, unknown>) {
-  if (!PERSIST_DEBUG) return;
-  console.info(`[Reviewer][persist] ${event}`, payload ?? "");
-}
-
-function persistReviewerState(sessionId: string, state: PersistedReviewerState) {
-  try {
-    sessionStorage.setItem(reviewerStorageKey(sessionId), JSON.stringify(state));
-    logPersist("save", { sessionId, toolState: state.toolState, hasOutput: !!state.output });
-  } catch (e) {
-    logPersist("save_failed", { error: e instanceof Error ? e.message : "unknown" });
-  }
-}
-
-function loadReviewerState(sessionId: string): PersistedReviewerState | null {
-  try {
-    const raw = sessionStorage.getItem(reviewerStorageKey(sessionId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as PersistedReviewerState;
-    if (parsed.toolState === "running" || parsed.toolState === "recovering") {
-      parsed.toolState = parsed.output ? "success" : "ready";
-    }
-    logPersist("restore_hit", { sessionId, toolState: parsed.toolState });
-    return parsed;
-  } catch {
-    logPersist("restore_failed", { sessionId });
-    return null;
-  }
-}
-
-function clearReviewerState(sessionId: string) {
-  sessionStorage.removeItem(reviewerStorageKey(sessionId));
-  logPersist("cleared", { sessionId });
 }
 
 // ─── Constants ───────────────────────────────────────────
@@ -194,9 +153,9 @@ function ReadinessRow({ label, state, detail }: { label: string; state: Readines
 // ─── Reconciliation-aware completeness filtering ─────────
 /**
  * Post-process reviewer issues using reconciliation results.
- * - confirmed_match fields → suppress completeness issues
+ * - confirmed_match → suppress completeness issues
  * - likely_correction → suppress completeness issues
- * - possible_discrepancy → reclassify as consistency, not completeness
+ * - possible_discrepancy → reclassify as consistency
  * - unresolved + low parse confidence → downgrade severity
  */
 function applyReconciliationToIssues(
@@ -214,18 +173,14 @@ function applyReconciliationToIssues(
     if (issue.type !== "completeness" || !issue.field_key) return true;
     const recon = fieldResolutionMap.get(issue.field_key);
     if (!recon) return true;
-
-    // Suppress false positives
     if (recon.resolution === "confirmed_match") return false;
     if (recon.resolution === "likely_correction") return false;
-
     return true;
   }).map((issue) => {
     if (!issue.field_key) return issue;
     const recon = fieldResolutionMap.get(issue.field_key);
     if (!recon) return issue;
 
-    // Reclassify discrepancies
     if (issue.type === "completeness" && recon.resolution === "possible_discrepancy") {
       return {
         ...issue,
@@ -234,7 +189,6 @@ function applyReconciliationToIssues(
       };
     }
 
-    // Downgrade unresolved
     if (issue.type === "completeness" && recon.resolution === "unresolved" && reconciliation.template_parse_confidence === "low") {
       return {
         ...issue,
@@ -252,7 +206,6 @@ async function ensureParserArtifact(
   templateId: string,
   tenantId: string,
 ): Promise<TemplateParserArtifact | null> {
-  // 1. Check if active artifact exists
   const { data: existing } = await supabase
     .from("template_parser_artifacts")
     .select("artifact_json")
@@ -261,19 +214,15 @@ async function ensureParserArtifact(
     .maybeSingle();
 
   if (existing?.artifact_json) {
-    if (import.meta.env.DEV) console.info("[Reviewer] Parser artifact found in DB");
     return existing.artifact_json as unknown as TemplateParserArtifact;
   }
 
-  // 2. Auto-generate via edge function
-  if (import.meta.env.DEV) console.info("[Reviewer] No parser artifact — auto-generating…");
   try {
     const { data, error } = await supabase.functions.invoke("generate-parser-artifacts", {
       body: { template_id: templateId, tenant_id: tenantId },
     });
     if (error) throw error;
     if (data?.status === "generated" || data?.status === "exists") {
-      // Re-fetch the artifact
       const { data: fresh } = await supabase
         .from("template_parser_artifacts")
         .select("artifact_json")
@@ -281,7 +230,6 @@ async function ensureParserArtifact(
         .eq("is_active", true)
         .maybeSingle();
       if (fresh?.artifact_json) {
-        if (import.meta.env.DEV) console.info("[Reviewer] Parser artifact auto-generated successfully");
         return fresh.artifact_json as unknown as TemplateParserArtifact;
       }
     }
@@ -291,45 +239,27 @@ async function ensureParserArtifact(
   return null;
 }
 
-// ─── Load Phase 2 note extraction from session ──────────
-async function loadNotesExtraction(sessionUuid: string): Promise<RecoveredField[] | null> {
-  try {
-    const { data, error } = await supabase
-      .from("sessions")
-      .select("metadata")
-      .eq("id", sessionUuid)
-      .maybeSingle();
-
-    if (error || !data?.metadata) return null;
-    const meta = data.metadata as Record<string, any>;
-
-    // Phase 2 extraction stored in metadata.guidance_phase2
-    const phase2 = meta.guidance_phase2;
-    if (!phase2) return null;
-
-    // Extract structured answers from phase2 output
-    const answers = phase2.answers || phase2.extracted_answers;
-    if (!Array.isArray(answers) || answers.length === 0) return null;
-
-    // Convert phase2 answers to RecoveredField format for reconciliation
-    return answers.map((a: any) => ({
-      field_key: a.field_key,
-      label: a.label || a.field_key,
-      template_prompt: a.question || a.template_prompt || "",
-      answer: a.answer ?? null,
-      recovery_confidence: a.confidence || a.recovery_confidence || "medium",
-      recovery_method: "phase2_extraction" as any,
-      anchor_used: null,
-      source_excerpt: a.supporting_excerpt || a.source_excerpt || null,
-      matching_mode: a.matching_mode || "extract_short_text",
-      review_relevance: "review_worthy" as const,
-      requires_human_review: false,
-      missing: !a.answer,
-    })) as RecoveredField[];
-  } catch (err) {
-    console.warn("[Reviewer] Failed to load notes extraction:", err);
-    return null;
+// ─── Review tier label ──────────────────────────────────
+function ReviewTierBadge({ tier }: { tier: ReviewTier }) {
+  if (tier === "full") {
+    return (
+      <Badge variant="outline" className="text-[10px] text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30">
+        Full comparison
+      </Badge>
+    );
   }
+  if (tier === "template_only") {
+    return (
+      <Badge variant="outline" className="text-[10px] text-[hsl(var(--status-warning))] border-[hsl(var(--status-warning))]/30">
+        Template-only comparison
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="text-[10px] text-muted-foreground">
+      Basic review
+    </Badge>
+  );
 }
 
 // ─── Main Page ───────────────────────────────────────────
@@ -344,7 +274,11 @@ export default function Reviewer() {
   const [pageLoading, setPageLoading] = useState(true);
   const [pageError, setPageError] = useState<string | null>(null);
 
-  // Tool state
+  /**
+   * SECURITY: All tool state is in-memory only.
+   * No sessionStorage, no localStorage, no backend persistence
+   * of extracted text, reconciliation, or reviewer output.
+   */
   const [toolState, setToolState] = useState<ToolState>("idle");
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -357,17 +291,8 @@ export default function Reviewer() {
   const [reconciliationResult, setReconciliationResult] = useState<ReconciliationResult | null>(null);
   const [templateParseResult, setTemplateParseResult] = useState<CompletedTemplateParse | null>(null);
   const [parserArtifact, setParserArtifact] = useState<TemplateParserArtifact | null>(null);
-  const [notesExtraction, setNotesExtraction] = useState<RecoveredField[] | null>(null);
   const [artifactStatus, setArtifactStatus] = useState<"loading" | "ready" | "missing" | "generating">("loading");
-
-  // Restored state
-  const [restoredPages, setRestoredPages] = useState<PageText[]>([]);
-  const [restoredFullText, setRestoredFullText] = useState("");
-  const [restoredPageCount, setRestoredPageCount] = useState(0);
-  const [restoredFileName, setRestoredFileName] = useState<string | null>(null);
-  const [restoredFileSize, setRestoredFileSize] = useState<number | null>(null);
-
-  const [hydratedSessionId, setHydratedSessionId] = useState<string | null>(null);
+  const [reviewTier, setReviewTier] = useState<ReviewTier>("basic");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textPanelRef = useRef<HTMLDivElement>(null);
@@ -382,12 +307,24 @@ export default function Reviewer() {
     clearText,
   } = usePdfTextExtractor();
 
-  const extractedPages = livePages.length > 0 ? livePages : restoredPages;
-  const extractedFullText = liveFullText || restoredFullText;
-  const pageCount = livePageCount || restoredPageCount;
-  const fileName = selectedFile?.file.name ?? restoredFileName;
-  const fileSize = selectedFile?.file.size ?? restoredFileSize;
-  const hasDocument = selectedFile !== null || restoredFullText.length > 0;
+  const extractedPages = livePages;
+  const extractedFullText = liveFullText;
+  const pageCount = livePageCount;
+  const fileName = selectedFile?.file.name ?? null;
+  const fileSize = selectedFile?.file.size ?? null;
+  const hasDocument = selectedFile !== null;
+
+  /**
+   * SECURITY: Purge any legacy sessionStorage entries from previous implementations.
+   */
+  useEffect(() => {
+    if (!sessionId) return;
+    try {
+      sessionStorage.removeItem(`aidmind:reviewer:${sessionId}`);
+    } catch {
+      // best-effort cleanup
+    }
+  }, [sessionId]);
 
   // ─── Load session info + schema + auto-ensure artifacts ─
   useEffect(() => {
@@ -410,7 +347,7 @@ export default function Reviewer() {
           tenantId: data.tenant_id,
         });
 
-        // Load schema
+        // Load schema (template-level, not sensitive)
         if (data.phase2_schema_id) {
           const { data: schema, error: schemaErr } = await supabase
             .from("template_phase2_schemas")
@@ -423,19 +360,13 @@ export default function Reviewer() {
           }
         }
 
-        // Auto-ensure parser artifact
+        // Auto-ensure parser artifact (template-level, not sensitive)
         if (data.template_id && data.tenant_id) {
           setArtifactStatus("generating");
           const artifact = await ensureParserArtifact(data.template_id, data.tenant_id);
           if (artifact) {
             setParserArtifact(artifact);
             setArtifactStatus("ready");
-            if (import.meta.env.DEV) {
-              console.info("[Reviewer] Parser artifact ready:", {
-                sections: artifact.sections?.length,
-                checkbox_groups: artifact.checkbox_groups?.length,
-              });
-            }
           } else {
             setArtifactStatus("missing");
           }
@@ -443,72 +374,11 @@ export default function Reviewer() {
           setArtifactStatus("missing");
         }
 
-        // Load Phase 2 note extraction
-        const notes = await loadNotesExtraction(data.id);
-        setNotesExtraction(notes);
-        if (import.meta.env.DEV) {
-          console.info("[Reviewer] Notes extraction:", notes ? `${notes.length} fields` : "not available");
-        }
-
       } catch { setPageError("Failed to load session"); }
       finally { setPageLoading(false); }
     }
     fetchSession();
   }, [sessionId]);
-
-  // ─── Hydrate from sessionStorage ───────────────────────
-  useEffect(() => {
-    if (!sessionId) { setHydratedSessionId(null); return; }
-    const persisted = loadReviewerState(sessionId);
-    if (persisted) {
-      setToolState(persisted.toolState);
-      setRestoredPages(persisted.extractedPages ?? []);
-      setRestoredFullText(persisted.extractedFullText ?? "");
-      setRestoredPageCount(persisted.pageCount ?? 0);
-      setRestoredFileName(persisted.fileName);
-      setRestoredFileSize(persisted.fileSize);
-      setOutput(persisted.output);
-      setErrorMessage(persisted.errorMessage);
-      setRecoveryStats(persisted.recoveryStats);
-      setActiveSnippet(persisted.activeSnippet);
-      setReconciliationResult(persisted.reconciliationResult ?? null);
-      setTemplateParseResult(persisted.templateParseResult ?? null);
-    } else {
-      setToolState("idle");
-      setRestoredPages([]);
-      setRestoredFullText("");
-      setRestoredPageCount(0);
-      setRestoredFileName(null);
-      setRestoredFileSize(null);
-      setOutput(null);
-      setErrorMessage(null);
-      setRecoveryStats(null);
-      setActiveSnippet(null);
-      setReconciliationResult(null);
-      setTemplateParseResult(null);
-    }
-    setHydratedSessionId(sessionId);
-  }, [sessionId]);
-
-  // ─── Persist to sessionStorage on change ───────────────
-  useEffect(() => {
-    if (!sessionId || hydratedSessionId !== sessionId) return;
-    persistReviewerState(sessionId, {
-      toolState: (toolState === "running" || toolState === "recovering") ? (output ? "success" : "ready") : toolState,
-      fileName: selectedFile?.file.name ?? restoredFileName,
-      fileSize: selectedFile?.file.size ?? restoredFileSize,
-      extractedPages,
-      extractedFullText,
-      pageCount,
-      output,
-      errorMessage,
-      recoveryStats,
-      activeSnippet,
-      copiedCategory: null,
-      reconciliationResult,
-      templateParseResult,
-    });
-  }, [sessionId, hydratedSessionId, toolState, selectedFile, restoredFileName, restoredFileSize, extractedPages, extractedFullText, pageCount, output, errorMessage, recoveryStats, activeSnippet, reconciliationResult, templateParseResult]);
 
   useEffect(() => {
     return () => { if (selectedFile) URL.revokeObjectURL(selectedFile.objectUrl); };
@@ -524,16 +394,13 @@ export default function Reviewer() {
     if (selectedFile) URL.revokeObjectURL(selectedFile.objectUrl);
     const objectUrl = URL.createObjectURL(file);
     setSelectedFile({ file, objectUrl });
-    setRestoredFullText("");
-    setRestoredPages([]);
-    setRestoredPageCount(0);
-    setRestoredFileName(null);
-    setRestoredFileSize(null);
     setToolState("ready");
     setOutput(null);
     setErrorMessage(null);
     setActiveSnippet(null);
     setRecoveryStats(null);
+    setReconciliationResult(null);
+    setTemplateParseResult(null);
     extractText(file);
   }, [selectedFile, extractText]);
 
@@ -552,11 +419,6 @@ export default function Reviewer() {
     setSelectedFile(null);
     setFileError(null);
     clearText();
-    setRestoredFullText("");
-    setRestoredPages([]);
-    setRestoredPageCount(0);
-    setRestoredFileName(null);
-    setRestoredFileSize(null);
     setToolState("idle");
     setOutput(null);
     setErrorMessage(null);
@@ -564,12 +426,12 @@ export default function Reviewer() {
     setRecoveryStats(null);
     setReconciliationResult(null);
     setTemplateParseResult(null);
-    if (sessionId) clearReviewerState(sessionId);
+    setReviewTier("basic");
   };
 
   const handleReplace = () => fileInputRef.current?.click();
 
-  // ─── Run Reviewer v2 ──────────────────────────────────
+  // ─── Run Reviewer ─────────────────────────────────────
   const handleRun = useCallback(async () => {
     if (!sessionId || !sessionInfo || !extractedFullText) return;
     const requestId = crypto.randomUUID();
@@ -584,13 +446,15 @@ export default function Reviewer() {
     let human_review_fields: any[] = [];
     let localReconciliation: ReconciliationResult | null = null;
     let localTemplateParse: CompletedTemplateParse | null = null;
+    let tier: ReviewTier = "basic";
 
-    // Diagnostics object
+    /**
+     * SECURITY: Diagnostics log counts and statuses only.
+     * No raw text, excerpts, or sensitive content is logged.
+     */
     const diagnostics: Record<string, any> = {
       has_schema: !!schemaFields,
       has_parser_artifact: !!parserArtifact,
-      has_notes_extraction: !!notesExtraction,
-      notes_extraction_count: notesExtraction?.length ?? 0,
       artifact_status: artifactStatus,
       reconciliation_used: false,
       fallback_path: false,
@@ -609,7 +473,9 @@ export default function Reviewer() {
           humanReview: human_review_fields.length,
         });
 
-        // Run completed-template parser + reconciliation
+        tier = "template_only";
+
+        // Run completed-template parser + reconciliation if artifact available
         if (parserArtifact) {
           try {
             localTemplateParse = parseCompletedTemplate(extractedFullText, parserArtifact, schemaFields);
@@ -618,19 +484,20 @@ export default function Reviewer() {
             diagnostics.fields_parsed = localTemplateParse.fields.length;
             diagnostics.sections_parsed = localTemplateParse.sections_parsed.length;
 
-            // Use notes extraction if available, otherwise fall back to field recovery
-            const notesSource = notesExtraction && notesExtraction.length > 0
-              ? notesExtraction
-              : structured_answers;
-
-            diagnostics.reconciliation_notes_source = notesExtraction ? "phase2_extraction" : "field_recovery";
-
+            /**
+             * SECURITY: Reconciliation uses field recovery from the completed
+             * template text as the comparison source. We do NOT load Phase 2
+             * case-note extraction from backend metadata — that would violate
+             * the zero-retention model. The structured_answers here come from
+             * deterministic parsing of the uploaded document, not from notes.
+             */
             localReconciliation = reconcileNotesAndTemplate(
-              notesSource,
+              structured_answers,
               localTemplateParse.fields,
               localTemplateParse.overall_confidence,
             );
             setReconciliationResult(localReconciliation);
+            tier = "full";
             diagnostics.reconciliation_used = true;
             diagnostics.reconciliation_matches = localReconciliation.matches;
             diagnostics.reconciliation_mismatches = localReconciliation.mismatches;
@@ -638,27 +505,22 @@ export default function Reviewer() {
             diagnostics.reconciliation_omissions = localReconciliation.likely_omissions;
             diagnostics.reconciliation_corrections = localReconciliation.likely_corrections;
             diagnostics.reconciliation_reliable = localReconciliation.reliable_for_review;
-
-            if (import.meta.env.DEV) {
-              console.info("[Reviewer] Reconciliation complete:", diagnostics);
-            }
           } catch (err) {
             console.warn("[Reviewer] Template parse/reconciliation failed:", err);
             diagnostics.reconciliation_error = err instanceof Error ? err.message : "unknown";
           }
         } else {
           diagnostics.fallback_path = true;
-          if (import.meta.env.DEV) {
-            console.info("[Reviewer] No parser artifact — using fallback field recovery only");
-          }
         }
       } catch (err) {
         console.warn("[Reviewer] Field recovery failed, proceeding with text-only:", err);
         diagnostics.recovery_error = err instanceof Error ? err.message : "unknown";
         diagnostics.fallback_path = true;
+        tier = "basic";
       }
     }
 
+    setReviewTier(tier);
     setToolState("running");
     logEvent({
       eventType: "tool.run.started", sessionId, requestId,
@@ -670,7 +532,7 @@ export default function Reviewer() {
         review_worthy_count: review_worthy_answers.length,
         unanswered_count: unanswered_fields.length,
         human_review_count: human_review_fields.length,
-        has_schema: !!schemaFields,
+        review_tier: tier,
         ...diagnostics,
       },
     });
@@ -692,16 +554,16 @@ export default function Reviewer() {
           .map(f => f.field_key),
         likely_corrections: localReconciliation.fields
           .filter(f => f.resolution === "likely_correction")
-          .map(f => ({ field_key: f.field_key, notes: f.notes_value, form: f.template_value })),
+          .map(f => ({ field_key: f.field_key, section: f.section })),
         discrepancies: localReconciliation.fields
           .filter(f => f.resolution === "possible_discrepancy")
-          .map(f => ({ field_key: f.field_key, notes: f.notes_value, form: f.template_value, section: f.section })),
+          .map(f => ({ field_key: f.field_key, section: f.section })),
         omissions: localReconciliation.fields
           .filter(f => f.resolution === "likely_omission")
-          .map(f => ({ field_key: f.field_key, notes_value: f.notes_value, section: f.section })),
+          .map(f => ({ field_key: f.field_key, section: f.section })),
       } : undefined;
 
-      // Remove confirmed_match and likely_correction fields from unanswered_fields
+      // Suppress confirmed/corrected fields from unanswered list
       let adjustedUnanswered = unanswered_fields;
       if (localReconciliation?.reliable_for_review) {
         const suppressedKeys = new Set(
@@ -744,7 +606,6 @@ export default function Reviewer() {
           high_severity_count: 0,
         },
       };
-      // Recalculate metrics after filtering
       report.metrics.issue_count = report.issues.length;
       report.metrics.high_severity_count = report.issues.filter(i => i.severity === "high").length;
 
@@ -755,6 +616,7 @@ export default function Reviewer() {
           issue_count: report.metrics.issue_count,
           high_severity_count: report.metrics.high_severity_count,
           overall_risk: report.summary.overall_risk,
+          review_tier: tier,
           reconciliation_filtered: localReconciliation?.reliable_for_review ?? false,
         },
       });
@@ -766,11 +628,9 @@ export default function Reviewer() {
       setErrorMessage(err?.message || "An unexpected error occurred.");
       setToolState("error");
     }
-  }, [sessionId, sessionInfo, extractedFullText, fileSize, pageCount, schemaFields, logEvent, parserArtifact, notesExtraction, artifactStatus]);
+  }, [sessionId, sessionInfo, extractedFullText, fileSize, pageCount, schemaFields, logEvent, parserArtifact, artifactStatus]);
 
-  const handleClear = () => {
-    handleRemoveFile();
-  };
+  const handleClear = () => handleRemoveFile();
 
   const handleHighlight = useCallback((snippet: string) => {
     setActiveSnippet(snippet);
@@ -841,8 +701,6 @@ export default function Reviewer() {
   const extractReady: ReadinessState = extracting ? "attention" : extractedFullText.length > 0 ? "ready" : "missing";
   const schemaReady: ReadinessState = schemaFields ? "ready" : "attention";
   const artifactReady: ReadinessState = artifactStatus === "ready" ? "ready" : artifactStatus === "generating" ? "attention" : "attention";
-  const notesReady: ReadinessState = notesExtraction ? "ready" : "attention";
-  const isRestoredWithoutFile = !selectedFile && restoredFullText.length > 0;
 
   return (
     <div className="h-screen bg-[hsl(var(--canvas))] flex flex-col overflow-hidden">
@@ -860,9 +718,13 @@ export default function Reviewer() {
                 <h1 className="text-base font-semibold text-foreground">Reviewer</h1>
                 <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">Step 3</Badge>
               </div>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {sessionInfo.caseLabel}{sessionInfo.interactionType ? ` · ${sessionInfo.interactionType}` : ""}
-              </p>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <p className="text-xs text-muted-foreground">
+                  {sessionInfo.caseLabel}{sessionInfo.interactionType ? ` · ${sessionInfo.interactionType}` : ""}
+                </p>
+                <Lock className="h-3 w-3 text-muted-foreground/50" />
+                <span className="text-[10px] text-muted-foreground/60">In-memory only</span>
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -924,9 +786,9 @@ export default function Reviewer() {
               </Card>
 
               <Alert className="border-primary/20 bg-primary/5">
-                <Info className="h-4 w-4 text-primary" />
+                <Lock className="h-4 w-4 text-primary" />
                 <AlertDescription className="text-xs text-muted-foreground">
-                  Files are extracted locally in your browser. <strong className="text-foreground">Nothing is uploaded or stored.</strong>
+                  Files are extracted locally in your browser. <strong className="text-foreground">Nothing is uploaded or stored.</strong> All working content is cleared when you leave this page.
                 </AlertDescription>
               </Alert>
             </div>
@@ -968,12 +830,6 @@ export default function Reviewer() {
                 <div className="px-4 py-2.5 border-b border-border bg-card flex items-center justify-between shrink-0">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-medium text-foreground">Extracted Text</span>
-                    {isRestoredWithoutFile && fileName && (
-                      <Badge variant="outline" className="text-[10px]">
-                        <FileText className="h-2.5 w-2.5 mr-1" />{fileName}
-                        {fileSize ? ` · ${formatFileSize(fileSize)}` : ""}
-                      </Badge>
-                    )}
                   </div>
                   <div className="flex items-center gap-1">
                     {activeSnippet && (
@@ -981,21 +837,8 @@ export default function Reviewer() {
                         Clear highlight
                       </Button>
                     )}
-                    {isRestoredWithoutFile && toolState !== "success" && (
-                      <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px] gap-1" onClick={handleReplace}>
-                        <Upload className="h-3 w-3" /> Re-upload PDF
-                      </Button>
-                    )}
                   </div>
                 </div>
-                {isRestoredWithoutFile && (
-                  <div className="px-4 py-2 bg-[hsl(var(--status-info-muted))] border-b border-[hsl(var(--status-info))]/20 shrink-0">
-                    <p className="text-[11px] text-[hsl(var(--status-info-muted-foreground))]">
-                      <Info className="h-3 w-3 inline mr-1 -mt-0.5" />
-                      Extracted text and results restored from your session. PDF preview requires re-upload.
-                    </p>
-                  </div>
-                )}
                 <ScrollArea className="flex-1">
                   <div ref={textPanelRef} className="p-4 space-y-4 text-sm leading-relaxed">
                     {extracting && (
@@ -1028,7 +871,7 @@ export default function Reviewer() {
               {/* Readiness + Action area */}
               <div className="p-4 border-b border-border space-y-3 shrink-0">
                 <div className="space-y-0.5">
-                  <ReadinessRow label="Document uploaded" state={docReady} detail={isRestoredWithoutFile ? "Restored from session (re-upload for preview)" : undefined} />
+                  <ReadinessRow label="Document uploaded" state={docReady} />
                   <ReadinessRow label="Text extracted" state={extractReady} detail={extracting ? "Extracting…" : extractedFullText.length > 0 ? `${extractedFullText.length.toLocaleString()} characters · ${pageCount} pages` : undefined} />
                   <ReadinessRow label="Template schema" state={schemaReady} detail={schemaFields ? `${schemaFields.length} fields` : "No schema — text-only review"} />
                   <ReadinessRow
@@ -1039,11 +882,6 @@ export default function Reviewer() {
                       artifactStatus === "generating" ? "Auto-generating…" :
                       "Not available — basic recovery only"
                     }
-                  />
-                  <ReadinessRow
-                    label="Notes extraction"
-                    state={notesReady}
-                    detail={notesExtraction ? `${notesExtraction.length} fields from Case Notes` : "Not available — reconciliation will be limited"}
                   />
                 </div>
 
@@ -1102,7 +940,7 @@ export default function Reviewer() {
                     <div className="text-center py-10">
                       <Loader2 className="h-8 w-8 mx-auto text-primary animate-spin mb-3" />
                       <p className="text-sm text-muted-foreground">Recovering field structure…</p>
-                      <p className="text-xs text-muted-foreground/70 mt-1">Parsing template + reconciling with notes</p>
+                      <p className="text-xs text-muted-foreground/70 mt-1">Parsing template + reconciling fields</p>
                     </div>
                   )}
 
@@ -1130,34 +968,58 @@ export default function Reviewer() {
                     </div>
                   )}
 
-                  {/* Reconciliation Panel — shown prominently above findings */}
-                  {reconciliationResult && (toolState === "success" || toolState === "running") && (
-                    <div className="pb-2">
-                      <ReconciliationPanel
-                        result={reconciliationResult}
-                        notesSource={notesExtraction ? "case_notes" : "field_recovery"}
-                        artifactStatus={artifactStatus}
-                      />
-                      <Separator className="mt-3" />
-                    </div>
-                  )}
-
-                  {/* Fallback warnings when reconciliation unavailable */}
-                  {toolState === "success" && !reconciliationResult && output && (
-                    <div className="flex items-start gap-2 p-2.5 rounded-lg bg-muted/50 border border-border">
-                      <Info className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
-                      <div>
-                        <p className="text-[11px] text-muted-foreground font-medium">Limited comparison</p>
-                        <p className="text-[10px] text-muted-foreground/70">
-                          {!parserArtifact ? "No parser artifacts available — " : ""}
-                          {!notesExtraction ? "No case notes extraction — " : ""}
-                          Review based on field recovery only.
-                        </p>
+                  {/* Review tier + Reconciliation Panel */}
+                  {toolState === "success" && output && (
+                    <div className="space-y-3">
+                      {/* Tier indicator */}
+                      <div className="flex items-center justify-between">
+                        <ReviewTierBadge tier={reviewTier} />
+                        {reviewTier === "basic" && (
+                          <span className="text-[10px] text-muted-foreground">No schema available</span>
+                        )}
                       </div>
+
+                      {/* Reconciliation panel — full tier only */}
+                      {reconciliationResult && (
+                        <div className="pb-1">
+                          <ReconciliationPanel
+                            result={reconciliationResult}
+                            notesSource="field_recovery"
+                            artifactStatus={artifactStatus}
+                          />
+                          <Separator className="mt-3" />
+                        </div>
+                      )}
+
+                      {/* Template-only tier notice */}
+                      {reviewTier === "template_only" && !reconciliationResult && (
+                        <div className="flex items-start gap-2 p-2.5 rounded-lg bg-muted/50 border border-border">
+                          <Info className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                          <div>
+                            <p className="text-[11px] text-muted-foreground font-medium">Template-only comparison</p>
+                            <p className="text-[10px] text-muted-foreground/70">
+                              Parser artifacts were not available. Review based on field recovery only.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Basic tier notice */}
+                      {reviewTier === "basic" && (
+                        <div className="flex items-start gap-2 p-2.5 rounded-lg bg-muted/50 border border-border">
+                          <Info className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                          <div>
+                            <p className="text-[11px] text-muted-foreground font-medium">Basic review mode</p>
+                            <p className="text-[10px] text-muted-foreground/70">
+                              No template schema available. Findings are based on text-only analysis without structured field comparison.
+                            </p>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
-                  {/* Success */}
+                  {/* Success — Findings */}
                   {toolState === "success" && output && issuesByType && (
                     <div className="space-y-4">
                       {/* Summary header */}
