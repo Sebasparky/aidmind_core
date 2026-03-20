@@ -109,19 +109,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
            * REAUTH SUPPRESSION: If suppressAuthReloadRef is armed AND the
            * incoming user is the same as the current user, this is a vault
            * reauth — skip the loading cycle to prevent page remount.
+           * Uses ref instead of state to avoid stale closure.
            */
-          if (suppressAuthReloadRef.current && user?.id === session.user.id) {
+          if (suppressAuthReloadRef.current && currentUserIdRef.current === session.user.id) {
             suppressAuthReloadRef.current = false;
             if (import.meta.env.DEV) {
               console.info("[AuthContext] Suppressed auth reload for same-user reauth");
             }
             // Update the user object (token may have refreshed) but do NOT set loading
             setUser(session.user);
+            currentUserIdRef.current = session.user.id;
             return;
           }
           suppressAuthReloadRef.current = false;
 
           setUser(session.user);
+          currentUserIdRef.current = session.user.id;
           // Immediately gate routing while profile resolves
           setLoading(true);
           // Defer profile fetch to avoid Supabase client deadlock
@@ -129,6 +132,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         } else {
           suppressAuthReloadRef.current = false;
           setUser(null);
+          currentUserIdRef.current = null;
           setProfile(null);
           setLoading(false);
         }
@@ -139,6 +143,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         setUser(session.user);
+        currentUserIdRef.current = session.user.id;
         fetchProfile().finally(() => setLoading(false));
       } else {
         setLoading(false);
