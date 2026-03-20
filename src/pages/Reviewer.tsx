@@ -681,6 +681,21 @@ export default function Reviewer() {
         human_review_fields,
         reconciliation_context: reconciliationContext,
       };
+      setReconContextSent(!!reconciliationContext);
+
+      // DIAGNOSTIC: Log payload shape (no sensitive content)
+      if (import.meta.env.DEV) {
+        console.info("[Reviewer][Diag] Payload shape:", {
+          has_document_text: !!payload.document_text,
+          text_length: payload.document_text.length,
+          structured_answers_count: payload.structured_answers.length,
+          review_worthy_count: payload.review_worthy_answers.length,
+          unanswered_count: payload.unanswered_fields.length,
+          has_reconciliation_context: !!reconciliationContext,
+          reconciliation_keys: reconciliationContext ? Object.keys(reconciliationContext) : [],
+        });
+      }
+      };
       const { data, error } = await supabase.functions.invoke("run-reviewer", { body: payload });
       if (error) throw new Error(error.message || "Edge function invocation failed");
       if (data?.error) {
