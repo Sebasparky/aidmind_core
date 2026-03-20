@@ -172,7 +172,9 @@ export function ReconciliationPanel({ result, notesSource }: ReconciliationPanel
       {/* Source indicator */}
       {notesSource && (
         <p className="text-[10px] text-muted-foreground/60">
-          Comparison source: {notesSource === "field_recovery" ? "Field recovery from document" : "Case notes extraction"}
+          Comparison source: {notesSource === "case_notes"
+            ? "Encrypted case notes (vault-unlocked)"
+            : "Document-derived field recovery (template-only)"}
         </p>
       )}
 
