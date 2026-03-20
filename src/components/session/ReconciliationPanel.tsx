@@ -262,10 +262,10 @@ function FieldRow({ field, resolution }: { field: FieldReconciliation; resolutio
       {expanded && hasDetail && (
         <div className="mt-2 pt-2 border-t border-border/30 space-y-1.5">
           {field.notes_value && (
-            <ValueRow label="Recovery" value={field.notes_value} confidence={field.notes_confidence} />
+            <ValueRow label="Case Notes" value={field.notes_value} confidence={field.notes_confidence} />
           )}
           {field.template_value && (
-            <ValueRow label="Template" value={field.template_value} confidence={field.template_confidence} />
+            <ValueRow label="Completed Form" value={field.template_value} confidence={field.template_confidence} />
           )}
           {field.template_source_excerpt && (
             <div className="text-[10px] text-muted-foreground/60 italic border-l-2 border-border/30 pl-2 mt-1">
