@@ -6,6 +6,13 @@
  * - Auto-relocks after UNLOCK_WINDOW_MS or IDLE_RELOCK_MS
  * - Clearing state scrubs references (best-effort in JS)
  * - Never persists plaintext to storage or backend
+ *
+ * ARCHITECTURE:
+ * - Seal uses a user-chosen vault password (separate from account password)
+ * - Unlock is a two-step process:
+ *   1. Reauth: verify account identity via Supabase signInWithPassword
+ *   2. Decrypt: use the vault password to AES-256-GCM decrypt the payload
+ * - The server never holds either password or the derived key
  */
 
 import { useState, useCallback, useRef, useEffect } from "react";
@@ -29,9 +36,11 @@ interface UseCaseNotesVaultReturn {
   /** Time remaining on unlock window (ms) */
   unlockTimeRemaining: number | null;
   /** Seal case notes into encrypted storage */
-  seal: (packet: CaseNotesComparisonPacket, password: string) => Promise<boolean>;
-  /** Begin unlock flow — requires password for reauth */
-  unlock: (password: string) => Promise<{ success: boolean; error?: string }>;
+  seal: (packet: CaseNotesComparisonPacket, vaultPassword: string) => Promise<boolean>;
+  /** Step 1 of unlock: verify account identity */
+  reauthenticate: (accountPassword: string) => Promise<{ success: boolean; error?: string }>;
+  /** Step 2 of unlock: decrypt with vault password */
+  decrypt: (vaultPassword: string) => Promise<{ success: boolean; error?: string }>;
   /** Explicitly relock (clears plaintext) */
   relock: () => void;
   /** Check if a sealed artifact exists for this session */
@@ -49,6 +58,9 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
   const [unlockTimeRemaining, setUnlockTimeRemaining] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Track whether reauth has been completed (for two-step unlock)
+  const reauthCompleteRef = useRef(false);
 
   // Timers for auto-relock
   const unlockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -68,6 +80,7 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
   // ── Relock — scrub plaintext from state ─────────────────
   const relock = useCallback(() => {
     setUnlockedPacket(null);
+    reauthCompleteRef.current = false;
     setVaultState((prev) => (prev === "unlocked" || prev === "relock_pending") ? "sealed" : prev);
     setError(null);
     clearTimers();
@@ -105,6 +118,7 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
       clearTimers();
       // SECURITY: Ensure plaintext is not retained after unmount
       setUnlockedPacket(null);
+      reauthCompleteRef.current = false;
     };
   }, [clearTimers]);
 
@@ -140,7 +154,7 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
   // ── Seal — encrypt and store ────────────────────────────
   const seal = useCallback(async (
     packet: CaseNotesComparisonPacket,
-    password: string,
+    vaultPassword: string,
   ): Promise<boolean> => {
     if (!sessionId) return false;
     setLoading(true);
@@ -148,7 +162,7 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
 
     try {
       const plaintext = JSON.stringify(packet);
-      const sealed = await sealPayload(plaintext, password);
+      const sealed = await sealPayload(plaintext, vaultPassword);
 
       const metadata: VaultMetadata = {
         sealed_at: sealed.sealed_at,
@@ -194,33 +208,63 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
     }
   }, [sessionId]);
 
-  // ── Unlock — reauth + decrypt ───────────────────────────
-  const unlock = useCallback(async (
-    password: string,
+  // ── Step 1: Reauthenticate — verify account identity ────
+  const reauthenticate = useCallback(async (
+    accountPassword: string,
   ): Promise<{ success: boolean; error?: string }> => {
     if (!sessionId) return { success: false, error: "No session" };
     setLoading(true);
     setError(null);
-    setVaultState("unlocking");
 
     try {
-      // Step 1: Reauthorize by verifying password with Supabase Auth
       const { data: { user } } = await supabase.auth.getUser();
       if (!user?.email) {
-        throw new Error("AUTH_REQUIRED");
+        return { success: false, error: "Not authenticated. Please log in again." };
       }
 
+      /**
+       * REAUTH METHOD: Supabase signInWithPassword
+       *
+       * This is compatible with the current email/password auth model.
+       * If the project migrates to OAuth or magic-link-only auth,
+       * this step would need to use a different verification method
+       * (e.g., supabase.auth.reauthenticate() or a server-side
+       * verification endpoint).
+       */
       const { error: authError } = await supabase.auth.signInWithPassword({
         email: user.email,
-        password,
+        password: accountPassword,
       });
 
       if (authError) {
-        setVaultState("sealed");
-        return { success: false, error: "Incorrect password. Please try again." };
+        return { success: false, error: "Incorrect account password." };
       }
 
-      // Step 2: Fetch sealed artifact
+      reauthCompleteRef.current = true;
+      setVaultState("unlocking");
+      return { success: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Reauth failed";
+      return { success: false, error: msg };
+    } finally {
+      setLoading(false);
+    }
+  }, [sessionId]);
+
+  // ── Step 2: Decrypt — use vault password to unseal ──────
+  const decrypt = useCallback(async (
+    vaultPassword: string,
+  ): Promise<{ success: boolean; error?: string }> => {
+    if (!sessionId) return { success: false, error: "No session" };
+    if (!reauthCompleteRef.current) {
+      return { success: false, error: "Identity verification required first." };
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Fetch sealed artifact
       const { data } = await supabase
         .from("ephemeral_artifacts")
         .select("content")
@@ -230,36 +274,41 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
 
       if (!data?.content) {
         setVaultState("empty");
+        reauthCompleteRef.current = false;
         return { success: false, error: "No sealed case notes found for this session." };
       }
 
-      // Step 3: Decrypt
+      // Decrypt with vault password
       const artifact: VaultArtifact = JSON.parse(data.content);
-      const plaintext = await unsealPayload(artifact.sealed_payload, password);
+      let plaintext: string;
+      try {
+        plaintext = await unsealPayload(artifact.sealed_payload, vaultPassword);
+      } catch {
+        // Wrong vault password — reauth remains valid, user can retry
+        return { success: false, error: "Incorrect vault password — unable to decrypt." };
+      }
+
       const packet: CaseNotesComparisonPacket = JSON.parse(plaintext);
 
-      // Step 4: Verify session integrity
+      // Verify session integrity
       if (packet.session_id !== sessionId && packet.session_id !== "") {
-        // Allow empty for backwards compat, but flag mismatch
-        console.warn("[Vault] Session ID mismatch in sealed payload");
+        console.warn("[Vault] Session ID mismatch in sealed payload — possible cross-session artifact");
       }
 
       setUnlockedPacket(packet);
       setVaultMetadata(artifact.metadata);
       setVaultState("unlocked");
+      reauthCompleteRef.current = false; // Consume the reauth
 
-      // Step 5: Start auto-relock timers
+      // Start auto-relock timers
       startAutoRelock();
 
       return { success: true };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unlock failed";
-      if (msg === "DECRYPTION_FAILED") {
-        setVaultState("sealed");
-        return { success: false, error: "Incorrect password — unable to decrypt." };
-      }
+      const msg = err instanceof Error ? err.message : "Decrypt failed";
       setError(msg);
-      setVaultState("error");
+      setVaultState("sealed");
+      reauthCompleteRef.current = false;
       return { success: false, error: msg };
     } finally {
       setLoading(false);
@@ -272,7 +321,8 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
     unlockedPacket,
     unlockTimeRemaining,
     seal,
-    unlock,
+    reauthenticate,
+    decrypt,
     relock,
     checkVaultExists,
     loading,
