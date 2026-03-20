@@ -139,7 +139,7 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
       const remaining = (unlockExpiresRef.current ?? 0) - Date.now();
       if (remaining <= 0) {
         setUnlockTimeRemaining(0);
-        relock();
+        relock("hard_timeout");
       } else {
         setUnlockTimeRemaining(remaining);
       }
