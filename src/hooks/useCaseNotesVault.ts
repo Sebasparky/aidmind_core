@@ -268,12 +268,15 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
       /**
        * REAUTH METHOD: Supabase signInWithPassword
        *
-       * This is compatible with the current email/password auth model.
-       * If the project migrates to OAuth or magic-link-only auth,
-       * this step would need to use a different verification method
-       * (e.g., supabase.auth.reauthenticate() or a server-side
-       * verification endpoint).
+       * CRITICAL: We must suppress the auth reload BEFORE calling signInWithPassword.
+       * Without this, onAuthStateChange fires → loading=true → RouteGuard unmounts
+       * the entire page → Reviewer loses all volatile state.
+       *
+       * suppressNextAuthReload() tells AuthContext to skip the loading cycle for the
+       * next auth event if it's the same user — which is exactly what reauth is.
        */
+      suppressNextAuthReload();
+
       const { error: authError } = await supabase.auth.signInWithPassword({
         email: user.email,
         password: accountPassword,
@@ -285,6 +288,9 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
 
       reauthCompleteRef.current = true;
       setVaultState("unlocking");
+      if (import.meta.env.DEV) {
+        console.info("[Vault] Reauth succeeded, modal should advance to step 2");
+      }
       return { success: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Reauth failed";
@@ -292,7 +298,7 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, suppressNextAuthReload]);
 
   // ── Step 2: Decrypt — use vault password to unseal ──────
   const decrypt = useCallback(async (
