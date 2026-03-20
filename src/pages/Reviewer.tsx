@@ -211,6 +211,14 @@ function applyReconciliationToIssues(
 }
 
 // ─── Auto-ensure parser artifact ─────────────────────────
+
+/** Validates that a parser artifact has meaningful content */
+function isParserArtifactValid(artifact: TemplateParserArtifact | null): boolean {
+  if (!artifact) return false;
+  if (!artifact.sections || !Array.isArray(artifact.sections) || artifact.sections.length === 0) return false;
+  return true;
+}
+
 async function ensureParserArtifact(
   templateId: string,
   tenantId: string,
@@ -223,7 +231,14 @@ async function ensureParserArtifact(
     .maybeSingle();
 
   if (existing?.artifact_json) {
-    return existing.artifact_json as unknown as TemplateParserArtifact;
+    const artifact = existing.artifact_json as unknown as TemplateParserArtifact;
+    if (isParserArtifactValid(artifact)) {
+      return artifact;
+    }
+    if (import.meta.env.DEV) {
+      console.warn("[Reviewer] Existing parser artifact is invalid (0 sections), will attempt regeneration");
+    }
+    // Fall through to regeneration
   }
 
   try {
@@ -239,7 +254,13 @@ async function ensureParserArtifact(
         .eq("is_active", true)
         .maybeSingle();
       if (fresh?.artifact_json) {
-        return fresh.artifact_json as unknown as TemplateParserArtifact;
+        const artifact = fresh.artifact_json as unknown as TemplateParserArtifact;
+        if (isParserArtifactValid(artifact)) {
+          return artifact;
+        }
+        if (import.meta.env.DEV) {
+          console.warn("[Reviewer] Regenerated parser artifact is still invalid (0 sections)");
+        }
       }
     }
   } catch (err) {
