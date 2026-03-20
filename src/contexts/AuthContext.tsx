@@ -65,6 +65,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    * Auto-resets after consumption.
    */
   const suppressAuthReloadRef = useRef(false);
+  const currentUserIdRef = useRef<string | null>(null);
 
   const suppressNextAuthReload = useCallback(() => {
     suppressAuthReloadRef.current = true;
