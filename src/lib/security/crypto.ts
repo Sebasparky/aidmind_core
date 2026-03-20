@@ -128,9 +128,9 @@ export async function unsealPayload(
 
   try {
     const decrypted = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv },
+      { name: "AES-GCM", iv: iv.buffer as ArrayBuffer },
       key,
-      ciphertext,
+      ciphertext.buffer as ArrayBuffer,
     );
     return new TextDecoder().decode(decrypted);
   } catch {
