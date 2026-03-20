@@ -90,7 +90,11 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
   }, []);
 
   // ── Relock — scrub plaintext from state ─────────────────
-  const relock = useCallback(() => {
+  const relock = useCallback((reason: RelockReason = "manual") => {
+    if (import.meta.env.DEV) {
+      console.info(`[Vault] Relock triggered: reason=${reason}`);
+    }
+    setLastRelockReason(reason);
     setUnlockedPacket(null);
     reauthCompleteRef.current = false;
     setVaultState((prev) => (prev === "unlocked" || prev === "relock_pending") ? "sealed" : prev);
