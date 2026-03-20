@@ -101,8 +101,8 @@ export async function sealPayload(
 
   return {
     ciphertext: toBase64(ciphertext),
-    salt: toBase64(salt),
-    iv: toBase64(iv),
+    salt: toBase64(salt.buffer as ArrayBuffer),
+    iv: toBase64(iv.buffer as ArrayBuffer),
     sealed_at: new Date().toISOString(),
     version: 1,
   };
