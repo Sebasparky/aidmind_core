@@ -434,6 +434,23 @@ export default function Reviewer() {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Reset vault idle timer on meaningful user activity ──
+  useEffect(() => {
+    if (vault.vaultState !== "unlocked") return;
+
+    const resetIdle = () => vault.resetIdleTimer();
+    // Track clicks, keypresses, and scrolls as "meaningful activity"
+    window.addEventListener("click", resetIdle);
+    window.addEventListener("keydown", resetIdle);
+    window.addEventListener("scroll", resetIdle, true);
+
+    return () => {
+      window.removeEventListener("click", resetIdle);
+      window.removeEventListener("keydown", resetIdle);
+      window.removeEventListener("scroll", resetIdle, true);
+    };
+  }, [vault.vaultState, vault.resetIdleTimer]);
+
   const canRun = hasDocument && !fileError && !extracting && extractedFullText.length > 0 && toolState !== "running" && toolState !== "recovering";
 
   // ─── File handling ─────────────────────────────────────
