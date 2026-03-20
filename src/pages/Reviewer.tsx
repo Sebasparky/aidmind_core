@@ -1406,6 +1406,8 @@ export default function Reviewer() {
           </div>
         )}
       </div>
+      {/* Dev-only verification panel */}
+      {import.meta.env.DEV && <ReviewerVerificationPanel diagnostics={devDiagnostics} />}
     </div>
   );
 }
