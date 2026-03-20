@@ -8,7 +8,7 @@
  * - Loading state gating (nothing renders before profile resolves)
  */
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -42,6 +42,12 @@ interface AuthContextType {
   setDevRoleOverride: (role: AppRole | null) => void;
   /** Re-fetch profile from backend */
   refreshProfile: () => Promise<void>;
+  /**
+   * Suppress the next auth state change from triggering a loading/remount cycle.
+   * Used by vault reauth to prevent signInWithPassword() from destroying page state.
+   * Call before the reauth signIn, and it auto-resets after the next auth event.
+   */
+  suppressNextAuthReload: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -51,6 +57,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [devRoleOverride, setDevRoleOverride] = useState<AppRole | null>(null);
+
+  /**
+   * When true, the next onAuthStateChange event for the SAME user
+   * will not set loading=true or re-fetch profile. This prevents
+   * signInWithPassword() reauth from causing a full app remount.
+   * Auto-resets after consumption.
+   */
+  const suppressAuthReloadRef = useRef(false);
+  const currentUserIdRef = useRef<string | null>(null);
+
+  const suppressNextAuthReload = useCallback(() => {
+    suppressAuthReloadRef.current = true;
+    if (import.meta.env.DEV) {
+      console.info("[AuthContext] Auth reload suppression armed for next auth event");
+    }
+  }, []);
 
   const fetchProfile = useCallback(async () => {
     try {
@@ -83,13 +105,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (session?.user) {
+          /**
+           * REAUTH SUPPRESSION: If suppressAuthReloadRef is armed AND the
+           * incoming user is the same as the current user, this is a vault
+           * reauth — skip the loading cycle to prevent page remount.
+           * Uses ref instead of state to avoid stale closure.
+           */
+          if (suppressAuthReloadRef.current && currentUserIdRef.current === session.user.id) {
+            suppressAuthReloadRef.current = false;
+            if (import.meta.env.DEV) {
+              console.info("[AuthContext] Suppressed auth reload for same-user reauth");
+            }
+            // Update the user object (token may have refreshed) but do NOT set loading
+            setUser(session.user);
+            currentUserIdRef.current = session.user.id;
+            return;
+          }
+          suppressAuthReloadRef.current = false;
+
           setUser(session.user);
+          currentUserIdRef.current = session.user.id;
           // Immediately gate routing while profile resolves
           setLoading(true);
           // Defer profile fetch to avoid Supabase client deadlock
           setTimeout(() => fetchProfile().finally(() => setLoading(false)), 0);
         } else {
+          suppressAuthReloadRef.current = false;
           setUser(null);
+          currentUserIdRef.current = null;
           setProfile(null);
           setLoading(false);
         }
@@ -100,6 +143,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         setUser(session.user);
+        currentUserIdRef.current = session.user.id;
         fetchProfile().finally(() => setLoading(false));
       } else {
         setLoading(false);
@@ -133,6 +177,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         devRoleOverride,
         setDevRoleOverride,
         refreshProfile: fetchProfile,
+        suppressNextAuthReload,
       }}
     >
       {children}
