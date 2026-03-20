@@ -935,10 +935,29 @@ export default function Reviewer() {
                 Schema · {schemaFields.length} fields
               </Badge>
             )}
-            {parserArtifact && (
+            {artifactStatus === "ready" && parserArtifact ? (
               <Badge variant="outline" className="text-[10px] text-primary border-primary/30">
                 Parser · {parserArtifact.sections?.length ?? 0} sections
               </Badge>
+            ) : artifactStatus === "generating" ? (
+              <Badge variant="outline" className="text-[10px] text-muted-foreground border-muted-foreground/30">
+                <Loader2 className="h-3 w-3 animate-spin mr-1" /> Parser generating…
+              </Badge>
+            ) : artifactStatus === "missing" ? (
+              <Badge variant="outline" className="text-[10px] text-[hsl(var(--status-warning))] border-[hsl(var(--status-warning))]/30">
+                <AlertTriangle className="h-3 w-3 mr-1" /> Parser unavailable
+              </Badge>
+            ) : null}
+            {vault.vaultState === "unlocked" && (
+              <Badge variant="outline" className="text-[10px] text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30">
+                <ShieldCheck className="h-3 w-3 mr-1" /> Case notes unlocked
+                {vault.unlockTimeRemaining != null && (
+                  <span className="ml-1">· {Math.ceil(vault.unlockTimeRemaining / 1000)}s</span>
+                )}
+              </Badge>
+            )}
+            {reviewTier !== "basic" && toolState === "success" && (
+              <ReviewTierBadge tier={reviewTier} />
             )}
           </div>
         </div>
