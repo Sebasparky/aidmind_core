@@ -58,6 +58,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [devRoleOverride, setDevRoleOverride] = useState<AppRole | null>(null);
 
+  /**
+   * When true, the next onAuthStateChange event for the SAME user
+   * will not set loading=true or re-fetch profile. This prevents
+   * signInWithPassword() reauth from causing a full app remount.
+   * Auto-resets after consumption.
+   */
+  const suppressAuthReloadRef = useRef(false);
+
+  const suppressNextAuthReload = useCallback(() => {
+    suppressAuthReloadRef.current = true;
+    if (import.meta.env.DEV) {
+      console.info("[AuthContext] Auth reload suppression armed for next auth event");
+    }
+  }, []);
+
   const fetchProfile = useCallback(async () => {
     try {
       const { data, error } = await supabase.rpc("get_my_profile");
