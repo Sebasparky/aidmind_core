@@ -426,11 +426,15 @@ export default function Reviewer() {
         if (data.template_id && data.tenant_id) {
           setArtifactStatus("generating");
           const artifact = await ensureParserArtifact(data.template_id, data.tenant_id);
-          if (artifact) {
+          if (artifact && isParserArtifactValid(artifact)) {
             setParserArtifact(artifact);
             setArtifactStatus("ready");
           } else {
+            setParserArtifact(null);
             setArtifactStatus("missing");
+            if (import.meta.env.DEV) {
+              console.warn("[Reviewer] Parser artifact missing or invalid after ensure attempt");
+            }
           }
         } else {
           setArtifactStatus("missing");
