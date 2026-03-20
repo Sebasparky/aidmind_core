@@ -130,8 +130,9 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
 
     // Idle timer — relocks after IDLE_RELOCK_MS of no activity
     idleTimerRef.current = setTimeout(() => {
-      relock();
+      relock("idle_timeout");
     }, IDLE_RELOCK_MS);
+    setIdleTimerActive(true);
 
     // Countdown display
     countdownRef.current = setInterval(() => {
