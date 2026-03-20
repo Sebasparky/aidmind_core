@@ -18,6 +18,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
 import { sealPayload, unsealPayload } from "@/lib/security/crypto";
 import type {
   VaultState,
