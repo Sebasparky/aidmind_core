@@ -804,6 +804,42 @@ export default function Reviewer() {
     }, {} as Record<ReviewIssueType, ReviewIssue[]>);
   }, [output]);
 
+  // ─── Dev diagnostics (counts/flags only, no sensitive data) ─
+  const devDiagnostics: ReviewerDiagnostics = useMemo(() => ({
+    reviewTier,
+    notesSource: (notesSource === "case_notes" ? "vault_case_notes" : notesSource === "field_recovery" ? "field_recovery" : "none") as NotesSourceType,
+    toolState,
+    hasSchema: !!schemaFields,
+    schemaFieldCount: schemaFields?.length ?? 0,
+    hasParserArtifact: !!parserArtifact,
+    artifactStatus,
+    parserSectionCount: parserArtifact?.sections?.length ?? 0,
+    vaultState: vault.vaultState,
+    hasUnlockedPacket: !!vault.unlockedPacket,
+    unlockTimeRemainingMs: vault.unlockTimeRemaining,
+    lastRelockReason: vault.lastRelockReason,
+    idleTimerActive: vault.idleTimerActive,
+    reconciliationRan: !!reconciliationResult,
+    reconciliationReliable: reconciliationResult?.reliable_for_review ?? false,
+    reconciliationCounts: reconciliationResult ? {
+      matches: reconciliationResult.matches,
+      corrections: reconciliationResult.likely_corrections,
+      discrepancies: reconciliationResult.possible_discrepancies,
+      omissions: reconciliationResult.likely_omissions,
+      unresolved: reconciliationResult.unresolved,
+    } : null,
+    reconciliationContextSent: reconContextSent,
+    templateParseConfidence: reconciliationResult?.template_parse_confidence ?? null,
+    recoveryFieldsTotal: recoveryStats ? (recoveryStats.answered + recoveryStats.missing + recoveryStats.humanReview) : 0,
+    recoveryAnswered: recoveryStats?.answered ?? 0,
+    recoveryMissing: recoveryStats?.missing ?? 0,
+    recoveryHumanReview: recoveryStats?.humanReview ?? 0,
+    issuesBeforeFilter: postProcessStats.before,
+    issuesAfterFilter: postProcessStats.after,
+    completenessSuppressions: postProcessStats.suppressed,
+    discrepancyReclassifications: postProcessStats.reclassified,
+  }), [reviewTier, notesSource, toolState, schemaFields, parserArtifact, artifactStatus, vault.vaultState, vault.unlockedPacket, vault.unlockTimeRemaining, vault.lastRelockReason, vault.idleTimerActive, reconciliationResult, reconContextSent, recoveryStats, postProcessStats]);
+
   // ─── Page-level loading/error ──────────────────────────
   if (pageLoading) {
     return (
