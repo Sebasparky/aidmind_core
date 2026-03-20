@@ -86,6 +86,7 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
     if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null; }
     unlockExpiresRef.current = null;
     setUnlockTimeRemaining(null);
+    setIdleTimerActive(false);
   }, []);
 
   // ── Relock — scrub plaintext from state ─────────────────
