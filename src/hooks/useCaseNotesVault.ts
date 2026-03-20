@@ -110,8 +110,9 @@ export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVa
     // Only set idle timer if we're currently unlocked
     if (unlockExpiresRef.current !== null) {
       idleTimerRef.current = setTimeout(() => {
-        relock();
+        relock("idle_timeout");
       }, IDLE_RELOCK_MS);
+      setIdleTimerActive(true);
     }
   }, [relock]);
 
