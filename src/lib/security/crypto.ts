@@ -94,9 +94,9 @@ export async function sealPayload(
   const key = await deriveKey(password, salt);
 
   const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
+    { name: "AES-GCM", iv: iv.buffer as ArrayBuffer },
     key,
-    encoder.encode(plaintext),
+    encoder.encode(plaintext) as BufferSource,
   );
 
   return {
