@@ -885,6 +885,20 @@ export default function Reviewer() {
 
             {/* ─── Right rail: Action + Results ──────────── */}
             <div className="lg:w-[340px] xl:w-[380px] shrink-0 border-l border-border bg-card flex flex-col overflow-hidden">
+              {/* Vault status */}
+              {(vault.vaultState === "sealed" || vault.vaultState === "unlocked") && (
+                <div className="p-4 border-b border-border shrink-0">
+                  <VaultStatusIndicator
+                    vaultState={vault.vaultState}
+                    metadata={vault.vaultMetadata}
+                    unlockTimeRemaining={vault.unlockTimeRemaining}
+                    onUnlockClick={() => setShowReauthModal(true)}
+                    onRelockClick={vault.relock}
+                    compact
+                  />
+                </div>
+              )}
+
               {/* Readiness + Action area */}
               <div className="p-4 border-b border-border space-y-3 shrink-0">
                 <div className="space-y-0.5">
