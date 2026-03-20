@@ -27,6 +27,8 @@ import type {
 } from "@/lib/security/vault-types";
 import { UNLOCK_WINDOW_MS, IDLE_RELOCK_MS } from "@/lib/security/vault-types";
 
+export type RelockReason = "idle_timeout" | "hard_timeout" | "manual" | "unmount" | null;
+
 interface UseCaseNotesVaultReturn {
   /** Current vault state */
   vaultState: VaultState;
@@ -43,7 +45,7 @@ interface UseCaseNotesVaultReturn {
   /** Step 2 of unlock: decrypt with vault password */
   decrypt: (vaultPassword: string) => Promise<{ success: boolean; error?: string }>;
   /** Explicitly relock (clears plaintext) */
-  relock: () => void;
+  relock: (reason?: RelockReason) => void;
   /** Reset idle timer — call on meaningful user activity while unlocked */
   resetIdleTimer: () => void;
   /** Check if a sealed artifact exists for this session */
@@ -52,6 +54,10 @@ interface UseCaseNotesVaultReturn {
   loading: boolean;
   /** Last error message */
   error: string | null;
+  /** Why the vault was last relocked (diagnostic) */
+  lastRelockReason: RelockReason;
+  /** Whether idle timer is currently active (diagnostic) */
+  idleTimerActive: boolean;
 }
 
 export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVaultReturn {
