@@ -330,6 +330,10 @@ export default function Reviewer() {
   const [reviewTier, setReviewTier] = useState<ReviewTier>("basic");
   /** Tracks which notes source was used for reconciliation */
   const [notesSource, setNotesSource] = useState<"case_notes" | "field_recovery" | null>(null);
+  /** Post-processing tracking (dev diagnostics) */
+  const [postProcessStats, setPostProcessStats] = useState<{ before: number; after: number; suppressed: number; reclassified: number }>({ before: 0, after: 0, suppressed: 0, reclassified: 0 });
+  /** Whether reconciliation_context was sent in last run */
+  const [reconContextSent, setReconContextSent] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textPanelRef = useRef<HTMLDivElement>(null);
