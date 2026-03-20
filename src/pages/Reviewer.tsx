@@ -790,7 +790,7 @@ export default function Reviewer() {
 
   const handleBack = () => {
     // SECURITY: Relock vault when leaving Reviewer
-    vault.relock();
+    vault.relock("manual");
     navigate("/dashboard");
   };
 
