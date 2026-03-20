@@ -260,8 +260,8 @@ function SecuredState({
           </h2>
           <p className="text-sm text-muted-foreground max-w-md">
             {hasVault
-              ? "Extraction results are encrypted and available for secure unlock in the Reviewer step."
-              : "Sensitive case-note content is not retained for casual reopening. This step was completed and the working content has been cleared from this workspace."
+              ? "Extraction results are encrypted and stored securely. They can only be accessed through a protected unlock flow in the Reviewer step — plain text is never retained."
+              : "Sensitive case-note content has been cleared from the workspace. No plain text is retained. To compare notes against a completed form, re-enter notes and use the secure seal option."
             }
           </p>
         </div>
