@@ -385,6 +385,13 @@ export default function Reviewer() {
     fetchSession();
   }, [sessionId]);
 
+  // Check if vault (encrypted case notes) exists
+  useEffect(() => {
+    if (!pageLoading && sessionInfo) {
+      vault.checkVaultExists();
+    }
+  }, [pageLoading, sessionInfo]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     return () => { if (selectedFile) URL.revokeObjectURL(selectedFile.objectUrl); };
   }, [selectedFile]);
