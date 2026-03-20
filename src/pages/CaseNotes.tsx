@@ -235,10 +235,16 @@ const NOTE_HINTS = [
 function SecuredState({
   caseLabel,
   onBack,
+  vaultState,
+  vaultMetadata,
 }: {
   caseLabel: string | null;
   onBack: () => void;
+  vaultState?: string;
+  vaultMetadata?: { field_count: number; answered_count: number; sealed_at: string } | null;
 }) {
+  const hasVault = vaultState === "sealed";
+
   return (
     <div className="max-w-2xl mx-auto py-16 px-4">
       <div className="flex flex-col items-center text-center space-y-6">
@@ -253,29 +259,39 @@ function SecuredState({
             Case notes secured
           </h2>
           <p className="text-sm text-muted-foreground max-w-md">
-            Sensitive case-note content is not retained for casual reopening.
-            This step was completed and the working content has been cleared
-            from this workspace.
+            {hasVault
+              ? "Extraction results are encrypted and available for secure unlock in the Reviewer step."
+              : "Sensitive case-note content is not retained for casual reopening. This step was completed and the working content has been cleared from this workspace."
+            }
           </p>
         </div>
+
+        {/* Vault status */}
+        {hasVault && vaultMetadata && (
+          <Card className="border border-border shadow-none w-full max-w-md">
+            <CardContent className="px-5 py-4 space-y-3">
+              <div className="flex items-start gap-2.5">
+                <ShieldCheck className="h-4 w-4 text-[hsl(var(--status-success))] mt-0.5 shrink-0" />
+                <div className="text-left space-y-1.5">
+                  <p className="text-xs font-medium text-foreground">
+                    Encrypted vault available
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {vaultMetadata.answered_count} of {vaultMetadata.field_count} fields sealed.
+                    Use your vault password in the Reviewer to unlock comparison data.
+                  </p>
+                  <p className="text-[10px] text-muted-foreground/60">
+                    Sealed {new Date(vaultMetadata.sealed_at).toLocaleString()}
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Explanation card */}
         <Card className="border border-border shadow-none w-full max-w-md">
           <CardContent className="px-5 py-4 space-y-3">
-            <div className="flex items-start gap-2.5">
-              <ShieldCheck className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-              <div className="text-left space-y-1.5">
-                <p className="text-xs font-medium text-foreground">
-                  Why is my previous work not visible?
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  AidMind does not store interview notes or extracted answers
-                  in plaintext after you finish working. This protects client
-                  information and aligns with privacy-first data handling.
-                </p>
-              </div>
-            </div>
-            <Separator />
             <div className="flex items-start gap-2.5">
               <Info className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
               <div className="text-left space-y-1.5">
@@ -284,8 +300,8 @@ function SecuredState({
                 </p>
                 <ul className="text-xs text-muted-foreground space-y-1 list-disc pl-4">
                   <li>Return to the session dashboard to continue your workflow</li>
+                  {hasVault && <li>In the Reviewer step, click "Unlock case notes for comparison" to decrypt</li>}
                   <li>Start a new extraction by re-entering notes in this workspace</li>
-                  <li>Proceed to the Reviewer step if extraction is already complete</li>
                 </ul>
               </div>
             </div>
