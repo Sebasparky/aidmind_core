@@ -17,8 +17,9 @@ import {
   X,
   Circle,
   Info,
-  
   Trash2,
+  Lock,
+  ShieldAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -58,6 +59,12 @@ type GenerationStatus = "idle" | "generating" | "success" | "error";
 type ExtractionStatus = "idle" | "reading" | "extracting" | "extracted" | "extraction_error";
 type InputMode = "paste" | "upload";
 
+/**
+ * SECURITY: Phase 2 workspace is entirely in-memory.
+ * No sessionStorage, localStorage, or backend persistence of raw notes
+ * or extracted answers. Content exists only while this component is mounted.
+ */
+
 interface FieldAnswer {
   field_key: string;
   label: string;
@@ -93,6 +100,7 @@ interface SessionContext {
   templateId: string | null;
   templateName: string | null;
   tenantId: string | null;
+  caseNotesCompleted: boolean;
 }
 
 const INITIAL_FORM: CaseNotesFormState = {
@@ -108,136 +116,6 @@ const ACCEPTED_MIMES = [
   "application/pdf",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ];
-
-// ─── Session-scoped persistence helpers ──────────────────
-const CASE_NOTES_PERSIST_DEBUG = import.meta.env.DEV;
-
-function storageKey(sessionId: string) {
-  return `aidmind:case-notes:${sessionId}`;
-}
-
-interface PersistedState {
-  rawNotes: string;
-  permissionConfirmed: boolean;
-  inputMode: InputMode;
-  uploadedFile: UploadedFile | null;
-  result: Phase2Result | null;
-  generationStatus: GenerationStatus;
-  generationSummary: { factFieldCount: number; answeredFieldCount: number; model: string } | null;
-  searchFilter: string;
-  showFilter: "all" | "answered" | "missing";
-}
-
-function logPersistEvent(event: string, payload?: Record<string, unknown>) {
-  if (!CASE_NOTES_PERSIST_DEBUG) return;
-  if (payload) {
-    console.info(`[CaseNotes][persist] ${event}`, payload);
-    return;
-  }
-  console.info(`[CaseNotes][persist] ${event}`);
-}
-
-function summarizeState(state: PersistedState | null) {
-  if (!state) return { hasState: false };
-  return {
-    hasState: true,
-    notesLength: state.rawNotes.length,
-    inputMode: state.inputMode,
-    hasFile: !!state.uploadedFile,
-    hasResult: !!state.result,
-    generationStatus: state.generationStatus,
-    answeredCount: state.result?.answers?.filter((answer) => answer.answer !== null).length ?? 0,
-    totalCount: state.result?.answers?.length ?? 0,
-    searchFilterLength: state.searchFilter.length,
-    showFilter: state.showFilter,
-  };
-}
-
-function normalizePersistedState(raw: unknown): PersistedState | null {
-  if (!raw || typeof raw !== "object") return null;
-
-  const parsed = raw as Partial<PersistedState>;
-
-  const inputMode: InputMode = parsed.inputMode === "upload" ? "upload" : "paste";
-  const generationStatus: GenerationStatus =
-    parsed.generationStatus === "generating"
-      ? "idle"
-      : parsed.generationStatus === "success" || parsed.generationStatus === "error" || parsed.generationStatus === "idle"
-      ? parsed.generationStatus
-      : "idle";
-
-  const showFilter: "all" | "answered" | "missing" =
-    parsed.showFilter === "answered" || parsed.showFilter === "missing" ? parsed.showFilter : "all";
-
-  const uploadedFile =
-    parsed.uploadedFile && typeof parsed.uploadedFile === "object"
-      ? (parsed.uploadedFile as UploadedFile)
-      : null;
-
-  const result =
-    parsed.result && typeof parsed.result === "object"
-      ? (parsed.result as Phase2Result)
-      : null;
-
-  const generationSummary =
-    parsed.generationSummary && typeof parsed.generationSummary === "object"
-      ? parsed.generationSummary
-      : null;
-
-  const effectiveStatus: GenerationStatus =
-    generationStatus === "idle" && result ? "success" : generationStatus;
-
-  return {
-    rawNotes: typeof parsed.rawNotes === "string" ? parsed.rawNotes : "",
-    permissionConfirmed: !!parsed.permissionConfirmed,
-    inputMode,
-    uploadedFile,
-    result,
-    generationStatus: effectiveStatus,
-    generationSummary,
-    searchFilter: typeof parsed.searchFilter === "string" ? parsed.searchFilter : "",
-    showFilter,
-  };
-}
-
-function persistState(sessionId: string, state: PersistedState) {
-  const key = storageKey(sessionId);
-  try {
-    sessionStorage.setItem(key, JSON.stringify(state));
-    logPersistEvent("save", { key, ...summarizeState(state) });
-  } catch (error) {
-    logPersistEvent("save_failed", {
-      key,
-      error: error instanceof Error ? error.message : "unknown",
-    });
-  }
-}
-
-function loadPersistedState(sessionId: string): PersistedState | null {
-  const key = storageKey(sessionId);
-  try {
-    const raw = sessionStorage.getItem(key);
-    if (!raw) {
-      logPersistEvent("restore_miss", { key });
-      return null;
-    }
-
-    const normalized = normalizePersistedState(JSON.parse(raw));
-    if (!normalized) {
-      logPersistEvent("restore_invalid", { key });
-      return null;
-    }
-
-    logPersistEvent("restore_hit", { key, ...summarizeState(normalized) });
-    return normalized;
-  } catch (error) {
-    logPersistEvent("restore_failed", {
-      key,
-      error: error instanceof Error ? error.message : "unknown",
-    });
-    return null;
-  }
-}
 
 // ─── Helpers ─────────────────────────────────────────────
 function formatFileSize(bytes: number): string {
@@ -346,6 +224,90 @@ const NOTE_HINTS = [
   "Avoid summary-only shorthand if detail matters for the template.",
 ];
 
+// ─── Secured/Locked State ────────────────────────────────
+/**
+ * SECURITY: Shown when a user returns to Case Notes after marking Done,
+ * or when there is no in-memory state. This is intentional, not a bug.
+ */
+function SecuredState({
+  caseLabel,
+  onBack,
+}: {
+  caseLabel: string | null;
+  onBack: () => void;
+}) {
+  return (
+    <div className="max-w-2xl mx-auto py-16 px-4">
+      <div className="flex flex-col items-center text-center space-y-6">
+        {/* Icon */}
+        <div className="w-14 h-14 rounded-full bg-muted/60 flex items-center justify-center">
+          <Lock className="h-6 w-6 text-muted-foreground" />
+        </div>
+
+        {/* Heading */}
+        <div className="space-y-2">
+          <h2 className="text-lg font-semibold text-foreground">
+            Case notes secured
+          </h2>
+          <p className="text-sm text-muted-foreground max-w-md">
+            Sensitive case-note content is not retained for casual reopening.
+            This step was completed and the working content has been cleared
+            from this workspace.
+          </p>
+        </div>
+
+        {/* Explanation card */}
+        <Card className="border border-border shadow-none w-full max-w-md">
+          <CardContent className="px-5 py-4 space-y-3">
+            <div className="flex items-start gap-2.5">
+              <ShieldCheck className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+              <div className="text-left space-y-1.5">
+                <p className="text-xs font-medium text-foreground">
+                  Why is my previous work not visible?
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  AidMind does not store interview notes or extracted answers
+                  in plaintext after you finish working. This protects client
+                  information and aligns with privacy-first data handling.
+                </p>
+              </div>
+            </div>
+            <Separator />
+            <div className="flex items-start gap-2.5">
+              <Info className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+              <div className="text-left space-y-1.5">
+                <p className="text-xs font-medium text-foreground">
+                  What can I do next?
+                </p>
+                <ul className="text-xs text-muted-foreground space-y-1 list-disc pl-4">
+                  <li>Return to the session dashboard to continue your workflow</li>
+                  <li>Start a new extraction by re-entering notes in this workspace</li>
+                  <li>Proceed to the Reviewer step if extraction is already complete</li>
+                </ul>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Actions */}
+        <div className="flex items-center gap-3">
+          <Button variant="outline" onClick={onBack} className="gap-2">
+            <ArrowLeft className="h-4 w-4" />
+            Return to session
+          </Button>
+        </div>
+
+        {/* Case label if available */}
+        {caseLabel && (
+          <p className="text-xs text-muted-foreground">
+            Session: {caseLabel}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ───────────────────────────────────────────
 export default function CaseNotes() {
   const { sessionId: routeSessionId } = useParams<{ sessionId: string }>();
@@ -355,11 +317,15 @@ export default function CaseNotes() {
   const [session, setSession] = useState<SessionContext | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
 
+  /**
+   * SECURITY: All sensitive state is in-memory only.
+   * Nothing below is persisted to sessionStorage, localStorage, or the backend.
+   * When the component unmounts, all content is lost. This is intentional.
+   */
   const [form, setForm] = useState<CaseNotesFormState>(INITIAL_FORM);
   const [inputMode, setInputMode] = useState<InputMode>("paste");
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null);
 
-  // State tracks
   const [generationStatus, setGenerationStatus] = useState<GenerationStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [result, setResult] = useState<Phase2Result | null>(null);
@@ -369,7 +335,6 @@ export default function CaseNotes() {
     model: string;
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [hydratedSessionId, setHydratedSessionId] = useState<string | null>(null);
 
   // PDF extraction hook
   const pdfExtractor = usePdfTextExtractor();
@@ -381,68 +346,22 @@ export default function CaseNotes() {
   // ─── Dialog state ──────────────────────────────────────
   const [showLeaveDialog, setShowLeaveDialog] = useState(false);
   const [showClearDialog, setShowClearDialog] = useState(false);
+  const [showDoneDialog, setShowDoneDialog] = useState(false);
   const [isDoneLoading, setIsDoneLoading] = useState(false);
 
+  /**
+   * SECURITY: Purge any legacy sessionStorage entries for case notes.
+   * Previous versions stored plaintext notes here. This cleanup runs once on mount.
+   */
   useEffect(() => {
-    logPersistEvent("mount", { routeSessionId: routeSessionId ?? null });
-    return () => {
-      logPersistEvent("unmount", { routeSessionId: routeSessionId ?? null });
-    };
-  }, [routeSessionId]);
-
-  // ─── Hydrate local UI state immediately on session route change ─
-  useEffect(() => {
-    if (!routeSessionId) {
-      setHydratedSessionId(null);
-      return;
+    if (!routeSessionId) return;
+    const legacyKey = `aidmind:case-notes:${routeSessionId}`;
+    try {
+      sessionStorage.removeItem(legacyKey);
+    } catch {
+      // Ignore — best-effort cleanup
     }
-
-    logPersistEvent("hydrate_start", { key: storageKey(routeSessionId) });
-    const persisted = loadPersistedState(routeSessionId);
-
-    if (persisted) {
-      setForm({ rawNotes: persisted.rawNotes, permissionConfirmed: persisted.permissionConfirmed });
-      setInputMode(persisted.inputMode);
-      setUploadedFile(persisted.uploadedFile);
-      setResult(persisted.result);
-      setGenerationStatus(persisted.generationStatus);
-      setGenerationSummary(persisted.generationSummary);
-      setSearchFilter(persisted.searchFilter);
-      setShowFilter(persisted.showFilter);
-      setErrorMessage(null);
-      logPersistEvent("hydrate_applied", { key: storageKey(routeSessionId), ...summarizeState(persisted) });
-    } else {
-      setForm(INITIAL_FORM);
-      setInputMode("paste");
-      setUploadedFile(null);
-      setResult(null);
-      setGenerationStatus("idle");
-      setGenerationSummary(null);
-      setSearchFilter("");
-      setShowFilter("all");
-      setErrorMessage(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      logPersistEvent("hydrate_defaulted", { key: storageKey(routeSessionId) });
-    }
-
-    setHydratedSessionId(routeSessionId);
   }, [routeSessionId]);
-
-  // ─── Persist local UI state to sessionStorage on change ─
-  useEffect(() => {
-    if (!routeSessionId || hydratedSessionId !== routeSessionId) return;
-    persistState(routeSessionId, {
-      rawNotes: form.rawNotes,
-      permissionConfirmed: form.permissionConfirmed,
-      inputMode,
-      uploadedFile,
-      result,
-      generationStatus: generationStatus === "generating" ? "idle" : generationStatus,
-      generationSummary,
-      searchFilter,
-      showFilter,
-    });
-  }, [routeSessionId, hydratedSessionId, form.rawNotes, form.permissionConfirmed, inputMode, uploadedFile, result, generationStatus, generationSummary, searchFilter, showFilter]);
 
   const updateField = useCallback(
     <K extends keyof CaseNotesFormState>(key: K, value: CaseNotesFormState[K]) => {
@@ -467,7 +386,7 @@ export default function CaseNotes() {
       try {
         const { data, error } = await supabase
           .from("sessions")
-          .select("id, session_id, case_label, template_id, tenant_id")
+          .select("id, session_id, case_label, template_id, tenant_id, metadata")
           .eq("session_id", routeSessionId)
           .maybeSingle();
 
@@ -475,10 +394,6 @@ export default function CaseNotes() {
 
         if (error || !data) {
           console.error("[CaseNotes] Session fetch error:", error?.message);
-          logPersistEvent("session_fetch_error", {
-            routeSessionId,
-            error: error?.message ?? "session not found",
-          });
           setSession(null);
           return;
         }
@@ -495,6 +410,9 @@ export default function CaseNotes() {
 
         if (cancelled) return;
 
+        const meta = (data.metadata as Record<string, unknown>) ?? {};
+        const caseNotesCompleted = !!meta.case_notes_completed_at;
+
         setSession({
           id: data.id,
           sessionId: data.session_id,
@@ -502,11 +420,7 @@ export default function CaseNotes() {
           templateId: data.template_id,
           templateName,
           tenantId: data.tenant_id,
-        });
-
-        logPersistEvent("session_loaded", {
-          routeSessionId,
-          hasTemplate: !!data.template_id,
+          caseNotesCompleted,
         });
       } finally {
         if (!cancelled) {
@@ -670,7 +584,11 @@ export default function CaseNotes() {
     }
   }, [canGenerate, session, form]);
 
-  const handleClear = useCallback(() => {
+  /**
+   * SECURITY: Clear all in-memory sensitive state.
+   * This is called on Done, Discard, and Clear All.
+   */
+  const purgeWorkingContent = useCallback(() => {
     setForm(INITIAL_FORM);
     setUploadedFile(null);
     setResult(null);
@@ -681,17 +599,19 @@ export default function CaseNotes() {
     setShowFilter("all");
     pdfExtractor.clearText();
     if (fileInputRef.current) fileInputRef.current.value = "";
-    if (routeSessionId) sessionStorage.removeItem(storageKey(routeSessionId));
-    setShowClearDialog(false);
-  }, [pdfExtractor, routeSessionId]);
+  }, [pdfExtractor]);
 
-  // ─── Done handler — marks case notes step as workflow-complete ─
+  const handleClear = useCallback(() => {
+    purgeWorkingContent();
+    setShowClearDialog(false);
+  }, [purgeWorkingContent]);
+
+  // ─── Done handler — marks step complete and purges content ─
   const handleDone = useCallback(async () => {
     if (!session) return;
     setIsDoneLoading(true);
 
     try {
-      // Read current metadata, merge case_notes_completed_at
       const { data: current } = await supabase
         .from("sessions")
         .select("metadata")
@@ -712,9 +632,12 @@ export default function CaseNotes() {
 
       if (error) throw error;
 
+      // SECURITY: Purge all working content from memory before navigating
+      purgeWorkingContent();
+
       toast({
-        title: "Case Notes completed",
-        description: "Step marked as done. You can revisit anytime.",
+        title: "Case Notes secured",
+        description: "Step marked as done. Sensitive content has been cleared.",
       });
 
       navigate(-1);
@@ -727,10 +650,11 @@ export default function CaseNotes() {
       });
     } finally {
       setIsDoneLoading(false);
+      setShowDoneDialog(false);
     }
-  }, [session, navigate]);
+  }, [session, navigate, purgeWorkingContent]);
 
-  // ─── Back navigation with guard ────────────────────────
+  // ─── Back navigation with security guard ───────────────
   const handleBack = useCallback(() => {
     if (hasInProgressWork) {
       setShowLeaveDialog(true);
@@ -843,29 +767,94 @@ export default function CaseNotes() {
     );
   }
 
+  /**
+   * SECURITY: If step was already completed and there's no in-memory work,
+   * show the secured/locked state instead of a confusing empty workspace.
+   */
+  if (session.caseNotesCompleted && !hasInProgressWork) {
+    return (
+      <DashboardLayout>
+        <SecuredState caseLabel={session.caseLabel} onBack={() => navigate(-1)} />
+      </DashboardLayout>
+    );
+  }
+
   return (
     <DashboardLayout>
-      {/* ─── Leave Confirmation Dialog ─── */}
+      {/* ─── Security Leave Dialog ─── */}
       <AlertDialog open={showLeaveDialog} onOpenChange={setShowLeaveDialog}>
         <AlertDialogContent className="max-w-md rounded-2xl">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Leave Case Notes?</AlertDialogTitle>
-            <AlertDialogDescription>
-              You have in-progress work on this page. Your notes and any extracted answers will be preserved locally if you return during this browser session.
+          <AlertDialogHeader className="space-y-2">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
+                <ShieldAlert className="h-4 w-4 text-muted-foreground" />
+              </div>
+              <AlertDialogTitle className="text-base">Sensitive content in workspace</AlertDialogTitle>
+            </div>
+            <AlertDialogDescription className="text-sm text-muted-foreground">
+              Your case notes and any extracted answers are held in memory only.
+              Leaving this page will clear all working content — it will not be
+              available for later return.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter className="flex-col gap-2 sm:flex-row">
+          <AlertDialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
             <Button
               variant="outline"
+              className="gap-2"
               onClick={() => {
+                purgeWorkingContent();
                 setShowLeaveDialog(false);
                 navigate(-1);
               }}
             >
-              Leave page
+              Discard and leave
             </Button>
             <Button onClick={() => setShowLeaveDialog(false)}>
-              Stay here
+              Continue working
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ─── Done & Lock Confirmation Dialog ─── */}
+      <AlertDialog open={showDoneDialog} onOpenChange={setShowDoneDialog}>
+        <AlertDialogContent className="max-w-md rounded-2xl">
+          <AlertDialogHeader className="space-y-2">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
+                <Lock className="h-4 w-4 text-muted-foreground" />
+              </div>
+              <AlertDialogTitle className="text-base">Complete and secure this step?</AlertDialogTitle>
+            </div>
+            <AlertDialogDescription className="text-sm text-muted-foreground">
+              Marking this step as done will clear all case-note content from
+              this workspace. AidMind does not retain sensitive notes for
+              casual reopening — returning later will show a secured state.
+              <span className="block mt-2 text-xs text-muted-foreground/70">
+                Copy or download your extraction results before continuing if you need them.
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
+            <Button variant="outline" onClick={() => setShowDoneDialog(false)}>
+              Continue working
+            </Button>
+            <Button
+              onClick={handleDone}
+              disabled={isDoneLoading}
+              className="gap-2"
+            >
+              {isDoneLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Securing…
+                </>
+              ) : (
+                <>
+                  <Lock className="h-4 w-4" />
+                  Done and secure
+                </>
+              )}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -877,7 +866,7 @@ export default function CaseNotes() {
           <AlertDialogHeader>
             <AlertDialogTitle>Clear all work?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will remove your notes, permission confirmation, and any extracted answers for this session. This cannot be undone.
+              This will remove your notes, permission confirmation, and any extracted answers from memory. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-col gap-2 sm:flex-row">
@@ -913,9 +902,13 @@ export default function CaseNotes() {
               </p>
             </div>
           </div>
-          <p className="text-xs text-muted-foreground pl-11">
-            After-meeting step · Notes stay local and are not saved to the server.
-          </p>
+          {/* SECURITY: Privacy notice */}
+          <div className="flex items-center gap-1.5 pl-11">
+            <Lock className="h-3 w-3 text-muted-foreground/60" />
+            <p className="text-xs text-muted-foreground">
+              Sensitive content is held in memory only and cleared when you leave or finish.
+            </p>
+          </div>
         </div>
 
         {/* ─── Two-column layout ─── */}
@@ -1119,7 +1112,7 @@ export default function CaseNotes() {
                   </p>
                   <p className="text-xs text-[hsl(var(--status-success-muted-foreground))]">
                     {generationSummary.answeredFieldCount} of {generationSummary.factFieldCount} fact-based fields answered.
-                    Review the results below, then click <strong>Done</strong> to finish this step.
+                    Review the results below, then click <strong>Done and secure</strong> to finish this step.
                   </p>
                 </div>
               </div>
@@ -1291,23 +1284,14 @@ export default function CaseNotes() {
                     {/* Done is the only primary action after extraction success */}
                     <Button
                       className="w-full gap-2"
-                      onClick={handleDone}
+                      onClick={() => setShowDoneDialog(true)}
                       disabled={isDoneLoading}
                     >
-                      {isDoneLoading ? (
-                        <>
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          Saving…
-                        </>
-                      ) : (
-                        <>
-                          <CheckCircle2 className="h-4 w-4" />
-                          Done
-                        </>
-                      )}
+                      <Lock className="h-4 w-4" />
+                      Done and secure
                     </Button>
                     <p className="text-xs text-muted-foreground text-center">
-                      Marks this step as complete and returns to your workflow.
+                      Completes this step and clears sensitive content from the workspace.
                     </p>
                   </>
                 ) : (
@@ -1356,6 +1340,22 @@ export default function CaseNotes() {
                     </div>
                   </>
                 )}
+              </CardContent>
+            </Card>
+
+            {/* Security notice card */}
+            <Card className="border border-border shadow-none bg-muted/20">
+              <CardContent className="px-5 py-4 space-y-2">
+                <div className="flex items-start gap-2">
+                  <ShieldCheck className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium text-foreground">Privacy notice</p>
+                    <p className="text-xs text-muted-foreground">
+                      Sensitive content is not saved for later return. Finish and
+                      secure when ready — leaving clears the workspace.
+                    </p>
+                  </div>
+                </div>
               </CardContent>
             </Card>
 
