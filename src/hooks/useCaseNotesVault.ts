@@ -62,6 +62,7 @@ interface UseCaseNotesVaultReturn {
 }
 
 export function useCaseNotesVault(sessionId: string | undefined): UseCaseNotesVaultReturn {
+  const { suppressNextAuthReload } = useAuth();
   const [vaultState, setVaultState] = useState<VaultState>("empty");
   const [vaultMetadata, setVaultMetadata] = useState<VaultMetadata | null>(null);
   const [unlockedPacket, setUnlockedPacket] = useState<CaseNotesComparisonPacket | null>(null);
