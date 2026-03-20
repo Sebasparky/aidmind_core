@@ -233,19 +233,34 @@ async function ensureParserArtifact(
   if (existing?.artifact_json) {
     const artifact = existing.artifact_json as unknown as TemplateParserArtifact;
     if (isParserArtifactValid(artifact)) {
+      if (import.meta.env.DEV) {
+        console.log("[Reviewer] Parser artifact valid:", artifact.sections.length, "sections");
+      }
       return artifact;
     }
     if (import.meta.env.DEV) {
-      console.warn("[Reviewer] Existing parser artifact is invalid (0 sections), will attempt regeneration");
+      console.warn("[Reviewer] Existing parser artifact is invalid (0 sections), will force regeneration");
     }
-    // Fall through to regeneration
+    // Fall through to regeneration with force=true since existing one is bad
   }
 
   try {
+    // Force regeneration if existing artifact was invalid (0 sections)
+    const shouldForce = !!existing?.artifact_json;
+    if (import.meta.env.DEV) {
+      console.log("[Reviewer] Invoking generate-parser-artifacts", { templateId, tenantId, force: shouldForce });
+    }
     const { data, error } = await supabase.functions.invoke("generate-parser-artifacts", {
-      body: { template_id: templateId, tenant_id: tenantId },
+      body: { template_id: templateId, tenant_id: tenantId, force: shouldForce },
     });
     if (error) throw error;
+    if (import.meta.env.DEV) {
+      console.log("[Reviewer] generate-parser-artifacts response:", {
+        status: data?.status,
+        sections_count: data?.sections_count,
+        checkbox_groups_count: data?.checkbox_groups_count,
+      });
+    }
     if (data?.status === "generated" || data?.status === "exists") {
       const { data: fresh } = await supabase
         .from("template_parser_artifacts")
@@ -256,6 +271,9 @@ async function ensureParserArtifact(
       if (fresh?.artifact_json) {
         const artifact = fresh.artifact_json as unknown as TemplateParserArtifact;
         if (isParserArtifactValid(artifact)) {
+          if (import.meta.env.DEV) {
+            console.log("[Reviewer] Fresh artifact valid:", artifact.sections.length, "sections");
+          }
           return artifact;
         }
         if (import.meta.env.DEV) {
