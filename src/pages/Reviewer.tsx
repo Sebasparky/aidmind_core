@@ -1471,7 +1471,9 @@ export default function Reviewer() {
                         </div>
                       )}
 
-                      <p className="text-[10px] text-muted-foreground italic">AI-generated audit — review before acting.</p>
+                       <p className="text-[10px] text-muted-foreground italic">
+                         AI-generated language audit — focuses on authored narrative text. Does not verify every structured field.
+                       </p>
 
                       {totalIssues === 0 && (
                         <div className="text-center py-6">
