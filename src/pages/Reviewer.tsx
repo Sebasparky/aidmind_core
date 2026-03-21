@@ -1302,10 +1302,10 @@ export default function Reviewer() {
                     <div className="text-center py-10">
                       <Shield className="h-10 w-10 mx-auto text-muted-foreground/20 mb-3" />
                       <p className="text-sm text-muted-foreground">
-                        {extracting ? "Waiting for extraction…" : canRun ? "Ready to review" : "Upload a document to begin"}
-                      </p>
-                      <p className="text-xs text-muted-foreground/70 mt-1">
-                        Checks tone, bias, policy language, and completeness
+                         {extracting ? "Waiting for extraction…" : canRun ? "Ready to review" : "Upload a document to begin"}
+                       </p>
+                       <p className="text-xs text-muted-foreground/70 mt-1">
+                         Reviews authored narrative language for tone, bias, and policy compliance
                       </p>
                     </div>
                   )}
