@@ -343,6 +343,20 @@ export default function Guidance() {
             </Alert>
           )}
 
+          {/* Domain mismatch banner */}
+          {isDomainMismatch && (
+            <Alert className="mb-6 border-destructive/30 bg-destructive/5">
+              <AlertTriangle className="h-4 w-4 text-destructive" />
+              <AlertDescription className="text-sm">
+                <strong>Domain mismatch detected:</strong> The compiled policy pack does not contain relevant content for the selected scope ({scopeLabel}).
+                The knowledge base may not have policy documents for this domain.
+                <span className="block mt-1 text-muted-foreground">
+                  Upload relevant policy documents to the Knowledge Base, then return here and try again.
+                </span>
+              </AlertDescription>
+            </Alert>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
             {/* ── Left: Context Panel ── */}
             <div className="lg:col-span-2 space-y-4">
