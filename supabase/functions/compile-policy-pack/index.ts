@@ -569,6 +569,18 @@ function buildRetrievalQuery(
       "danger/lethality assessment, safety planning, incident documentation, children's exposure, protective factors, service coordination",
     housing_homelessness:
       "housing assessment, barriers documentation, housing history, stability factors, service needs, resource coordination",
+    employment_income:
+      "employment history, income verification, financial assessment, assets and liabilities, earning capacity, employment barriers, vocational assessment, budget analysis, financial statement review",
+    disability_services:
+      "disability assessment, functional limitations, accommodations needs, supported employment, independent living assessment, assistive technology needs",
+    elder_services:
+      "geriatric assessment, activities of daily living, long-term care needs, caregiver capacity, elder abuse screening, home safety assessment",
+    immigration_refugee:
+      "immigration status verification, resettlement needs, cultural adjustment assessment, language access needs, eligibility documentation",
+    reentry_justice:
+      "reentry needs assessment, barriers to reentry, community supervision requirements, transitional service needs, recidivism risk factors",
+    social_welfare:
+      "needs assessment, benefits eligibility screening, service coordination, resource identification, case management planning",
   };
 
   const scopeOpsIntent = scope ? SCOPE_OPERATIONAL_INTENTS[scope] : null;
