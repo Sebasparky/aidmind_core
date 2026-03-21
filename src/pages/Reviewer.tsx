@@ -167,55 +167,113 @@ function ReadinessRow({ label, state, detail }: { label: string; state: Readines
   );
 }
 
-// ─── Reconciliation-aware completeness filtering ─────────
+// ─── Language-first post-processing ──────────────────────
 /**
- * Post-process reviewer issues using reconciliation results.
- * - confirmed_match → suppress completeness issues
- * - likely_correction → suppress completeness issues
- * - possible_discrepancy → reclassify as consistency
- * - unresolved + low parse confidence → downgrade severity
+ * Post-process reviewer issues:
+ * 1. Suppress completeness/consistency findings on non-narrative fields
+ * 2. Apply reconciliation-aware filtering for narrative fields
+ * 3. Block structured-field findings from reaching the user
+ *
+ * This is the final gate — no structured-field finding should survive.
  */
-function applyReconciliationToIssues(
+function applyLanguageFirstFiltering(
   issues: ReviewIssue[],
   reconciliation: ReconciliationResult | null,
-): ReviewIssue[] {
-  if (!reconciliation || !reconciliation.reliable_for_review) return issues;
+  schemaFields: Phase2SchemaField[] | null,
+): { filtered: ReviewIssue[]; suppressed: number; reclassified: number } {
+  let suppressed = 0;
+  let reclassified = 0;
 
-  const fieldResolutionMap = new Map<string, FieldReconciliation>();
-  for (const f of reconciliation.fields) {
-    fieldResolutionMap.set(f.field_key, f);
+  // Build schema lookup
+  const schemaMap = schemaFields
+    ? new Map(schemaFields.map((sf) => [sf.field_key, sf]))
+    : null;
+
+  // Build reconciliation lookup
+  const reconMap = new Map<string, FieldReconciliation>();
+  if (reconciliation) {
+    for (const f of reconciliation.fields) {
+      reconMap.set(f.field_key, f);
+    }
   }
 
-  return issues.filter((issue) => {
-    if (issue.type !== "completeness" || !issue.field_key) return true;
-    const recon = fieldResolutionMap.get(issue.field_key);
-    if (!recon) return true;
-    if (recon.resolution === "confirmed_match") return false;
-    if (recon.resolution === "likely_correction") return false;
-    return true;
-  }).map((issue) => {
-    if (!issue.field_key) return issue;
-    const recon = fieldResolutionMap.get(issue.field_key);
-    if (!recon) return issue;
-
-    if (issue.type === "completeness" && recon.resolution === "possible_discrepancy") {
-      return {
-        ...issue,
-        type: "consistency" as ReviewIssueType,
-        explanation: `${issue.explanation} (Notes and completed form differ — possible discrepancy)`,
-      };
+  const result = issues.filter((issue) => {
+    // Tone, bias, policy_language on narrative text: always keep
+    if (issue.type === "tone" || issue.type === "bias" || issue.type === "policy_language") {
+      return true;
     }
 
-    if (issue.type === "completeness" && recon.resolution === "unresolved" && reconciliation.template_parse_confidence === "low") {
-      return {
-        ...issue,
-        severity: "low" as ReviewSeverity,
-        explanation: `${issue.explanation} (Low parse confidence — manual verification recommended)`,
-      };
+    // Completeness or consistency: only keep if field is narrative-eligible
+    if (issue.field_key) {
+      const sf = schemaMap?.get(issue.field_key);
+      if (sf) {
+        // For completeness, check narrative completion eligibility
+        if (issue.type === "completeness") {
+          const { isReviewerNarrativeCompletionField } = require("@/lib/tools/reviewer-eligibility");
+          if (!isReviewerNarrativeCompletionField(sf)) {
+            suppressed++;
+            return false;
+          }
+        }
+        // For consistency, check language eligibility
+        if (issue.type === "consistency") {
+          const { isReviewerLanguageField } = require("@/lib/tools/reviewer-eligibility");
+          if (!isReviewerLanguageField(sf)) {
+            suppressed++;
+            return false;
+          }
+        }
+      }
+
+      // Reconciliation-aware suppression for narrative fields
+      if (reconciliation?.reliable_for_review) {
+        const recon = reconMap.get(issue.field_key);
+        if (recon) {
+          // Confirmed matches — suppress completeness
+          if (issue.type === "completeness" && recon.resolution === "confirmed_match") {
+            suppressed++;
+            return false;
+          }
+          // Likely corrections — suppress completeness
+          if (issue.type === "completeness" && recon.resolution === "likely_correction") {
+            suppressed++;
+            return false;
+          }
+        }
+      }
+    }
+
+    return true;
+  }).map((issue) => {
+    // Reclassify completeness → consistency for discrepancies (narrative only)
+    if (issue.field_key && issue.type === "completeness" && reconciliation?.reliable_for_review) {
+      const recon = reconMap.get(issue.field_key);
+      if (recon?.resolution === "possible_discrepancy") {
+        reclassified++;
+        return {
+          ...issue,
+          type: "consistency" as ReviewIssueType,
+          explanation: `${issue.explanation} (Notes and completed form differ in narrative content)`,
+        };
+      }
+    }
+
+    // Downgrade severity for low-confidence parse
+    if (issue.field_key && issue.type === "completeness" && reconciliation?.template_parse_confidence === "low") {
+      const recon = reconMap.get(issue.field_key);
+      if (recon?.resolution === "unresolved") {
+        return {
+          ...issue,
+          severity: "low" as ReviewSeverity,
+          explanation: `${issue.explanation} (Low parse confidence — manual verification recommended)`,
+        };
+      }
     }
 
     return issue;
   });
+
+  return { filtered: result, suppressed, reclassified };
 }
 
 // ─── Auto-ensure parser artifact ─────────────────────────
