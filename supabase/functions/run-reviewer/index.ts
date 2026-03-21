@@ -184,7 +184,7 @@ function validateReviewReport(parsed: unknown): boolean {
   return true;
 }
 
-// ── Completeness Issue Deduplication ────────────────────────────────────────
+// ── Completeness Issue Deduplication & Structured-Field Suppression ─────
 
 interface ReviewIssue {
   type: string;
@@ -194,11 +194,69 @@ interface ReviewIssue {
   field_key?: string;
 }
 
-function dedupeCompletenessIssues(issues: ReviewIssue[]): ReviewIssue[] {
-  const completeness = issues.filter((i) => i.type === "completeness");
-  const others = issues.filter((i) => i.type !== "completeness");
+/** Hard-blocked field label patterns — server-side safety net */
+const BLOCKED_FIELD_RE = [
+  /^time$/i,
+  /^date$/i,
+  /\b(dob|date\s*of\s*birth|birth\s*date)\b/i,
+  /\b(ssn|social\s*security)\b/i,
+  /\b(phone|telephone|fax|cell)\b/i,
+  /\b(address|street|city|state|zip)\b/i,
+  /\b(age|gender|sex|race|ethnicity)\b/i,
+  /\b(email|e-mail)\b/i,
+  /\b(signature|signed\s*by|date\s*signed)\b/i,
+  /\b(case\s*number|case\s*id|worker\s*id)\b/i,
+  /\b(application\s*date|received\s*date)\b/i,
+  /\b(relationship\s*to|relation\s*to)\b/i,
+  /\bperson\s*\d/i,
+  /\bchild\s*\d/i,
+  /\b(height|weight)\b/i,
+  /\btime\s*(of|for)\b/i,
+  /\b(start|end|begin)\s*(time|date)\b/i,
+  /\b(marital\s*status)\b/i,
+  /\b(medicaid|medicare)\s*(number|#|id)\b/i,
+];
 
-  if (completeness.length <= 1) return issues;
+const BLOCKED_EXPLANATION_TERMS = [
+  "time narrative section is blank",
+  "time field",
+  "date of birth",
+  "dob field",
+  "ssn field",
+  "phone number",
+  "address field",
+  "checkbox",
+  "select one",
+  "select many",
+  "boolean",
+  "demographic",
+  "relationship matrix",
+  "signature field",
+];
+
+function isIssueAboutBlockedField(issue: ReviewIssue): boolean {
+  // Check field_key
+  if (issue.field_key) {
+    const label = issue.field_key.replace(/_/g, " ");
+    if (BLOCKED_FIELD_RE.some(re => re.test(label) || re.test(issue.field_key!))) return true;
+  }
+  // Check explanation text for structured field references
+  if (issue.type === "completeness" || issue.type === "consistency") {
+    const combined = `${issue.explanation} ${issue.excerpt}`.toLowerCase();
+    if (BLOCKED_EXPLANATION_TERMS.some(term => combined.includes(term))) return true;
+  }
+  return false;
+}
+
+function dedupeAndFilterIssues(issues: ReviewIssue[]): ReviewIssue[] {
+  // Step 1: Remove any findings about blocked structured fields
+  let filtered = issues.filter(i => !isIssueAboutBlockedField(i));
+
+  // Step 2: Deduplicate completeness issues
+  const completeness = filtered.filter((i) => i.type === "completeness");
+  const others = filtered.filter((i) => i.type !== "completeness");
+
+  if (completeness.length <= 1) return filtered;
 
   const coveredFieldKeys = new Set<string>();
   const perFieldIssues: ReviewIssue[] = [];
@@ -490,8 +548,8 @@ serve(async (req) => {
 
     const reportObj = report as Record<string, any>;
 
-    // Post-process: deduplicate completeness issues
-    reportObj.issues = dedupeCompletenessIssues(reportObj.issues);
+    // Post-process: filter blocked structured fields + deduplicate completeness
+    reportObj.issues = dedupeAndFilterIssues(reportObj.issues);
     recalcMetrics(reportObj);
 
     await eye(supabase, v2.session_id, "reviewer_v2.completed", {

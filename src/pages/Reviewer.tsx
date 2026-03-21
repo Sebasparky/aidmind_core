@@ -156,6 +156,62 @@ function formatTimeRemaining(ms: number): string {
 }
 
 // ─── Language-first post-processing ──────────────────────
+
+/** Hard-blocked field label patterns — these MUST NOT appear as final findings */
+const FINDING_BLOCKED_LABEL_RE = [
+  /^time$/i,
+  /^date$/i,
+  /\b(dob|date\s*of\s*birth|birth\s*date)\b/i,
+  /\b(ssn|social\s*security)\b/i,
+  /\b(phone|telephone|fax|cell)\b/i,
+  /\b(address|street|city|state|zip)\b/i,
+  /\b(age|gender|sex|race|ethnicity)\b/i,
+  /\b(email|e-mail)\b/i,
+  /\b(signature|signed\s*by|date\s*signed)\b/i,
+  /\b(case\s*number|case\s*id|file\s*number|record\s*number)\b/i,
+  /\b(worker\s*id|employee\s*id)\b/i,
+  /\b(application\s*date|received\s*date|entry\s*date)\b/i,
+  /\b(relationship\s*to|relation\s*to)\b/i,
+  /\bperson\s*\d/i,
+  /\bchild\s*\d/i,
+  /\b(height|weight)\b/i,
+  /\b(medicaid|medicare)\s*(number|#|id)\b/i,
+  /\btime\s*(of|for)\b/i,
+  /\b(start|end|begin)\s*(time|date)\b/i,
+  /\breport\s*(date|time)\b/i,
+  /\bincident\s*(date|time)\b/i,
+  /\b(am|pm)\s*$/i,
+  /\bmarital\s*status\b/i,
+];
+
+function isFieldKeyBlocked(fieldKey: string | undefined): boolean {
+  if (!fieldKey) return false;
+  const label = fieldKey.replace(/_/g, " ");
+  return FINDING_BLOCKED_LABEL_RE.some(re => re.test(label) || re.test(fieldKey));
+}
+
+/** Check if an issue's explanation/excerpt references a blocked structured field */
+function isExplanationAboutBlockedField(explanation: string, excerpt: string): boolean {
+  const combined = `${explanation} ${excerpt}`.toLowerCase();
+  const structuredFieldTerms = [
+    "time narrative section is blank",
+    "time field",
+    "date of birth",
+    "dob field",
+    "ssn field",
+    "phone number",
+    "address field",
+    "checkbox",
+    "select one",
+    "select many",
+    "boolean",
+    "demographic",
+    "relationship matrix",
+    "signature field",
+  ];
+  return structuredFieldTerms.some(term => combined.includes(term));
+}
+
 function applyLanguageFirstFiltering(
   issues: ReviewIssue[],
   reconciliation: ReconciliationResult | null,
@@ -176,9 +232,25 @@ function applyLanguageFirstFiltering(
   }
 
   const result = issues.filter((issue) => {
+    // Hard-block findings that reference blocked structured fields by field_key
+    if (isFieldKeyBlocked(issue.field_key)) {
+      suppressed++;
+      return false;
+    }
+
+    // Hard-block findings whose text clearly references structured fields
+    if ((issue.type === "completeness" || issue.type === "consistency") &&
+        isExplanationAboutBlockedField(issue.explanation, issue.excerpt || "")) {
+      suppressed++;
+      return false;
+    }
+
+    // Tone, bias, policy_language always pass (they're about authored text)
     if (issue.type === "tone" || issue.type === "bias" || issue.type === "policy_language") {
       return true;
     }
+
+    // For completeness/consistency, check schema eligibility
     if (issue.field_key) {
       const sf = schemaMap?.get(issue.field_key);
       if (sf) {
@@ -877,12 +949,24 @@ export default function Reviewer() {
       const { filtered: filteredIssues, suppressed: completenessSuppressions, reclassified: discrepancyReclassifications } =
         applyLanguageFirstFiltering(report.issues, localReconciliation, schemaFields);
 
+      // Recalculate risk from eligible findings only
+      const eligibleHighCount = filteredIssues.filter(i => i.severity === "high").length;
+      const eligibleMedCount = filteredIssues.filter(i => i.severity === "medium").length;
+      const recalcRisk = eligibleHighCount > 0 ? "high" : eligibleMedCount > 0 ? "medium" : "low";
+
       report = {
         ...report,
         issues: filteredIssues,
+        summary: {
+          ...report.summary,
+          overall_risk: recalcRisk as "low" | "medium" | "high",
+          key_findings: report.summary.key_findings.filter(
+            (f: string) => !isExplanationAboutBlockedField(f, "")
+          ),
+        },
         metrics: {
           issue_count: filteredIssues.length,
-          high_severity_count: filteredIssues.filter(i => i.severity === "high").length,
+          high_severity_count: eligibleHighCount,
         },
       };
 

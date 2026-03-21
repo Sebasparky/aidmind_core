@@ -47,8 +47,10 @@ function classifyFieldTrust(
 function normalizeForComparison(value: string): string {
   return value
     .toLowerCase()
+    .trim()
     .replace(/\s+/g, " ")
-    .replace(/[.,;:!?'"()[\]{}]/g, "")
+    .replace(/[.,;:!?'"()\[\]{}]/g, "")
+    .replace(/\s*[,/|]\s*/g, ",")
     .trim();
 }
 

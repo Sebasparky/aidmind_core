@@ -127,7 +127,7 @@ export function ReconciliationPanel({ result, notesSource }: ReconciliationPanel
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <ArrowRightLeft className="h-3.5 w-3.5 text-primary" />
-          <span className="text-xs font-medium text-foreground">Field Comparison</span>
+          <span className="text-xs font-medium text-foreground">Narrative Comparison</span>
         </div>
         <Badge variant="outline" className={cn("text-[10px]", confidence.className)}>
           Parse confidence: {confidence.text}
@@ -140,7 +140,7 @@ export function ReconciliationPanel({ result, notesSource }: ReconciliationPanel
           <div className="col-span-3 rounded-md bg-[hsl(var(--status-warning-muted))]/50 px-2.5 py-1.5 flex items-center gap-1.5">
             <AlertTriangle className="h-3 w-3 text-[hsl(var(--status-warning))]" />
             <span className="text-[11px] font-medium text-[hsl(var(--status-warning-muted-foreground))]">
-              {actionableCount} {actionableCount === 1 ? "field needs" : "fields need"} attention
+              {actionableCount} narrative {actionableCount === 1 ? "field needs" : "fields need"} attention
             </span>
           </div>
         )}

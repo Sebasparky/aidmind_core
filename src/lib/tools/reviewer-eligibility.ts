@@ -43,6 +43,7 @@ const EXCLUDED_CONTENT_TYPES = new Set([
 ]);
 
 // ── Excluded field label patterns (case-insensitive) ─────────────────────
+// These fields MUST NOT generate user-facing findings of any kind.
 
 const EXCLUDED_LABEL_PATTERNS = [
   /\b(phone|telephone|fax|cell)\s*(number|#)?\b/i,
@@ -60,6 +61,16 @@ const EXCLUDED_LABEL_PATTERNS = [
   /\bchild\s*\d/i,
   /\b(height|weight)\b/i,
   /\b(medicaid|medicare)\s*(number|#|id)\b/i,
+  // Time/date standalone fields
+  /^time$/i,
+  /^date$/i,
+  /\btime\s*(of|for)\b/i,
+  /\b(start|end|begin)\s*time\b/i,
+  /\b(start|end|begin)\s*date\b/i,
+  /\breport\s*(date|time)\b/i,
+  /\bincident\s*(date|time)\b/i,
+  /\bcomplaint\s*(date|time)\b/i,
+  /\b(am|pm)\s*$/i,
 ];
 
 // ── Excluded trust classes ───────────────────────────────────────────────
@@ -94,7 +105,67 @@ const NARRATIVE_COMPLETENESS_PATTERNS = [
   /\bsummary\b/i,
 ];
 
+// ── Normalization utilities for discrepancy comparison ───────────────────
+
+/**
+ * Normalize a field value for comparison. Strips formatting noise so
+ * only meaningful content differences are detected.
+ */
+export function normalizeForDiscrepancyComparison(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " ")           // collapse whitespace
+    .replace(/[.,;:!?'"()\[\]{}]/g, "") // strip punctuation
+    .replace(/\s*[,/|]\s*/g, ",")   // normalize list separators
+    .trim();
+}
+
+/**
+ * Compare two values with normalization. Returns true if they are
+ * semantically equivalent (formatting-only differences).
+ */
+export function areValuesEquivalent(a: string | null, b: string | null): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+
+  const na = normalizeForDiscrepancyComparison(a);
+  const nb = normalizeForDiscrepancyComparison(b);
+
+  // Exact normalized match
+  if (na === nb) return true;
+
+  // Containment check (one is a truncated version of the other)
+  if (na.length > 5 && nb.length > 5) {
+    if (na.includes(nb) || nb.includes(na)) return true;
+  }
+
+  // Set-based comparison for multi-value/list fields
+  const tokensA = new Set(na.split(",").map(t => t.trim()).filter(Boolean));
+  const tokensB = new Set(nb.split(",").map(t => t.trim()).filter(Boolean));
+  if (tokensA.size > 1 || tokensB.size > 1) {
+    // If both have multiple tokens, compare as sets
+    if (tokensA.size === tokensB.size) {
+      const allMatch = [...tokensA].every(t => tokensB.has(t));
+      if (allMatch) return true;
+    }
+    // High overlap = equivalent
+    const intersection = [...tokensA].filter(t => tokensB.has(t));
+    const union = new Set([...tokensA, ...tokensB]);
+    if (union.size > 0 && intersection.length / union.size >= 0.9) return true;
+  }
+
+  return false;
+}
+
 // ── Core eligibility functions ───────────────────────────────────────────
+
+function matchesExcludedLabel(label: string): boolean {
+  for (const pat of EXCLUDED_LABEL_PATTERNS) {
+    if (pat.test(label)) return true;
+  }
+  return false;
+}
 
 /**
  * Whether a schema field is eligible for language review (tone, bias, policy).
@@ -108,9 +179,8 @@ export function isReviewerLanguageField(field: Phase2SchemaField): boolean {
   if (EXCLUDED_MATCHING_MODES.has(field.matching_mode)) return false;
 
   // Explicit exclusions by label
-  for (const pat of EXCLUDED_LABEL_PATTERNS) {
-    if (pat.test(field.label)) return false;
-  }
+  if (matchesExcludedLabel(field.label)) return false;
+  if (matchesExcludedLabel(field.field_key)) return false;
 
   // Human-review-only fields are excluded from language review
   if (field.requires_human_review) return false;
@@ -162,9 +232,8 @@ export function isRecoveredFieldReviewerEligible(field: RecoveredField): boolean
   if (field.review_relevance === "structure_only") return false;
 
   // Exclude by label patterns
-  for (const pat of EXCLUDED_LABEL_PATTERNS) {
-    if (pat.test(field.label)) return false;
-  }
+  if (matchesExcludedLabel(field.label)) return false;
+  if (matchesExcludedLabel(field.field_key)) return false;
 
   // Exclude human-review-only
   if (field.requires_human_review) return false;
@@ -180,9 +249,7 @@ export function isReconciliationFieldEligible(field: FieldReconciliation): boole
   if (EXCLUDED_TRUST_CLASSES.has(field.trust_class)) return false;
 
   // Exclude by field_key patterns (heuristic)
-  for (const pat of EXCLUDED_LABEL_PATTERNS) {
-    if (pat.test(field.field_key)) return false;
-  }
+  if (matchesExcludedLabel(field.field_key)) return false;
 
   return true;
 }
@@ -206,6 +273,8 @@ export function filterUnansweredToNarrativeOnly(
     // Without schema, use heuristic: only allow fields whose labels match narrative patterns
     return unanswered.filter((f) => {
       if (EXCLUDED_MATCHING_MODES.has(f.matching_mode)) return false;
+      if (matchesExcludedLabel(f.label)) return false;
+      if (matchesExcludedLabel(f.field_key)) return false;
       for (const pat of NARRATIVE_COMPLETENESS_PATTERNS) {
         if (pat.test(f.label) || pat.test(f.field_key)) return true;
       }
@@ -222,12 +291,32 @@ export function filterUnansweredToNarrativeOnly(
 }
 
 /**
- * Filter reconciliation fields to only narrative-eligible ones.
+ * Filter reconciliation fields to only narrative-eligible ones,
+ * AND suppress formatting-only discrepancies using normalization.
  */
 export function filterReconciliationToNarrative(
   fields: FieldReconciliation[],
 ): FieldReconciliation[] {
-  return fields.filter(isReconciliationFieldEligible);
+  return fields
+    .filter(isReconciliationFieldEligible)
+    .map((field) => {
+      // Suppress false discrepancies caused by formatting
+      if (
+        (field.status === "mismatch" || field.resolution === "possible_discrepancy") &&
+        field.notes_value &&
+        field.template_value &&
+        areValuesEquivalent(field.notes_value, field.template_value)
+      ) {
+        return {
+          ...field,
+          status: "match" as const,
+          resolution: "confirmed_match" as const,
+          needs_review: false,
+          diff_summary: "Values match (after normalization)",
+        };
+      }
+      return field;
+    });
 }
 
 // ── Diagnostics ──────────────────────────────────────────────────────────
@@ -263,8 +352,8 @@ export function computeEligibilityDiagnostics(fields: Phase2SchemaField[]): Elig
       else if (f.matching_mode === "extract_date" || f.matching_mode === "extract_number") excluded_date_number++;
       else if (f.requires_human_review) excluded_human_review++;
       else {
-        for (const pat of EXCLUDED_LABEL_PATTERNS) {
-          if (pat.test(f.label)) { excluded_label_pattern++; break; }
+        if (matchesExcludedLabel(f.label) || matchesExcludedLabel(f.field_key)) {
+          excluded_label_pattern++;
         }
       }
     }
