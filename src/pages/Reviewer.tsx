@@ -29,6 +29,16 @@ import { recoverFieldsFromDocument } from "@/lib/tools/field-recovery";
 import { parseCompletedTemplate } from "@/lib/tools/completed-template-parser";
 import { reconcileNotesAndTemplate } from "@/lib/tools/reconciliation-engine";
 import { ReconciliationPanel } from "@/components/session/ReconciliationPanel";
+import {
+  filterToReviewerEligible,
+  filterUnansweredToNarrativeOnly,
+  filterReconciliationToNarrative,
+  isRecoveredFieldReviewerEligible,
+  isReconciliationFieldEligible,
+  isReviewerLanguageField,
+  isReviewerNarrativeCompletionField,
+  computeEligibilityDiagnostics,
+} from "@/lib/tools/reviewer-eligibility";
 import { ReviewerVerificationPanel, type ReviewerDiagnostics, type NotesSourceType } from "@/components/dev/ReviewerVerificationPanel";
 import type {
   ReviewerV2Report,
@@ -93,15 +103,15 @@ const SEVERITY_CONFIG: Record<ReviewSeverity, { variant: "destructive" | "defaul
   low: { variant: "secondary", label: "Low" },
 };
 
-const ISSUE_TYPE_META: Record<ReviewIssueType, { label: string; icon: typeof MessageSquare }> = {
-  tone: { label: "Tone & Clarity", icon: MessageSquare },
-  bias: { label: "Bias & Assumptions", icon: Eye },
-  policy_language: { label: "Policy Language", icon: Scale },
-  completeness: { label: "Completeness", icon: CheckSquare },
-  consistency: { label: "Consistency", icon: Shield },
+const ISSUE_TYPE_META: Record<ReviewIssueType, { label: string; icon: typeof MessageSquare; description: string }> = {
+  tone: { label: "Tone & Clarity", icon: MessageSquare, description: "Judgmental, unprofessional, or emotionally charged language" },
+  bias: { label: "Bias & Assumptions", icon: Eye, description: "Stigmatizing language, unsupported assumptions, or stereotypes" },
+  policy_language: { label: "Policy Language", icon: Scale, description: "Prohibited terminology or policy-inconsistent wording" },
+  completeness: { label: "Narrative Completeness", icon: CheckSquare, description: "Major narrative sections that appear blank or insufficient" },
+  consistency: { label: "Narrative Consistency", icon: Shield, description: "Narrative content that conflicts between notes and form" },
 };
 
-const ISSUE_TYPES: ReviewIssueType[] = ["completeness", "policy_language", "tone", "bias", "consistency"];
+const ISSUE_TYPES: ReviewIssueType[] = ["tone", "bias", "policy_language", "completeness", "consistency"];
 
 // ─── Helpers ─────────────────────────────────────────────
 function formatFileSize(bytes: number): string {
@@ -159,55 +169,105 @@ function ReadinessRow({ label, state, detail }: { label: string; state: Readines
   );
 }
 
-// ─── Reconciliation-aware completeness filtering ─────────
+// ─── Language-first post-processing ──────────────────────
 /**
- * Post-process reviewer issues using reconciliation results.
- * - confirmed_match → suppress completeness issues
- * - likely_correction → suppress completeness issues
- * - possible_discrepancy → reclassify as consistency
- * - unresolved + low parse confidence → downgrade severity
+ * Post-process reviewer issues:
+ * 1. Suppress completeness/consistency findings on non-narrative fields
+ * 2. Apply reconciliation-aware filtering for narrative fields
+ * 3. Block structured-field findings from reaching the user
+ *
+ * This is the final gate — no structured-field finding should survive.
  */
-function applyReconciliationToIssues(
+function applyLanguageFirstFiltering(
   issues: ReviewIssue[],
   reconciliation: ReconciliationResult | null,
-): ReviewIssue[] {
-  if (!reconciliation || !reconciliation.reliable_for_review) return issues;
+  schemaFields: Phase2SchemaField[] | null,
+): { filtered: ReviewIssue[]; suppressed: number; reclassified: number } {
+  let suppressed = 0;
+  let reclassified = 0;
 
-  const fieldResolutionMap = new Map<string, FieldReconciliation>();
-  for (const f of reconciliation.fields) {
-    fieldResolutionMap.set(f.field_key, f);
+  // Build schema lookup
+  const schemaMap = schemaFields
+    ? new Map(schemaFields.map((sf) => [sf.field_key, sf]))
+    : null;
+
+  // Build reconciliation lookup
+  const reconMap = new Map<string, FieldReconciliation>();
+  if (reconciliation) {
+    for (const f of reconciliation.fields) {
+      reconMap.set(f.field_key, f);
+    }
   }
 
-  return issues.filter((issue) => {
-    if (issue.type !== "completeness" || !issue.field_key) return true;
-    const recon = fieldResolutionMap.get(issue.field_key);
-    if (!recon) return true;
-    if (recon.resolution === "confirmed_match") return false;
-    if (recon.resolution === "likely_correction") return false;
-    return true;
-  }).map((issue) => {
-    if (!issue.field_key) return issue;
-    const recon = fieldResolutionMap.get(issue.field_key);
-    if (!recon) return issue;
-
-    if (issue.type === "completeness" && recon.resolution === "possible_discrepancy") {
-      return {
-        ...issue,
-        type: "consistency" as ReviewIssueType,
-        explanation: `${issue.explanation} (Notes and completed form differ — possible discrepancy)`,
-      };
+  const result = issues.filter((issue) => {
+    // Tone, bias, policy_language on narrative text: always keep
+    if (issue.type === "tone" || issue.type === "bias" || issue.type === "policy_language") {
+      return true;
     }
 
-    if (issue.type === "completeness" && recon.resolution === "unresolved" && reconciliation.template_parse_confidence === "low") {
-      return {
-        ...issue,
-        severity: "low" as ReviewSeverity,
-        explanation: `${issue.explanation} (Low parse confidence — manual verification recommended)`,
-      };
+    // Completeness or consistency: only keep if field is narrative-eligible
+    if (issue.field_key) {
+      const sf = schemaMap?.get(issue.field_key);
+      if (sf) {
+        if (issue.type === "completeness" && !isReviewerNarrativeCompletionField(sf)) {
+          suppressed++;
+          return false;
+        }
+        if (issue.type === "consistency" && !isReviewerLanguageField(sf)) {
+          suppressed++;
+          return false;
+        }
+      }
+
+      // Reconciliation-aware suppression for narrative fields
+      if (reconciliation?.reliable_for_review) {
+        const recon = reconMap.get(issue.field_key);
+        if (recon) {
+          // Confirmed matches — suppress completeness
+          if (issue.type === "completeness" && recon.resolution === "confirmed_match") {
+            suppressed++;
+            return false;
+          }
+          // Likely corrections — suppress completeness
+          if (issue.type === "completeness" && recon.resolution === "likely_correction") {
+            suppressed++;
+            return false;
+          }
+        }
+      }
+    }
+
+    return true;
+  }).map((issue) => {
+    // Reclassify completeness → consistency for discrepancies (narrative only)
+    if (issue.field_key && issue.type === "completeness" && reconciliation?.reliable_for_review) {
+      const recon = reconMap.get(issue.field_key);
+      if (recon?.resolution === "possible_discrepancy") {
+        reclassified++;
+        return {
+          ...issue,
+          type: "consistency" as ReviewIssueType,
+          explanation: `${issue.explanation} (Notes and completed form differ in narrative content)`,
+        };
+      }
+    }
+
+    // Downgrade severity for low-confidence parse
+    if (issue.field_key && issue.type === "completeness" && reconciliation?.template_parse_confidence === "low") {
+      const recon = reconMap.get(issue.field_key);
+      if (recon?.resolution === "unresolved") {
+        return {
+          ...issue,
+          severity: "low" as ReviewSeverity,
+          explanation: `${issue.explanation} (Low parse confidence — manual verification recommended)`,
+        };
+      }
     }
 
     return issue;
   });
+
+  return { filtered: result, suppressed, reclassified };
 }
 
 // ─── Auto-ensure parser artifact ─────────────────────────
@@ -581,12 +641,26 @@ export default function Reviewer() {
     };
 
     if (schemaFields && schemaFields.length > 0) {
+      // Compute eligibility diagnostics
+      const eligibility = computeEligibilityDiagnostics(schemaFields);
+      diagnostics.eligibility = eligibility;
+      if (import.meta.env.DEV) {
+        console.log("[Reviewer] Field eligibility:", eligibility);
+      }
+
       try {
         const recovery = recoverFieldsFromDocument(extractedFullText, schemaFields);
         structured_answers = recovery.structured_answers;
-        review_worthy_answers = recovery.review_worthy_answers;
-        unanswered_fields = recovery.unanswered_fields;
+        // LANGUAGE-FIRST: Only send narrative-eligible fields for review
+        review_worthy_answers = filterToReviewerEligible(recovery.review_worthy_answers);
+        unanswered_fields = filterUnansweredToNarrativeOnly(recovery.unanswered_fields, schemaFields);
         human_review_fields = recovery.human_review_fields;
+
+        diagnostics.raw_review_worthy_count = recovery.review_worthy_answers.length;
+        diagnostics.filtered_review_worthy_count = review_worthy_answers.length;
+        diagnostics.raw_unanswered_count = recovery.unanswered_fields.length;
+        diagnostics.filtered_unanswered_count = unanswered_fields.length;
+
         setRecoveryStats({
           answered: structured_answers.filter((a) => !a.missing && !a.requires_human_review).length,
           missing: unanswered_fields.length,
@@ -604,27 +678,15 @@ export default function Reviewer() {
             diagnostics.fields_parsed = localTemplateParse.fields.length;
             diagnostics.sections_parsed = localTemplateParse.sections_parsed.length;
 
-            /**
-             * SECURITY: Determine notes-side comparison source.
-             *
-             * Priority 1: Unlocked vault packet (true notes-side source of truth)
-             *   — This is the secure comparison: notes extraction vs completed form
-             * Priority 2: Field recovery from the uploaded document
-             *   — This compares the document against itself (template-only tier)
-             *
-             * We NEVER fall back to loading Phase 2 data from backend metadata.
-             */
             let notesForReconciliation: RecoveredField[];
 
             if (vault.unlockedPacket) {
-              // TRUE NOTES-TO-FORM COMPARISON: use the secure vault packet
               notesForReconciliation = packetToRecoveredFields(vault.unlockedPacket);
               usedNotesSource = "case_notes";
               tier = "full";
               diagnostics.notes_source = "vault_packet";
               diagnostics.vault_packet_fields = vault.unlockedPacket.answers.length;
             } else {
-              // TEMPLATE-ONLY COMPARISON: compare form recovery against template parse
               notesForReconciliation = structured_answers;
               usedNotesSource = "field_recovery";
               diagnostics.notes_source = "field_recovery";
@@ -635,13 +697,30 @@ export default function Reviewer() {
               localTemplateParse.fields,
               localTemplateParse.overall_confidence,
             );
+
+            // LANGUAGE-FIRST: Filter reconciliation to narrative-eligible fields only
+            const rawReconFieldCount = localReconciliation.fields.length;
+            localReconciliation = {
+              ...localReconciliation,
+              fields: filterReconciliationToNarrative(localReconciliation.fields),
+            };
+            diagnostics.raw_reconciliation_fields = rawReconFieldCount;
+            diagnostics.narrative_reconciliation_fields = localReconciliation.fields.length;
+
+            // Recompute counts from filtered fields
+            localReconciliation.matches = localReconciliation.fields.filter(f => f.resolution === "confirmed_match").length;
+            localReconciliation.mismatches = localReconciliation.fields.filter(f => f.status === "mismatch").length;
+            localReconciliation.possible_discrepancies = localReconciliation.fields.filter(f => f.resolution === "possible_discrepancy").length;
+            localReconciliation.likely_omissions = localReconciliation.fields.filter(f => f.resolution === "likely_omission").length;
+            localReconciliation.likely_corrections = localReconciliation.fields.filter(f => f.resolution === "likely_correction").length;
+            localReconciliation.unresolved = localReconciliation.fields.filter(f => f.resolution === "unresolved").length;
+            localReconciliation.total_fields = localReconciliation.fields.length;
+
             setReconciliationResult(localReconciliation);
             diagnostics.reconciliation_used = true;
             diagnostics.reconciliation_matches = localReconciliation.matches;
-            diagnostics.reconciliation_mismatches = localReconciliation.mismatches;
             diagnostics.reconciliation_discrepancies = localReconciliation.possible_discrepancies;
             diagnostics.reconciliation_omissions = localReconciliation.likely_omissions;
-            diagnostics.reconciliation_corrections = localReconciliation.likely_corrections;
             diagnostics.reconciliation_reliable = localReconciliation.reliable_for_review;
           } catch (err) {
             console.warn("[Reviewer] Template parse/reconciliation failed:", err);
@@ -679,6 +758,7 @@ export default function Reviewer() {
 
     try {
       // Build reconciliation-aware payload for Reviewer
+      // LANGUAGE-FIRST: Only include narrative-eligible reconciliation data
       const reconciliationContext = localReconciliation && localReconciliation.reliable_for_review ? {
         reconciliation_summary: {
           matches: localReconciliation.matches,
@@ -714,12 +794,16 @@ export default function Reviewer() {
         adjustedUnanswered = unanswered_fields.filter(f => !suppressedKeys.has(f.field_key));
       }
 
+      // LANGUAGE-FIRST: Only send narrative-eligible structured answers
+      const eligibleStructuredAnswers = structured_answers.filter(isRecoveredFieldReviewerEligible);
+
       const payload = {
         session_id: sessionInfo.sessionUuid,
         template_id: sessionInfo.templateId || undefined,
         phase2_schema_id: sessionInfo.phase2SchemaId || undefined,
         document_text: extractedFullText,
-        structured_answers, review_worthy_answers,
+        structured_answers: eligibleStructuredAnswers,
+        review_worthy_answers,
         unanswered_fields: adjustedUnanswered,
         human_review_fields,
         reconciliation_context: reconciliationContext,
@@ -751,16 +835,10 @@ export default function Reviewer() {
       if (!data?.review_report) throw new Error("Invalid response from reviewer");
       let report = data.review_report as ReviewerV2Report;
 
-      // Post-process: apply reconciliation-aware filtering
-      const issuesBefore = (data.review_report as ReviewerV2Report).issues.length;
-      const filteredIssues = applyReconciliationToIssues(
-        (data.review_report as ReviewerV2Report).issues,
-        localReconciliation,
-      );
-      const completenessSuppressions = issuesBefore - filteredIssues.length;
-      const discrepancyReclassifications = filteredIssues.filter(
-        (i) => i.type === "consistency" && i.explanation.includes("possible discrepancy"),
-      ).length;
+      // LANGUAGE-FIRST post-processing: suppress structured-field findings
+      const issuesBefore = report.issues.length;
+      const { filtered: filteredIssues, suppressed: completenessSuppressions, reclassified: discrepancyReclassifications } =
+        applyLanguageFirstFiltering(report.issues, localReconciliation, schemaFields);
 
       report = {
         ...report,
@@ -989,9 +1067,12 @@ export default function Reviewer() {
             <div className="w-full max-w-lg space-y-4">
               <div className="text-center mb-6">
                 <Shield className="h-10 w-10 mx-auto text-primary/30 mb-3" />
-                <h2 className="text-lg font-semibold text-foreground">Review a completed document</h2>
+                <h2 className="text-lg font-semibold text-foreground">Review authored language</h2>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Upload the filled-out form to check for tone, bias, policy language, and completeness.
+                  Upload the completed form to check authored narrative text for tone, bias, policy language, and clarity.
+                </p>
+                <p className="text-[11px] text-muted-foreground/70 mt-1">
+                  Reviewer focuses on authored language quality — it does not verify every checkbox or structured field.
                 </p>
               </div>
 
@@ -1215,10 +1296,10 @@ export default function Reviewer() {
                     <div className="text-center py-10">
                       <Shield className="h-10 w-10 mx-auto text-muted-foreground/20 mb-3" />
                       <p className="text-sm text-muted-foreground">
-                        {extracting ? "Waiting for extraction…" : canRun ? "Ready to review" : "Upload a document to begin"}
-                      </p>
-                      <p className="text-xs text-muted-foreground/70 mt-1">
-                        Checks tone, bias, policy language, and completeness
+                         {extracting ? "Waiting for extraction…" : canRun ? "Ready to review" : "Upload a document to begin"}
+                       </p>
+                       <p className="text-xs text-muted-foreground/70 mt-1">
+                         Reviews authored narrative language for tone, bias, and policy compliance
                       </p>
                     </div>
                   )}
@@ -1237,7 +1318,7 @@ export default function Reviewer() {
                     <div className="text-center py-10">
                       <Loader2 className="h-8 w-8 mx-auto text-primary animate-spin mb-3" />
                       <p className="text-sm text-muted-foreground">Analyzing document…</p>
-                      <p className="text-xs text-muted-foreground/70 mt-1">Checking tone, bias, policy language, and completeness</p>
+                      <p className="text-xs text-muted-foreground/70 mt-1">Analyzing authored narrative for tone, bias, and policy language</p>
                       {recoveryStats && (
                         <div className="flex items-center justify-center gap-2 mt-3 flex-wrap">
                           <Badge variant="outline" className="text-[10px]">{recoveryStats.answered} recovered</Badge>
@@ -1384,7 +1465,9 @@ export default function Reviewer() {
                         </div>
                       )}
 
-                      <p className="text-[10px] text-muted-foreground italic">AI-generated audit — review before acting.</p>
+                       <p className="text-[10px] text-muted-foreground italic">
+                         AI-generated language audit — focuses on authored narrative text. Does not verify every structured field.
+                       </p>
 
                       {totalIssues === 0 && (
                         <div className="text-center py-6">
