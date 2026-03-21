@@ -212,6 +212,7 @@ export default function Guidance() {
   // Determine if we should show a specific error banner
   const isTemplateRequired = runError?.code === "TEMPLATE_REQUIRED";
   const isScopeRequired = runError?.code === "SCOPE_REQUIRED";
+  const isDomainMismatch = runError?.code === "DOMAIN_MISMATCH";
 
   // Group questions by category — dynamic to handle both old fixed categories
   // and new schema-driven categories (e.g. template section names)
