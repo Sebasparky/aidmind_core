@@ -127,7 +127,7 @@ export function ReconciliationPanel({ result, notesSource }: ReconciliationPanel
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <ArrowRightLeft className="h-3.5 w-3.5 text-primary" />
-          <span className="text-xs font-medium text-foreground">Field Comparison</span>
+          <span className="text-xs font-medium text-foreground">Narrative Comparison</span>
         </div>
         <Badge variant="outline" className={cn("text-[10px]", confidence.className)}>
           Parse confidence: {confidence.text}
