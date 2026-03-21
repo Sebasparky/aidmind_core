@@ -764,6 +764,7 @@ export default function Reviewer() {
 
     try {
       // Build reconciliation-aware payload for Reviewer
+      // LANGUAGE-FIRST: Only include narrative-eligible reconciliation data
       const reconciliationContext = localReconciliation && localReconciliation.reliable_for_review ? {
         reconciliation_summary: {
           matches: localReconciliation.matches,
@@ -799,12 +800,16 @@ export default function Reviewer() {
         adjustedUnanswered = unanswered_fields.filter(f => !suppressedKeys.has(f.field_key));
       }
 
+      // LANGUAGE-FIRST: Only send narrative-eligible structured answers
+      const eligibleStructuredAnswers = structured_answers.filter(isRecoveredFieldReviewerEligible);
+
       const payload = {
         session_id: sessionInfo.sessionUuid,
         template_id: sessionInfo.templateId || undefined,
         phase2_schema_id: sessionInfo.phase2SchemaId || undefined,
         document_text: extractedFullText,
-        structured_answers, review_worthy_answers,
+        structured_answers: eligibleStructuredAnswers,
+        review_worthy_answers,
         unanswered_fields: adjustedUnanswered,
         human_review_fields,
         reconciliation_context: reconciliationContext,
