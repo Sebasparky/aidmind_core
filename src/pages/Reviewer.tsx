@@ -1073,9 +1073,12 @@ export default function Reviewer() {
             <div className="w-full max-w-lg space-y-4">
               <div className="text-center mb-6">
                 <Shield className="h-10 w-10 mx-auto text-primary/30 mb-3" />
-                <h2 className="text-lg font-semibold text-foreground">Review a completed document</h2>
+                <h2 className="text-lg font-semibold text-foreground">Review authored language</h2>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Upload the filled-out form to check for tone, bias, policy language, and completeness.
+                  Upload the completed form to check authored narrative text for tone, bias, policy language, and clarity.
+                </p>
+                <p className="text-[11px] text-muted-foreground/70 mt-1">
+                  Reviewer focuses on authored language quality — it does not verify every checkbox or structured field.
                 </p>
               </div>
 
