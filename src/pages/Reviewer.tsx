@@ -841,16 +841,10 @@ export default function Reviewer() {
       if (!data?.review_report) throw new Error("Invalid response from reviewer");
       let report = data.review_report as ReviewerV2Report;
 
-      // Post-process: apply reconciliation-aware filtering
-      const issuesBefore = (data.review_report as ReviewerV2Report).issues.length;
-      const filteredIssues = applyReconciliationToIssues(
-        (data.review_report as ReviewerV2Report).issues,
-        localReconciliation,
-      );
-      const completenessSuppressions = issuesBefore - filteredIssues.length;
-      const discrepancyReclassifications = filteredIssues.filter(
-        (i) => i.type === "consistency" && i.explanation.includes("possible discrepancy"),
-      ).length;
+      // LANGUAGE-FIRST post-processing: suppress structured-field findings
+      const issuesBefore = report.issues.length;
+      const { filtered: filteredIssues, suppressed: completenessSuppressions, reclassified: discrepancyReclassifications } =
+        applyLanguageFirstFiltering(report.issues, localReconciliation, schemaFields);
 
       report = {
         ...report,
