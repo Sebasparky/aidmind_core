@@ -548,8 +548,8 @@ serve(async (req) => {
 
     const reportObj = report as Record<string, any>;
 
-    // Post-process: deduplicate completeness issues
-    reportObj.issues = dedupeCompletenessIssues(reportObj.issues);
+    // Post-process: filter blocked structured fields + deduplicate completeness
+    reportObj.issues = dedupeAndFilterIssues(reportObj.issues);
     recalcMetrics(reportObj);
 
     await eye(supabase, v2.session_id, "reviewer_v2.completed", {
