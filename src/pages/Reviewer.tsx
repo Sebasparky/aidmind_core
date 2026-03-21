@@ -1324,7 +1324,7 @@ export default function Reviewer() {
                     <div className="text-center py-10">
                       <Loader2 className="h-8 w-8 mx-auto text-primary animate-spin mb-3" />
                       <p className="text-sm text-muted-foreground">Analyzing document…</p>
-                      <p className="text-xs text-muted-foreground/70 mt-1">Checking tone, bias, policy language, and completeness</p>
+                      <p className="text-xs text-muted-foreground/70 mt-1">Analyzing authored narrative for tone, bias, and policy language</p>
                       {recoveryStats && (
                         <div className="flex items-center justify-center gap-2 mt-3 flex-wrap">
                           <Badge variant="outline" className="text-[10px]">{recoveryStats.answered} recovered</Badge>
