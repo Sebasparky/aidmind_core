@@ -25,3 +25,7 @@ dist-ssr
 # Local Supabase temp folders
 supabase/.branches/
 supabase/.temp/
+
+.venv/
+workers/kb_extractor/.venv/
+workers_local_backup/
