@@ -294,34 +294,35 @@ function validateV2Body(body: unknown): body is V2Body {
 function buildUserMessage(body: V2Body): string {
   const parts: string[] = [];
 
-  parts.push("Review the following completed case document.\n");
+  parts.push("Review the authored narrative language in the following completed case document.\n");
+  parts.push("IMPORTANT: You are reviewing AUTHORED TEXT QUALITY only. Do NOT flag structured fields (checkboxes, dates, booleans, demographics, identifiers) as missing or incomplete.\n");
 
   // Reconciliation context (highest priority framing)
   if (body.reconciliation_context) {
     const rc = body.reconciliation_context;
-    parts.push("RECONCILIATION CONTEXT (comparison between case notes and completed form):");
+    parts.push("NARRATIVE RECONCILIATION CONTEXT (comparison between case notes and completed form — narrative fields only):");
     if (rc.reconciliation_summary) {
       const s = rc.reconciliation_summary;
       parts.push(`  Parse confidence: ${s.template_parse_confidence}`);
-      parts.push(`  Matches: ${s.matches}, Corrections: ${s.likely_corrections}, Discrepancies: ${s.possible_discrepancies}, Omissions: ${s.likely_omissions}, Unresolved: ${s.unresolved}`);
+      parts.push(`  Narrative matches: ${s.matches}, Corrections: ${s.likely_corrections}, Discrepancies: ${s.possible_discrepancies}, Omissions: ${s.likely_omissions}`);
     }
     if (rc.confirmed_fields && rc.confirmed_fields.length > 0) {
-      parts.push(`  CONFIRMED FIELDS (present in both notes and form — do NOT flag): ${rc.confirmed_fields.join(", ")}`);
+      parts.push(`  CONFIRMED NARRATIVE FIELDS (present in both — do NOT flag): ${rc.confirmed_fields.join(", ")}`);
     }
     if (rc.likely_corrections && rc.likely_corrections.length > 0) {
-      parts.push("  LIKELY CORRECTIONS (form intentionally refined from notes — NOT errors):");
+      parts.push("  NARRATIVE CORRECTIONS (form intentionally refined from notes — NOT errors):");
       for (const c of rc.likely_corrections.slice(0, 15)) {
         parts.push(`    ${c.field_key}: notes="${(c.notes || "").slice(0, 40)}" → form="${(c.form || "").slice(0, 40)}"`);
       }
     }
     if (rc.discrepancies && rc.discrepancies.length > 0) {
-      parts.push("  DISCREPANCIES (notes and form genuinely differ — report as CONSISTENCY issues):");
+      parts.push("  NARRATIVE DISCREPANCIES (notes and form genuinely differ — report as CONSISTENCY issues):");
       for (const d of rc.discrepancies.slice(0, 15)) {
         parts.push(`    ${d.field_key} [${d.section}]: notes="${(d.notes || "").slice(0, 40)}" ≠ form="${(d.form || "").slice(0, 40)}"`);
       }
     }
     if (rc.omissions && rc.omissions.length > 0) {
-      parts.push("  OMISSIONS (in notes but missing from form — report as COMPLETENESS issues):");
+      parts.push("  NARRATIVE OMISSIONS (in notes but missing from form — report as COMPLETENESS issues):");
       for (const o of rc.omissions.slice(0, 15)) {
         parts.push(`    ${o.field_key} [${o.section}]: "${(o.notes_value || "").slice(0, 50)}"`);
       }
@@ -329,34 +330,34 @@ function buildUserMessage(body: V2Body): string {
     parts.push("");
   }
 
-  // Review-worthy answers
+  // Review-worthy answers (authored narrative text — primary targets)
   const reviewWorthy = body.review_worthy_answers ?? [];
   if (reviewWorthy.length > 0) {
-    parts.push("REVIEW-WORTHY ANSWERS (authored text — check for tone, bias, policy language):");
+    parts.push("AUTHORED NARRATIVE TEXT (primary review targets — check for tone, bias, policy language, clarity):");
     for (const a of reviewWorthy) {
       if (a.requires_human_review) continue;
       const conf = a.recovery_confidence === "low" ? " [low confidence]" : "";
-      const val = a.missing ? "(blank — not recovered)" : (a.answer || "(blank)");
+      const val = a.missing ? "(blank — narrative section appears empty)" : (a.answer || "(blank)");
       parts.push(`  ${a.label}: ${val}${conf}`);
     }
     parts.push("");
   }
 
-  // Structured answers summary
+  // Narrative-eligible structured answers (for context only)
   if (body.structured_answers && body.structured_answers.length > 0) {
-    parts.push("ALL STRUCTURED FIELDS (for completeness and consistency checks only — do NOT review these for tone/bias):");
+    parts.push("NARRATIVE-ELIGIBLE FIELDS (for context — do NOT flag checkbox, date, boolean, demographic, or identifier fields):");
     for (const a of body.structured_answers) {
       if (a.requires_human_review) continue;
-      const status = a.missing ? "[MISSING]" : `[${a.recovery_confidence}]`;
+      const status = a.missing ? "[BLANK]" : `[${a.recovery_confidence}]`;
       const val = a.answer || "(blank)";
       parts.push(`  ${status} ${a.label}: ${val}`);
     }
     parts.push("");
   }
 
-  // Unanswered fields
+  // Unanswered narrative fields (only these qualify for completeness)
   if (body.unanswered_fields && body.unanswered_fields.length > 0) {
-    parts.push("UNANSWERED FIELDS (not found in document — report ONE completeness issue per field):");
+    parts.push("BLANK NARRATIVE SECTIONS (these are narrative fields that appear empty — report ONE completeness issue per field):");
     for (const f of body.unanswered_fields) {
       parts.push(`  - ${f.label} (field_key: ${f.field_key})`);
     }
@@ -373,7 +374,7 @@ function buildUserMessage(body: V2Body): string {
   }
 
   // Raw document text
-  parts.push("DOCUMENT TEXT (backup context for tone/bias/policy-language review):");
+  parts.push("DOCUMENT TEXT (use for reviewing all authored narrative language for tone, bias, and policy compliance):");
   const docText = body.document_text.length > MAX_DOC_TEXT_CHARS
     ? body.document_text.slice(0, MAX_DOC_TEXT_CHARS)
     : body.document_text;
