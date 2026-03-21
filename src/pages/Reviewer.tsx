@@ -209,22 +209,13 @@ function applyLanguageFirstFiltering(
     if (issue.field_key) {
       const sf = schemaMap?.get(issue.field_key);
       if (sf) {
-        // For completeness, check narrative completion eligibility
-        if (issue.type === "completeness") {
-          // Import is at top of file
-          const { isReviewerNarrativeCompletionField: isNarrativeCompletion } = await import("@/lib/tools/reviewer-eligibility");
-          if (!isNarrativeCompletion(sf)) {
-            suppressed++;
-            return false;
-          }
+        if (issue.type === "completeness" && !isReviewerNarrativeCompletionField(sf)) {
+          suppressed++;
+          return false;
         }
-        // For consistency, check language eligibility
-        if (issue.type === "consistency") {
-          const { isReviewerLanguageField: isLangField } = await import("@/lib/tools/reviewer-eligibility");
-          if (!isLangField(sf)) {
-            suppressed++;
-            return false;
-          }
+        if (issue.type === "consistency" && !isReviewerLanguageField(sf)) {
+          suppressed++;
+          return false;
         }
       }
 
