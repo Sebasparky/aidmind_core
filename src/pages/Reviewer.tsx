@@ -647,12 +647,26 @@ export default function Reviewer() {
     };
 
     if (schemaFields && schemaFields.length > 0) {
+      // Compute eligibility diagnostics
+      const eligibility = computeEligibilityDiagnostics(schemaFields);
+      diagnostics.eligibility = eligibility;
+      if (import.meta.env.DEV) {
+        console.log("[Reviewer] Field eligibility:", eligibility);
+      }
+
       try {
         const recovery = recoverFieldsFromDocument(extractedFullText, schemaFields);
         structured_answers = recovery.structured_answers;
-        review_worthy_answers = recovery.review_worthy_answers;
-        unanswered_fields = recovery.unanswered_fields;
+        // LANGUAGE-FIRST: Only send narrative-eligible fields for review
+        review_worthy_answers = filterToReviewerEligible(recovery.review_worthy_answers);
+        unanswered_fields = filterUnansweredToNarrativeOnly(recovery.unanswered_fields, schemaFields);
         human_review_fields = recovery.human_review_fields;
+
+        diagnostics.raw_review_worthy_count = recovery.review_worthy_answers.length;
+        diagnostics.filtered_review_worthy_count = review_worthy_answers.length;
+        diagnostics.raw_unanswered_count = recovery.unanswered_fields.length;
+        diagnostics.filtered_unanswered_count = unanswered_fields.length;
+
         setRecoveryStats({
           answered: structured_answers.filter((a) => !a.missing && !a.requires_human_review).length,
           missing: unanswered_fields.length,
@@ -670,27 +684,15 @@ export default function Reviewer() {
             diagnostics.fields_parsed = localTemplateParse.fields.length;
             diagnostics.sections_parsed = localTemplateParse.sections_parsed.length;
 
-            /**
-             * SECURITY: Determine notes-side comparison source.
-             *
-             * Priority 1: Unlocked vault packet (true notes-side source of truth)
-             *   — This is the secure comparison: notes extraction vs completed form
-             * Priority 2: Field recovery from the uploaded document
-             *   — This compares the document against itself (template-only tier)
-             *
-             * We NEVER fall back to loading Phase 2 data from backend metadata.
-             */
             let notesForReconciliation: RecoveredField[];
 
             if (vault.unlockedPacket) {
-              // TRUE NOTES-TO-FORM COMPARISON: use the secure vault packet
               notesForReconciliation = packetToRecoveredFields(vault.unlockedPacket);
               usedNotesSource = "case_notes";
               tier = "full";
               diagnostics.notes_source = "vault_packet";
               diagnostics.vault_packet_fields = vault.unlockedPacket.answers.length;
             } else {
-              // TEMPLATE-ONLY COMPARISON: compare form recovery against template parse
               notesForReconciliation = structured_answers;
               usedNotesSource = "field_recovery";
               diagnostics.notes_source = "field_recovery";
@@ -701,13 +703,30 @@ export default function Reviewer() {
               localTemplateParse.fields,
               localTemplateParse.overall_confidence,
             );
+
+            // LANGUAGE-FIRST: Filter reconciliation to narrative-eligible fields only
+            const rawReconFieldCount = localReconciliation.fields.length;
+            localReconciliation = {
+              ...localReconciliation,
+              fields: filterReconciliationToNarrative(localReconciliation.fields),
+            };
+            diagnostics.raw_reconciliation_fields = rawReconFieldCount;
+            diagnostics.narrative_reconciliation_fields = localReconciliation.fields.length;
+
+            // Recompute counts from filtered fields
+            localReconciliation.matches = localReconciliation.fields.filter(f => f.resolution === "confirmed_match").length;
+            localReconciliation.mismatches = localReconciliation.fields.filter(f => f.status === "mismatch").length;
+            localReconciliation.possible_discrepancies = localReconciliation.fields.filter(f => f.resolution === "possible_discrepancy").length;
+            localReconciliation.likely_omissions = localReconciliation.fields.filter(f => f.resolution === "likely_omission").length;
+            localReconciliation.likely_corrections = localReconciliation.fields.filter(f => f.resolution === "likely_correction").length;
+            localReconciliation.unresolved = localReconciliation.fields.filter(f => f.resolution === "unresolved").length;
+            localReconciliation.total_fields = localReconciliation.fields.length;
+
             setReconciliationResult(localReconciliation);
             diagnostics.reconciliation_used = true;
             diagnostics.reconciliation_matches = localReconciliation.matches;
-            diagnostics.reconciliation_mismatches = localReconciliation.mismatches;
             diagnostics.reconciliation_discrepancies = localReconciliation.possible_discrepancies;
             diagnostics.reconciliation_omissions = localReconciliation.likely_omissions;
-            diagnostics.reconciliation_corrections = localReconciliation.likely_corrections;
             diagnostics.reconciliation_reliable = localReconciliation.reliable_for_review;
           } catch (err) {
             console.warn("[Reviewer] Template parse/reconciliation failed:", err);
