@@ -161,36 +161,66 @@ const SCOPE_OPERATIONAL_TERMS: Record<string, string[]> = {
     "housing stability", "chronic homelessness", "rapid re-housing",
     "lease", "landlord", "utility", "housing assessment",
   ],
+  employment_income: [
+    "employment history", "income sources", "wages", "salary", "benefits",
+    "job readiness", "vocational training", "work experience", "employer",
+    "financial statement", "assets", "liabilities", "debts", "expenses",
+    "budget", "financial assessment", "earning capacity", "unemployment",
+    "self-employment", "child support", "alimony", "spousal support",
+    "tax returns", "bank accounts", "investments", "retirement",
+  ],
+  disability_services: [
+    "disability", "functional limitations", "accommodations", "assistive",
+    "independent living", "supported employment", "personal care",
+    "disability assessment", "accessibility", "adaptive equipment",
+  ],
+  elder_services: [
+    "aging", "senior care", "long-term care", "caregiver support",
+    "elder abuse", "geriatric assessment", "activities of daily living",
+    "home and community-based", "medicare", "medicaid",
+  ],
+  immigration_refugee: [
+    "immigration status", "refugee", "asylum", "resettlement",
+    "cultural adjustment", "language access", "documentation",
+    "eligibility verification", "legal status",
+  ],
+  reentry_justice: [
+    "reentry", "parole", "probation", "recidivism", "transitional",
+    "post-incarceration", "justice-involved", "barriers to reentry",
+  ],
+  social_welfare: [
+    "public assistance", "benefits eligibility", "case management",
+    "client needs", "social services", "community resources",
+    "service coordination", "supportive services",
+  ],
 };
 
 /**
  * Generic positive signals indicating assessment/intake/interview utility.
+ * IMPORTANT: These must be domain-neutral. Domain-specific terms belong
+ * in SCOPE_OPERATIONAL_TERMS to avoid cross-domain contamination.
  */
 const USEFULNESS_POSITIVE_PHRASES: string[] = [
   "assessment", "screening", "intake", "interview", "evaluate", "determine",
   "document", "documentation", "required information", "data collection",
   "risk factors", "safety factors", "indicators", "criteria", "checklist",
   "responsibilities", "required reporting", "must assess", "shall document",
-  "caseworker", "case worker", "worker must", "worker shall", "worker should",
   "information gathering", "questions to ask", "areas to explore",
   "factors to consider", "elements to assess", "items to document",
   "referral", "service coordination", "agency involvement", "provider",
-  "records", "case plan", "service plan", "treatment plan",
-  "household composition", "family members", "caregiver", "parent",
-  "child", "children", "placement", "living arrangement",
-  "safety", "risk", "protective factors", "strengths",
+  "records", "service plan", "treatment plan",
   "prior history", "prior services", "prior contact", "prior involvement",
-  "visit", "home visit", "observation",
+  "visit", "observation",
 ];
 
 /**
  * Concrete case-fact nouns that indicate operational content.
+ * Domain-neutral only — scope-specific nouns are in SCOPE_OPERATIONAL_TERMS.
  */
 const USEFULNESS_FACT_NOUNS: string[] = [
-  "child", "parent", "caregiver", "household", "family", "placement",
   "safety", "risk", "services", "referral", "treatment", "records",
-  "case plan", "assessment", "screening", "documentation", "visit",
-  "agency", "provider", "medication", "diagnosis", "symptoms",
+  "assessment", "screening", "documentation",
+  "agency", "provider", "eligibility",
   "income", "housing", "employment", "education", "transportation",
 ];
 
@@ -311,17 +341,18 @@ function computeEvidenceUsefulness(content: string, scope?: string | null): numb
  * This score is stored in chunk metadata for downstream use by the generation validator.
  */
 const INTERVIEWABLE_POSITIVE: string[] = [
-  "injury", "injuries", "injured", "household", "who lives",
-  "substance abuse", "substance use", "housing", "homeless", "eviction",
+  "household", "who lives",
+  "housing", "homeless", "eviction",
   "safety concern", "safety factor", "risk factor", "protective factor",
-  "caregiver", "parent", "child", "children", "family member",
   "prior services", "community services", "agency involved",
   "referral", "treatment", "medication", "diagnosis",
   "employment", "income", "education", "transportation",
-  "living arrangement", "placement", "supervision",
+  "living arrangement", "supervision",
   "mental health", "behavioral health", "symptoms",
   "domestic violence", "intimate partner",
   "dates", "when did", "how long", "how often",
+  "financial", "assets", "liabilities", "debts", "expenses", "budget",
+  "disability", "accommodations", "eligibility", "benefits",
 ];
 
 const INTERVIEWABLE_NEGATIVE: string[] = [
@@ -539,6 +570,18 @@ function buildRetrievalQuery(
       "danger/lethality assessment, safety planning, incident documentation, children's exposure, protective factors, service coordination",
     housing_homelessness:
       "housing assessment, barriers documentation, housing history, stability factors, service needs, resource coordination",
+    employment_income:
+      "employment history, income verification, financial assessment, assets and liabilities, earning capacity, employment barriers, vocational assessment, budget analysis, financial statement review",
+    disability_services:
+      "disability assessment, functional limitations, accommodations needs, supported employment, independent living assessment, assistive technology needs",
+    elder_services:
+      "geriatric assessment, activities of daily living, long-term care needs, caregiver capacity, elder abuse screening, home safety assessment",
+    immigration_refugee:
+      "immigration status verification, resettlement needs, cultural adjustment assessment, language access needs, eligibility documentation",
+    reentry_justice:
+      "reentry needs assessment, barriers to reentry, community supervision requirements, transitional service needs, recidivism risk factors",
+    social_welfare:
+      "needs assessment, benefits eligibility screening, service coordination, resource identification, case management planning",
   };
 
   const scopeOpsIntent = scope ? SCOPE_OPERATIONAL_INTENTS[scope] : null;

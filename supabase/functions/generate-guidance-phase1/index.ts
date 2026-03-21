@@ -691,6 +691,81 @@ Deno.serve(async (req) => {
       console.warn(`[generate-guidance-phase1] Policy pack is ${Math.round((lowInfoCount / snippets.length) * 100)}% low-info snippets`);
     }
 
+    // ── 2c. Domain-sanity check: detect cross-domain snippet contamination ──
+    const DOMAIN_MARKERS: Record<string, { positive: RegExp[]; negative: RegExp[] }> = {
+      child_welfare: {
+        positive: [/\bchild\s+(welfare|protection|safety|abuse|neglect)\b/i, /\bfoster\s+(care|parent)\b/i, /\bCPS\b/, /\bmaltreatment\b/i, /\bchild(ren)?\s+in\s+(the\s+)?home\b/i],
+        negative: [],
+      },
+      employment_income: {
+        positive: [/\b(employment|income|wage|salary|financial|asset|liabilit|earning|vocational|budget)\b/i],
+        negative: [/\bchild\s+(welfare|protection|safety|abuse|neglect)\b/i, /\bfoster\s+(care|parent)\b/i, /\bCPS\b/, /\bmaltreatment\b/i],
+      },
+      mental_health: {
+        positive: [/\b(mental\s+health|psychiatric|behavioral\s+health|diagnosis|symptoms)\b/i],
+        negative: [],
+      },
+      substance_use: {
+        positive: [/\b(substance\s+(use|abuse)|withdrawal|MAT\b|medication[\s-]assisted|detox)\b/i],
+        negative: [],
+      },
+      housing_homelessness: {
+        positive: [/\b(housing|homeless|eviction|shelter|transitional\s+housing)\b/i],
+        negative: [],
+      },
+    };
+
+    const markers = DOMAIN_MARKERS[guidanceScope];
+    let domainRelevantSnippets = 0;
+    let crossDomainSnippets = 0;
+    if (markers) {
+      for (const s of snippets) {
+        const text = s.chunk_text || "";
+        const hasPositive = markers.positive.some(p => p.test(text));
+        const hasNegative = markers.negative.length > 0 && markers.negative.some(p => p.test(text));
+        if (hasPositive) domainRelevantSnippets++;
+        if (hasNegative && !hasPositive) crossDomainSnippets++;
+      }
+    }
+
+    const domainRelevanceRatio = snippets.length > 0 ? domainRelevantSnippets / snippets.length : 0;
+    const crossDomainRatio = snippets.length > 0 ? crossDomainSnippets / snippets.length : 0;
+    console.log(`[generate-guidance-phase1] DOMAIN_SANITY: scope=${guidanceScope} relevant=${domainRelevantSnippets}/${snippets.length} (${(domainRelevanceRatio * 100).toFixed(0)}%) cross_domain=${crossDomainSnippets} (${(crossDomainRatio * 100).toFixed(0)}%)`);
+
+    // If >60% of snippets are from a wrong domain and <10% are relevant, the policy pack is contaminated
+    const isPolicyPackContaminated = crossDomainRatio > 0.6 && domainRelevanceRatio < 0.1;
+    if (isPolicyPackContaminated) {
+      console.error(`[generate-guidance-phase1] DOMAIN_MISMATCH: Policy pack appears to be for a different domain than ${guidanceScope}. cross_domain=${(crossDomainRatio * 100).toFixed(0)}% relevant=${(domainRelevanceRatio * 100).toFixed(0)}%`);
+
+      await logEyeEvent(supabase, {
+        session_id: sessionIdResult.value,
+        event_type: "guidance.domain_mismatch",
+        serviceName: "generate-guidance-phase1",
+        payload: {
+          request_id: requestId,
+          guidance_scope: guidanceScope,
+          template_id: templateId,
+          snippet_count: snippets.length,
+          domain_relevant_count: domainRelevantSnippets,
+          cross_domain_count: crossDomainSnippets,
+          result: "failure",
+          severity: "HIGH",
+        },
+      });
+
+      return json(422, {
+        success: false,
+        error: `Policy pack domain mismatch: the compiled policy pack does not contain relevant content for scope "${guidanceScope.replace(/_/g, " ")}". The knowledge base may not have documents for this domain. Please upload relevant policy documents and recompile.`,
+        code: "DOMAIN_MISMATCH",
+        diagnostics: {
+          scope: guidanceScope,
+          snippet_count: snippets.length,
+          domain_relevant: domainRelevantSnippets,
+          cross_domain: crossDomainSnippets,
+        },
+      });
+    }
+
     // ── 3. Format snippets for LLM ──
     const snippetIdSet = new Set<string>();
     const formatted = snippets.map((s: { snippet_id: string; chunk_text: string }) => {
@@ -699,7 +774,7 @@ Deno.serve(async (req) => {
     }).join("\n\n");
 
     // ── 4. Build scope context ──
-    let scopeLine = `Session scope/type: ${guidanceScope}`;
+    let scopeLine = `Session scope/type: ${guidanceScope.replace(/_/g, " ")}`;
     if (guidanceScope === "other" && guidanceScopeOther) {
       scopeLine += `\nScope details: ${guidanceScopeOther}`;
     }
@@ -1125,6 +1200,24 @@ You are given policy excerpts relevant to the template being completed.
 
 Your task is to generate UP TO 12 targeted interview questions that help the caseworker gather the factual information needed to complete the template accurately.
 
+------------------------------------------------------------
+DOMAIN SCOPE ENFORCEMENT (CRITICAL — READ FIRST)
+
+The session scope is: ${scopeLine}
+
+EVERY question you generate MUST be relevant to this scope and this template.
+Do NOT generate questions about topics outside this scope, even if some policy snippets mention them.
+
+Examples of WRONG behavior:
+- If scope is "employment income", do NOT ask about children's safety, child welfare, foster care, Friend of the Court, substance abuse affecting children, or CPS.
+- If scope is "housing homelessness", do NOT ask about child maltreatment or family court.
+- If scope is "mental health", do NOT ask about employment barriers or housing eviction.
+
+If a policy snippet is from a different domain (e.g., child welfare snippets in an employment session), IGNORE that snippet entirely. Do NOT generate questions from off-scope snippets.
+
+Only generate questions that a caseworker would realistically ask in a ${scopeLine.replace("Session scope/type: ", "")} context.
+------------------------------------------------------------
+
 ${isSchemaRich ? `
 IMPORTANT: The template requirements above are your PRIMARY guide for what to ask about.
 Policy snippets help you ground questions in compliance context, but template structure determines WHAT information categories to cover.
@@ -1140,7 +1233,7 @@ CRITICAL GROUNDING RULES:
 ------------------------------------------------------------
 CLIENT-FACING QUESTION REQUIREMENT (CRITICAL)
 
-Every question MUST be something a caseworker could realistically ask a client, caregiver, or involved party face-to-face in plain, conversational language.
+Every question MUST be something a caseworker could realistically ask a client or involved party face-to-face in plain, conversational language.
 
 GOOD source types for question generation:
 - Template fields that need factual information from the client

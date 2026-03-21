@@ -212,6 +212,7 @@ export default function Guidance() {
   // Determine if we should show a specific error banner
   const isTemplateRequired = runError?.code === "TEMPLATE_REQUIRED";
   const isScopeRequired = runError?.code === "SCOPE_REQUIRED";
+  const isDomainMismatch = runError?.code === "DOMAIN_MISMATCH";
 
   // Group questions by category — dynamic to handle both old fixed categories
   // and new schema-driven categories (e.g. template section names)
@@ -338,6 +339,20 @@ export default function Guidance() {
               <AlertDescription className="text-sm">
                 This session was created before the scope requirement was added.
                 Please create a new session with a scope to use guidance.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Domain mismatch banner */}
+          {isDomainMismatch && (
+            <Alert className="mb-6 border-destructive/30 bg-destructive/5">
+              <AlertTriangle className="h-4 w-4 text-destructive" />
+              <AlertDescription className="text-sm">
+                <strong>Domain mismatch detected:</strong> The compiled policy pack does not contain relevant content for the selected scope ({scopeLabel}).
+                The knowledge base may not have policy documents for this domain.
+                <span className="block mt-1 text-muted-foreground">
+                  Upload relevant policy documents to the Knowledge Base, then return here and try again.
+                </span>
               </AlertDescription>
             </Alert>
           )}
