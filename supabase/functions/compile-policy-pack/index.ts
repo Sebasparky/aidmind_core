@@ -341,17 +341,18 @@ function computeEvidenceUsefulness(content: string, scope?: string | null): numb
  * This score is stored in chunk metadata for downstream use by the generation validator.
  */
 const INTERVIEWABLE_POSITIVE: string[] = [
-  "injury", "injuries", "injured", "household", "who lives",
-  "substance abuse", "substance use", "housing", "homeless", "eviction",
+  "household", "who lives",
+  "housing", "homeless", "eviction",
   "safety concern", "safety factor", "risk factor", "protective factor",
-  "caregiver", "parent", "child", "children", "family member",
   "prior services", "community services", "agency involved",
   "referral", "treatment", "medication", "diagnosis",
   "employment", "income", "education", "transportation",
-  "living arrangement", "placement", "supervision",
+  "living arrangement", "supervision",
   "mental health", "behavioral health", "symptoms",
   "domestic violence", "intimate partner",
   "dates", "when did", "how long", "how often",
+  "financial", "assets", "liabilities", "debts", "expenses", "budget",
+  "disability", "accommodations", "eligibility", "benefits",
 ];
 
 const INTERVIEWABLE_NEGATIVE: string[] = [
