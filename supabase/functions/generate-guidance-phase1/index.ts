@@ -1200,6 +1200,24 @@ You are given policy excerpts relevant to the template being completed.
 
 Your task is to generate UP TO 12 targeted interview questions that help the caseworker gather the factual information needed to complete the template accurately.
 
+------------------------------------------------------------
+DOMAIN SCOPE ENFORCEMENT (CRITICAL — READ FIRST)
+
+The session scope is: ${scopeLine}
+
+EVERY question you generate MUST be relevant to this scope and this template.
+Do NOT generate questions about topics outside this scope, even if some policy snippets mention them.
+
+Examples of WRONG behavior:
+- If scope is "employment income", do NOT ask about children's safety, child welfare, foster care, Friend of the Court, substance abuse affecting children, or CPS.
+- If scope is "housing homelessness", do NOT ask about child maltreatment or family court.
+- If scope is "mental health", do NOT ask about employment barriers or housing eviction.
+
+If a policy snippet is from a different domain (e.g., child welfare snippets in an employment session), IGNORE that snippet entirely. Do NOT generate questions from off-scope snippets.
+
+Only generate questions that a caseworker would realistically ask in a ${scopeLine.replace("Session scope/type: ", "")} context.
+------------------------------------------------------------
+
 ${isSchemaRich ? `
 IMPORTANT: The template requirements above are your PRIMARY guide for what to ask about.
 Policy snippets help you ground questions in compliance context, but template structure determines WHAT information categories to cover.
@@ -1215,7 +1233,7 @@ CRITICAL GROUNDING RULES:
 ------------------------------------------------------------
 CLIENT-FACING QUESTION REQUIREMENT (CRITICAL)
 
-Every question MUST be something a caseworker could realistically ask a client, caregiver, or involved party face-to-face in plain, conversational language.
+Every question MUST be something a caseworker could realistically ask a client or involved party face-to-face in plain, conversational language.
 
 GOOD source types for question generation:
 - Template fields that need factual information from the client
