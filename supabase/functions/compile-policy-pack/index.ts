@@ -161,6 +161,38 @@ const SCOPE_OPERATIONAL_TERMS: Record<string, string[]> = {
     "housing stability", "chronic homelessness", "rapid re-housing",
     "lease", "landlord", "utility", "housing assessment",
   ],
+  employment_income: [
+    "employment history", "income sources", "wages", "salary", "benefits",
+    "job readiness", "vocational training", "work experience", "employer",
+    "financial statement", "assets", "liabilities", "debts", "expenses",
+    "budget", "financial assessment", "earning capacity", "unemployment",
+    "self-employment", "child support", "alimony", "spousal support",
+    "tax returns", "bank accounts", "investments", "retirement",
+  ],
+  disability_services: [
+    "disability", "functional limitations", "accommodations", "assistive",
+    "independent living", "supported employment", "personal care",
+    "disability assessment", "accessibility", "adaptive equipment",
+  ],
+  elder_services: [
+    "aging", "senior care", "long-term care", "caregiver support",
+    "elder abuse", "geriatric assessment", "activities of daily living",
+    "home and community-based", "medicare", "medicaid",
+  ],
+  immigration_refugee: [
+    "immigration status", "refugee", "asylum", "resettlement",
+    "cultural adjustment", "language access", "documentation",
+    "eligibility verification", "legal status",
+  ],
+  reentry_justice: [
+    "reentry", "parole", "probation", "recidivism", "transitional",
+    "post-incarceration", "justice-involved", "barriers to reentry",
+  ],
+  social_welfare: [
+    "public assistance", "benefits eligibility", "case management",
+    "client needs", "social services", "community resources",
+    "service coordination", "supportive services",
+  ],
 };
 
 /**
