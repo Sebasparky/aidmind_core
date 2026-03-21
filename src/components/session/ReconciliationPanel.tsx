@@ -140,7 +140,7 @@ export function ReconciliationPanel({ result, notesSource }: ReconciliationPanel
           <div className="col-span-3 rounded-md bg-[hsl(var(--status-warning-muted))]/50 px-2.5 py-1.5 flex items-center gap-1.5">
             <AlertTriangle className="h-3 w-3 text-[hsl(var(--status-warning))]" />
             <span className="text-[11px] font-medium text-[hsl(var(--status-warning-muted-foreground))]">
-              {actionableCount} {actionableCount === 1 ? "field needs" : "fields need"} attention
+              {actionableCount} narrative {actionableCount === 1 ? "field needs" : "fields need"} attention
             </span>
           </div>
         )}
