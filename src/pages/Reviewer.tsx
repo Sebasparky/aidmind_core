@@ -35,6 +35,8 @@ import {
   filterReconciliationToNarrative,
   isRecoveredFieldReviewerEligible,
   isReconciliationFieldEligible,
+  isReviewerLanguageField,
+  isReviewerNarrativeCompletionField,
   computeEligibilityDiagnostics,
 } from "@/lib/tools/reviewer-eligibility";
 import { ReviewerVerificationPanel, type ReviewerDiagnostics, type NotesSourceType } from "@/components/dev/ReviewerVerificationPanel";
