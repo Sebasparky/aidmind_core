@@ -209,16 +209,17 @@ function applyLanguageFirstFiltering(
       if (sf) {
         // For completeness, check narrative completion eligibility
         if (issue.type === "completeness") {
-          const { isReviewerNarrativeCompletionField } = require("@/lib/tools/reviewer-eligibility");
-          if (!isReviewerNarrativeCompletionField(sf)) {
+          // Import is at top of file
+          const { isReviewerNarrativeCompletionField: isNarrativeCompletion } = await import("@/lib/tools/reviewer-eligibility");
+          if (!isNarrativeCompletion(sf)) {
             suppressed++;
             return false;
           }
         }
         // For consistency, check language eligibility
         if (issue.type === "consistency") {
-          const { isReviewerLanguageField } = require("@/lib/tools/reviewer-eligibility");
-          if (!isReviewerLanguageField(sf)) {
+          const { isReviewerLanguageField: isLangField } = await import("@/lib/tools/reviewer-eligibility");
+          if (!isLangField(sf)) {
             suppressed++;
             return false;
           }
