@@ -949,12 +949,24 @@ export default function Reviewer() {
       const { filtered: filteredIssues, suppressed: completenessSuppressions, reclassified: discrepancyReclassifications } =
         applyLanguageFirstFiltering(report.issues, localReconciliation, schemaFields);
 
+      // Recalculate risk from eligible findings only
+      const eligibleHighCount = filteredIssues.filter(i => i.severity === "high").length;
+      const eligibleMedCount = filteredIssues.filter(i => i.severity === "medium").length;
+      const recalcRisk = eligibleHighCount > 0 ? "high" : eligibleMedCount > 0 ? "medium" : "low";
+
       report = {
         ...report,
         issues: filteredIssues,
+        summary: {
+          ...report.summary,
+          overall_risk: recalcRisk as "low" | "medium" | "high",
+          key_findings: report.summary.key_findings.filter(
+            (f: string) => !isExplanationAboutBlockedFieldPublic(f)
+          ),
+        },
         metrics: {
           issue_count: filteredIssues.length,
-          high_severity_count: filteredIssues.filter(i => i.severity === "high").length,
+          high_severity_count: eligibleHighCount,
         },
       };
 
