@@ -101,15 +101,15 @@ const SEVERITY_CONFIG: Record<ReviewSeverity, { variant: "destructive" | "defaul
   low: { variant: "secondary", label: "Low" },
 };
 
-const ISSUE_TYPE_META: Record<ReviewIssueType, { label: string; icon: typeof MessageSquare }> = {
-  tone: { label: "Tone & Clarity", icon: MessageSquare },
-  bias: { label: "Bias & Assumptions", icon: Eye },
-  policy_language: { label: "Policy Language", icon: Scale },
-  completeness: { label: "Completeness", icon: CheckSquare },
-  consistency: { label: "Consistency", icon: Shield },
+const ISSUE_TYPE_META: Record<ReviewIssueType, { label: string; icon: typeof MessageSquare; description: string }> = {
+  tone: { label: "Tone & Clarity", icon: MessageSquare, description: "Judgmental, unprofessional, or emotionally charged language" },
+  bias: { label: "Bias & Assumptions", icon: Eye, description: "Stigmatizing language, unsupported assumptions, or stereotypes" },
+  policy_language: { label: "Policy Language", icon: Scale, description: "Prohibited terminology or policy-inconsistent wording" },
+  completeness: { label: "Narrative Completeness", icon: CheckSquare, description: "Major narrative sections that appear blank or insufficient" },
+  consistency: { label: "Narrative Consistency", icon: Shield, description: "Narrative content that conflicts between notes and form" },
 };
 
-const ISSUE_TYPES: ReviewIssueType[] = ["completeness", "policy_language", "tone", "bias", "consistency"];
+const ISSUE_TYPES: ReviewIssueType[] = ["tone", "bias", "policy_language", "completeness", "consistency"];
 
 // ─── Helpers ─────────────────────────────────────────────
 function formatFileSize(bytes: number): string {
