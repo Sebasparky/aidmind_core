@@ -240,6 +240,15 @@ export function useGuidanceSession(sessionId: string | undefined) {
         setRunState("error");
         setRunError({ message, code, step: "generate" });
 
+        // If domain mismatch, clear the stale policy pack so re-run will recompile
+        if (code === "DOMAIN_MISMATCH") {
+          await supabase
+            .from("sessions")
+            .update({ policy_pack_id: null })
+            .eq("id", session.id);
+          setSession((prev) => prev ? { ...prev, hasPolicyPack: false } : prev);
+        }
+
         await logEvent({
           eventType: "tool.run.failed",
           sessionId: session.sessionId,
