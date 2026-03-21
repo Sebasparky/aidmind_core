@@ -5,7 +5,7 @@ import {
   AlertTriangle, MessageSquare, Scale, CheckSquare, Eye,
   Upload, FileText, X, RefreshCw, CheckCircle2, FileWarning,
   Search, ChevronDown, ChevronRight, Circle, Lock, Unlock,
-  ShieldCheck,
+  ShieldCheck, Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -24,7 +24,6 @@ import { useEyeLogger } from "@/hooks/useEyeLogger";
 import { usePdfTextExtractor, type PageText } from "@/hooks/usePdfTextExtractor";
 import { useCaseNotesVault } from "@/hooks/useCaseNotesVault";
 import { ReauthModal } from "@/components/security/ReauthModal";
-import { VaultStatusIndicator } from "@/components/security/VaultStatusIndicator";
 import { recoverFieldsFromDocument } from "@/lib/tools/field-recovery";
 import { parseCompletedTemplate } from "@/lib/tools/completed-template-parser";
 import { reconcileNotesAndTemplate } from "@/lib/tools/reconciliation-engine";
@@ -97,10 +96,10 @@ interface SelectedFile {
 const MAX_FILE_SIZE_MB = 20;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
-const SEVERITY_CONFIG: Record<ReviewSeverity, { variant: "destructive" | "default" | "secondary"; label: string }> = {
-  high: { variant: "destructive", label: "High" },
-  medium: { variant: "default", label: "Medium" },
-  low: { variant: "secondary", label: "Low" },
+const SEVERITY_CONFIG: Record<ReviewSeverity, { variant: "destructive" | "default" | "secondary"; label: string; dotClass: string }> = {
+  high: { variant: "destructive", label: "High", dotClass: "bg-[hsl(var(--status-danger))]" },
+  medium: { variant: "default", label: "Medium", dotClass: "bg-[hsl(var(--status-warning))]" },
+  low: { variant: "secondary", label: "Low", dotClass: "bg-muted-foreground/40" },
 };
 
 const ISSUE_TYPE_META: Record<ReviewIssueType, { label: string; icon: typeof MessageSquare; description: string }> = {
@@ -149,35 +148,14 @@ function renderHighlightedText(fullText: string, snippet: string | null): React.
   }
 }
 
-// ─── Readiness Row ───────────────────────────────────────
-type ReadinessState = "ready" | "attention" | "missing";
-
-function ReadinessRow({ label, state, detail }: { label: string; state: ReadinessState; detail?: string }) {
-  const icon =
-    state === "ready" ? <CheckCircle2 className="h-3.5 w-3.5 text-[hsl(var(--status-success))]" /> :
-    state === "attention" ? <AlertTriangle className="h-3.5 w-3.5 text-[hsl(var(--status-warning))]" /> :
-    <Circle className="h-3.5 w-3.5 text-muted-foreground/40" />;
-
-  return (
-    <div className="flex items-start gap-2 py-1.5">
-      <div className="mt-0.5 shrink-0">{icon}</div>
-      <div className="min-w-0">
-        <p className={cn("text-sm", state === "ready" ? "text-foreground" : "text-muted-foreground")}>{label}</p>
-        {detail && <p className="text-xs text-muted-foreground mt-0.5">{detail}</p>}
-      </div>
-    </div>
-  );
+function formatTimeRemaining(ms: number): string {
+  const totalSeconds = Math.ceil(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 // ─── Language-first post-processing ──────────────────────
-/**
- * Post-process reviewer issues:
- * 1. Suppress completeness/consistency findings on non-narrative fields
- * 2. Apply reconciliation-aware filtering for narrative fields
- * 3. Block structured-field findings from reaching the user
- *
- * This is the final gate — no structured-field finding should survive.
- */
 function applyLanguageFirstFiltering(
   issues: ReviewIssue[],
   reconciliation: ReconciliationResult | null,
@@ -186,12 +164,10 @@ function applyLanguageFirstFiltering(
   let suppressed = 0;
   let reclassified = 0;
 
-  // Build schema lookup
   const schemaMap = schemaFields
     ? new Map(schemaFields.map((sf) => [sf.field_key, sf]))
     : null;
 
-  // Build reconciliation lookup
   const reconMap = new Map<string, FieldReconciliation>();
   if (reconciliation) {
     for (const f of reconciliation.fields) {
@@ -200,12 +176,9 @@ function applyLanguageFirstFiltering(
   }
 
   const result = issues.filter((issue) => {
-    // Tone, bias, policy_language on narrative text: always keep
     if (issue.type === "tone" || issue.type === "bias" || issue.type === "policy_language") {
       return true;
     }
-
-    // Completeness or consistency: only keep if field is narrative-eligible
     if (issue.field_key) {
       const sf = schemaMap?.get(issue.field_key);
       if (sf) {
@@ -218,52 +191,29 @@ function applyLanguageFirstFiltering(
           return false;
         }
       }
-
-      // Reconciliation-aware suppression for narrative fields
       if (reconciliation?.reliable_for_review) {
         const recon = reconMap.get(issue.field_key);
         if (recon) {
-          // Confirmed matches — suppress completeness
-          if (issue.type === "completeness" && recon.resolution === "confirmed_match") {
-            suppressed++;
-            return false;
-          }
-          // Likely corrections — suppress completeness
-          if (issue.type === "completeness" && recon.resolution === "likely_correction") {
-            suppressed++;
-            return false;
-          }
+          if (issue.type === "completeness" && recon.resolution === "confirmed_match") { suppressed++; return false; }
+          if (issue.type === "completeness" && recon.resolution === "likely_correction") { suppressed++; return false; }
         }
       }
     }
-
     return true;
   }).map((issue) => {
-    // Reclassify completeness → consistency for discrepancies (narrative only)
     if (issue.field_key && issue.type === "completeness" && reconciliation?.reliable_for_review) {
       const recon = reconMap.get(issue.field_key);
       if (recon?.resolution === "possible_discrepancy") {
         reclassified++;
-        return {
-          ...issue,
-          type: "consistency" as ReviewIssueType,
-          explanation: `${issue.explanation} (Notes and completed form differ in narrative content)`,
-        };
+        return { ...issue, type: "consistency" as ReviewIssueType, explanation: `${issue.explanation} (Notes and completed form differ in narrative content)` };
       }
     }
-
-    // Downgrade severity for low-confidence parse
     if (issue.field_key && issue.type === "completeness" && reconciliation?.template_parse_confidence === "low") {
       const recon = reconMap.get(issue.field_key);
       if (recon?.resolution === "unresolved") {
-        return {
-          ...issue,
-          severity: "low" as ReviewSeverity,
-          explanation: `${issue.explanation} (Low parse confidence — manual verification recommended)`,
-        };
+        return { ...issue, severity: "low" as ReviewSeverity, explanation: `${issue.explanation} (Low parse confidence — manual verification recommended)` };
       }
     }
-
     return issue;
   });
 
@@ -271,8 +221,6 @@ function applyLanguageFirstFiltering(
 }
 
 // ─── Auto-ensure parser artifact ─────────────────────────
-
-/** Validates that a parser artifact has meaningful content */
 function isParserArtifactValid(artifact: TemplateParserArtifact | null): boolean {
   if (!artifact) return false;
   if (!artifact.sections || !Array.isArray(artifact.sections) || artifact.sections.length === 0) return false;
@@ -293,34 +241,19 @@ async function ensureParserArtifact(
   if (existing?.artifact_json) {
     const artifact = existing.artifact_json as unknown as TemplateParserArtifact;
     if (isParserArtifactValid(artifact)) {
-      if (import.meta.env.DEV) {
-        console.log("[Reviewer] Parser artifact valid:", artifact.sections.length, "sections");
-      }
+      if (import.meta.env.DEV) console.log("[Reviewer] Parser artifact valid:", artifact.sections.length, "sections");
       return artifact;
     }
-    if (import.meta.env.DEV) {
-      console.warn("[Reviewer] Existing parser artifact is invalid (0 sections), will force regeneration");
-    }
-    // Fall through to regeneration with force=true since existing one is bad
+    if (import.meta.env.DEV) console.warn("[Reviewer] Existing parser artifact is invalid (0 sections), will force regeneration");
   }
 
   try {
-    // Force regeneration if existing artifact was invalid (0 sections)
     const shouldForce = !!existing?.artifact_json;
-    if (import.meta.env.DEV) {
-      console.log("[Reviewer] Invoking generate-parser-artifacts", { templateId, tenantId, force: shouldForce });
-    }
+    if (import.meta.env.DEV) console.log("[Reviewer] Invoking generate-parser-artifacts", { templateId, tenantId, force: shouldForce });
     const { data, error } = await supabase.functions.invoke("generate-parser-artifacts", {
       body: { template_id: templateId, tenant_id: tenantId, force: shouldForce },
     });
     if (error) throw error;
-    if (import.meta.env.DEV) {
-      console.log("[Reviewer] generate-parser-artifacts response:", {
-        status: data?.status,
-        sections_count: data?.sections_count,
-        checkbox_groups_count: data?.checkbox_groups_count,
-      });
-    }
     if (data?.status === "generated" || data?.status === "exists") {
       const { data: fresh } = await supabase
         .from("template_parser_artifacts")
@@ -330,15 +263,7 @@ async function ensureParserArtifact(
         .maybeSingle();
       if (fresh?.artifact_json) {
         const artifact = fresh.artifact_json as unknown as TemplateParserArtifact;
-        if (isParserArtifactValid(artifact)) {
-          if (import.meta.env.DEV) {
-            console.log("[Reviewer] Fresh artifact valid:", artifact.sections.length, "sections");
-          }
-          return artifact;
-        }
-        if (import.meta.env.DEV) {
-          console.warn("[Reviewer] Regenerated parser artifact is still invalid (0 sections)");
-        }
+        if (isParserArtifactValid(artifact)) return artifact;
       }
     }
   } catch (err) {
@@ -347,11 +272,6 @@ async function ensureParserArtifact(
   return null;
 }
 
-/**
- * Convert an unlocked CaseNotesComparisonPacket into RecoveredField[]
- * for use in the reconciliation engine. This is the secure handoff —
- * the vault packet is the true notes-side source of truth.
- */
 function packetToRecoveredFields(packet: CaseNotesComparisonPacket): RecoveredField[] {
   return packet.answers.map((a) => ({
     field_key: a.field_key,
@@ -369,26 +289,205 @@ function packetToRecoveredFields(packet: CaseNotesComparisonPacket): RecoveredFi
   }));
 }
 
-// ─── Review tier label ──────────────────────────────────
-function ReviewTierBadge({ tier }: { tier: ReviewTier }) {
-  if (tier === "full") {
-    return (
-      <Badge variant="outline" className="text-[10px] text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30">
-        Full notes-to-form comparison
-      </Badge>
-    );
-  }
-  if (tier === "template_only") {
-    return (
-      <Badge variant="outline" className="text-[10px] text-[hsl(var(--status-warning))] border-[hsl(var(--status-warning))]/30">
-        Template-only comparison
-      </Badge>
-    );
-  }
+// ─── Review Configuration Card ──────────────────────────
+function ReviewConfigCard({
+  schemaFields,
+  parserArtifact,
+  artifactStatus,
+  vaultState,
+  reviewTier,
+  toolState,
+}: {
+  schemaFields: Phase2SchemaField[] | null;
+  parserArtifact: TemplateParserArtifact | null;
+  artifactStatus: "loading" | "ready" | "missing" | "generating";
+  vaultState: string;
+  reviewTier: ReviewTier;
+  toolState: ToolState;
+}) {
+  const rows: { label: string; value: string; status: "ready" | "partial" | "unavailable" }[] = [
+    {
+      label: "Template schema",
+      value: schemaFields ? `${schemaFields.length} fields` : "Not available",
+      status: schemaFields ? "ready" : "partial",
+    },
+    {
+      label: "Parser artifacts",
+      value: artifactStatus === "ready" ? `${parserArtifact?.sections?.length ?? 0} sections` :
+             artifactStatus === "generating" ? "Generating…" : "Not available",
+      status: artifactStatus === "ready" ? "ready" : artifactStatus === "generating" ? "partial" : "unavailable",
+    },
+    {
+      label: "Notes comparison",
+      value: vaultState === "unlocked" ? "Full comparison" :
+             vaultState === "sealed" ? "Available (locked)" : "Not available",
+      status: vaultState === "unlocked" ? "ready" : vaultState === "sealed" ? "partial" : "unavailable",
+    },
+  ];
+
+  const tierLabel = reviewTier === "full" ? "Full notes-to-form" : reviewTier === "template_only" ? "Template-only" : "Basic text";
+
   return (
-    <Badge variant="outline" className="text-[10px] text-muted-foreground">
-      Basic review
-    </Badge>
+    <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Review Configuration</p>
+        {toolState === "success" && (
+          <Badge variant="outline" className={cn(
+            "text-[10px]",
+            reviewTier === "full" ? "text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30" :
+            reviewTier === "template_only" ? "text-[hsl(var(--status-warning))] border-[hsl(var(--status-warning))]/30" :
+            "text-muted-foreground"
+          )}>
+            {tierLabel}
+          </Badge>
+        )}
+      </div>
+      <div className="space-y-2">
+        {rows.map((row) => (
+          <div key={row.label} className="flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">{row.label}</span>
+            <div className="flex items-center gap-1.5">
+              <span className={cn(
+                "text-xs",
+                row.status === "ready" ? "text-foreground" : "text-muted-foreground"
+              )}>{row.value}</span>
+              <div className={cn(
+                "h-1.5 w-1.5 rounded-full shrink-0",
+                row.status === "ready" ? "bg-[hsl(var(--status-success))]" :
+                row.status === "partial" ? "bg-[hsl(var(--status-warning))]" :
+                "bg-muted-foreground/30"
+              )} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Vault Section ───────────────────────────────────────
+function VaultSection({
+  vaultState,
+  metadata,
+  unlockTimeRemaining,
+  onUnlockClick,
+  onRelockClick,
+  hasDocument,
+  toolState,
+}: {
+  vaultState: string;
+  metadata: any;
+  unlockTimeRemaining: number | null;
+  onUnlockClick: () => void;
+  onRelockClick: () => void;
+  hasDocument: boolean;
+  toolState: ToolState;
+}) {
+  if (vaultState === "empty") return null;
+
+  return (
+    <div className="rounded-xl border border-border bg-card overflow-hidden">
+      <div className="px-4 py-3 flex items-center gap-2.5">
+        {vaultState === "unlocked" ? (
+          <div className="h-7 w-7 rounded-lg bg-[hsl(var(--status-success-muted))] flex items-center justify-center shrink-0">
+            <Unlock className="h-3.5 w-3.5 text-[hsl(var(--status-success))]" />
+          </div>
+        ) : (
+          <div className="h-7 w-7 rounded-lg bg-muted flex items-center justify-center shrink-0">
+            <Lock className="h-3.5 w-3.5 text-muted-foreground" />
+          </div>
+        )}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium text-foreground">
+              {vaultState === "unlocked" ? "Case notes unlocked" : "Encrypted case notes"}
+            </p>
+            {vaultState === "unlocked" && unlockTimeRemaining != null && (
+              <Badge variant="outline" className={cn(
+                "text-[10px] gap-1 tabular-nums",
+                unlockTimeRemaining < 60_000
+                  ? "text-[hsl(var(--status-danger))] border-[hsl(var(--status-danger))]/30"
+                  : "text-[hsl(var(--status-warning))] border-[hsl(var(--status-warning))]/30"
+              )}>
+                <Clock className="h-2.5 w-2.5" />
+                {formatTimeRemaining(unlockTimeRemaining)}
+              </Badge>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {vaultState === "unlocked"
+              ? "Full notes-to-form comparison is active. Auto-relocks when idle."
+              : hasDocument
+                ? "Unlock before running for full notes-to-form comparison."
+                : "Upload a document first, then unlock for comparison."}
+          </p>
+        </div>
+      </div>
+      <div className="px-4 pb-3 flex items-center gap-2">
+        {vaultState === "sealed" && (
+          <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={onUnlockClick}>
+            <Unlock className="h-3 w-3" /> Unlock for comparison
+          </Button>
+        )}
+        {vaultState === "unlocked" && (
+          <Button variant="ghost" size="sm" className="gap-1.5 text-xs text-muted-foreground" onClick={onRelockClick}>
+            <Lock className="h-3 w-3" /> Relock now
+          </Button>
+        )}
+        <div className="ml-auto flex items-center gap-1">
+          <ShieldCheck className="h-3 w-3 text-muted-foreground/40" />
+          <span className="text-[10px] text-muted-foreground/40">AES-256 encrypted</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Issue Card ──────────────────────────────────────────
+function IssueCard({
+  issue,
+  isActive,
+  onHighlight,
+}: {
+  issue: ReviewIssue;
+  isActive: boolean;
+  onHighlight: (snippet: string) => void;
+}) {
+  const sev = SEVERITY_CONFIG[issue.severity];
+  return (
+    <div className={cn(
+      "rounded-lg border p-4 transition-colors",
+      isActive
+        ? "border-[hsl(var(--status-warning))]/50 bg-[hsl(var(--status-warning-muted))]/30"
+        : "border-border bg-card hover:bg-accent/5"
+    )}>
+      <div className="flex items-start gap-3">
+        <div className={cn("h-2 w-2 rounded-full mt-1.5 shrink-0", sev.dotClass)} />
+        <div className="flex-1 min-w-0 space-y-2">
+          <p className="text-sm text-foreground leading-relaxed">{issue.explanation}</p>
+          {issue.field_key && (
+            <p className="text-xs text-muted-foreground font-mono">Field: {issue.field_key}</p>
+          )}
+          {issue.excerpt && (
+            <blockquote className="text-xs text-muted-foreground italic border-l-2 border-border pl-3 py-1">
+              "{issue.excerpt}"
+            </blockquote>
+          )}
+          {issue.excerpt && issue.excerpt.length > 0 && (
+            <Button
+              variant={isActive ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 px-2.5 text-xs gap-1.5"
+              onClick={() => onHighlight(isActive ? "" : issue.excerpt)}
+            >
+              <Search className="h-3 w-3" />
+              {isActive ? "Unhighlight" : "Highlight in text"}
+            </Button>
+          )}
+        </div>
+        <Badge variant={sev.variant} className="text-[10px] shrink-0 px-2">{sev.label}</Badge>
+      </div>
+    </div>
   );
 }
 
@@ -408,11 +507,6 @@ export default function Reviewer() {
   const vault = useCaseNotesVault(sessionId);
   const [showReauthModal, setShowReauthModal] = useState(false);
 
-  /**
-   * SECURITY: All tool state is in-memory only.
-   * No sessionStorage, no localStorage, no backend persistence
-   * of extracted text, reconciliation, or reviewer output.
-   */
   const [toolState, setToolState] = useState<ToolState>("idle");
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -427,11 +521,8 @@ export default function Reviewer() {
   const [parserArtifact, setParserArtifact] = useState<TemplateParserArtifact | null>(null);
   const [artifactStatus, setArtifactStatus] = useState<"loading" | "ready" | "missing" | "generating">("loading");
   const [reviewTier, setReviewTier] = useState<ReviewTier>("basic");
-  /** Tracks which notes source was used for reconciliation */
   const [notesSource, setNotesSource] = useState<"case_notes" | "field_recovery" | null>(null);
-  /** Post-processing tracking (dev diagnostics) */
   const [postProcessStats, setPostProcessStats] = useState<{ before: number; after: number; suppressed: number; reclassified: number }>({ before: 0, after: 0, suppressed: 0, reclassified: 0 });
-  /** Whether reconciliation_context was sent in last run */
   const [reconContextSent, setReconContextSent] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -454,16 +545,10 @@ export default function Reviewer() {
   const fileSize = selectedFile?.file.size ?? null;
   const hasDocument = selectedFile !== null;
 
-  /**
-   * SECURITY: Purge any legacy sessionStorage entries from previous implementations.
-   */
+  // SECURITY: Purge legacy sessionStorage
   useEffect(() => {
     if (!sessionId) return;
-    try {
-      sessionStorage.removeItem(`aidmind:reviewer:${sessionId}`);
-    } catch {
-      // best-effort cleanup
-    }
+    try { sessionStorage.removeItem(`aidmind:reviewer:${sessionId}`); } catch {}
   }, [sessionId]);
 
   // ─── Load session info + schema + auto-ensure artifacts ─
@@ -487,7 +572,6 @@ export default function Reviewer() {
           tenantId: data.tenant_id,
         });
 
-        // Load schema (template-level, not sensitive)
         if (data.phase2_schema_id) {
           const { data: schema, error: schemaErr } = await supabase
             .from("template_phase2_schemas")
@@ -500,7 +584,6 @@ export default function Reviewer() {
           }
         }
 
-        // Auto-ensure parser artifact (template-level, not sensitive)
         if (data.template_id && data.tenant_id) {
           setArtifactStatus("generating");
           const artifact = await ensureParserArtifact(data.template_id, data.tenant_id);
@@ -510,48 +593,34 @@ export default function Reviewer() {
           } else {
             setParserArtifact(null);
             setArtifactStatus("missing");
-            if (import.meta.env.DEV) {
-              console.warn("[Reviewer] Parser artifact missing or invalid after ensure attempt");
-            }
           }
         } else {
           setArtifactStatus("missing");
         }
-
       } catch { setPageError("Failed to load session"); }
       finally { setPageLoading(false); }
     }
     fetchSession();
   }, [sessionId]);
 
-  // Check if vault (encrypted case notes) exists
   useEffect(() => {
-    if (!pageLoading && sessionInfo) {
-      vault.checkVaultExists();
-    }
+    if (!pageLoading && sessionInfo) vault.checkVaultExists();
   }, [pageLoading, sessionInfo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => { if (selectedFile) URL.revokeObjectURL(selectedFile.objectUrl); };
   }, [selectedFile]);
 
-  // ── Relock vault on unmount (leaving Reviewer) ──────────
   useEffect(() => {
-    return () => {
-      vault.relock("unmount");
-    };
+    return () => { vault.relock("unmount"); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Reset vault idle timer on meaningful user activity ──
   useEffect(() => {
     if (vault.vaultState !== "unlocked") return;
-
     const resetIdle = () => vault.resetIdleTimer();
-    // Track clicks, keypresses, and scrolls as "meaningful activity"
     window.addEventListener("click", resetIdle);
     window.addEventListener("keydown", resetIdle);
     window.addEventListener("scroll", resetIdle, true);
-
     return () => {
       window.removeEventListener("click", resetIdle);
       window.removeEventListener("keydown", resetIdle);
@@ -626,32 +695,21 @@ export default function Reviewer() {
     let tier: ReviewTier = "basic";
     let usedNotesSource: "case_notes" | "field_recovery" | null = null;
 
-    /**
-     * SECURITY: Diagnostics log counts and statuses only.
-     * No raw text, excerpts, or sensitive content is logged.
-     */
     const diagnostics: Record<string, any> = {
-      has_schema: !!schemaFields,
-      has_parser_artifact: !!parserArtifact,
-      artifact_status: artifactStatus,
-      vault_state: vault.vaultState,
+      has_schema: !!schemaFields, has_parser_artifact: !!parserArtifact,
+      artifact_status: artifactStatus, vault_state: vault.vaultState,
       has_unlocked_packet: !!vault.unlockedPacket,
-      reconciliation_used: false,
-      fallback_path: false,
+      reconciliation_used: false, fallback_path: false,
     };
 
     if (schemaFields && schemaFields.length > 0) {
-      // Compute eligibility diagnostics
       const eligibility = computeEligibilityDiagnostics(schemaFields);
       diagnostics.eligibility = eligibility;
-      if (import.meta.env.DEV) {
-        console.log("[Reviewer] Field eligibility:", eligibility);
-      }
+      if (import.meta.env.DEV) console.log("[Reviewer] Field eligibility:", eligibility);
 
       try {
         const recovery = recoverFieldsFromDocument(extractedFullText, schemaFields);
         structured_answers = recovery.structured_answers;
-        // LANGUAGE-FIRST: Only send narrative-eligible fields for review
         review_worthy_answers = filterToReviewerEligible(recovery.review_worthy_answers);
         unanswered_fields = filterUnansweredToNarrativeOnly(recovery.unanswered_fields, schemaFields);
         human_review_fields = recovery.human_review_fields;
@@ -669,7 +727,6 @@ export default function Reviewer() {
 
         tier = "template_only";
 
-        // Run completed-template parser + reconciliation if artifact available
         if (parserArtifact) {
           try {
             localTemplateParse = parseCompletedTemplate(extractedFullText, parserArtifact, schemaFields);
@@ -679,7 +736,6 @@ export default function Reviewer() {
             diagnostics.sections_parsed = localTemplateParse.sections_parsed.length;
 
             let notesForReconciliation: RecoveredField[];
-
             if (vault.unlockedPacket) {
               notesForReconciliation = packetToRecoveredFields(vault.unlockedPacket);
               usedNotesSource = "case_notes";
@@ -693,12 +749,9 @@ export default function Reviewer() {
             }
 
             localReconciliation = reconcileNotesAndTemplate(
-              notesForReconciliation,
-              localTemplateParse.fields,
-              localTemplateParse.overall_confidence,
+              notesForReconciliation, localTemplateParse.fields, localTemplateParse.overall_confidence,
             );
 
-            // LANGUAGE-FIRST: Filter reconciliation to narrative-eligible fields only
             const rawReconFieldCount = localReconciliation.fields.length;
             localReconciliation = {
               ...localReconciliation,
@@ -707,7 +760,6 @@ export default function Reviewer() {
             diagnostics.raw_reconciliation_fields = rawReconFieldCount;
             diagnostics.narrative_reconciliation_fields = localReconciliation.fields.length;
 
-            // Recompute counts from filtered fields
             localReconciliation.matches = localReconciliation.fields.filter(f => f.resolution === "confirmed_match").length;
             localReconciliation.mismatches = localReconciliation.fields.filter(f => f.status === "mismatch").length;
             localReconciliation.possible_discrepancies = localReconciliation.fields.filter(f => f.resolution === "possible_discrepancy").length;
@@ -757,8 +809,6 @@ export default function Reviewer() {
     });
 
     try {
-      // Build reconciliation-aware payload for Reviewer
-      // LANGUAGE-FIRST: Only include narrative-eligible reconciliation data
       const reconciliationContext = localReconciliation && localReconciliation.reliable_for_review ? {
         reconciliation_summary: {
           matches: localReconciliation.matches,
@@ -769,21 +819,12 @@ export default function Reviewer() {
           unresolved: localReconciliation.unresolved,
           template_parse_confidence: localReconciliation.template_parse_confidence,
         },
-        confirmed_fields: localReconciliation.fields
-          .filter(f => f.resolution === "confirmed_match")
-          .map(f => f.field_key),
-        likely_corrections: localReconciliation.fields
-          .filter(f => f.resolution === "likely_correction")
-          .map(f => ({ field_key: f.field_key, notes: f.notes_value, form: f.template_value })),
-        discrepancies: localReconciliation.fields
-          .filter(f => f.resolution === "possible_discrepancy")
-          .map(f => ({ field_key: f.field_key, notes: f.notes_value, form: f.template_value, section: f.section })),
-        omissions: localReconciliation.fields
-          .filter(f => f.resolution === "likely_omission")
-          .map(f => ({ field_key: f.field_key, notes_value: f.notes_value, section: f.section })),
+        confirmed_fields: localReconciliation.fields.filter(f => f.resolution === "confirmed_match").map(f => f.field_key),
+        likely_corrections: localReconciliation.fields.filter(f => f.resolution === "likely_correction").map(f => ({ field_key: f.field_key, notes: f.notes_value, form: f.template_value })),
+        discrepancies: localReconciliation.fields.filter(f => f.resolution === "possible_discrepancy").map(f => ({ field_key: f.field_key, notes: f.notes_value, form: f.template_value, section: f.section })),
+        omissions: localReconciliation.fields.filter(f => f.resolution === "likely_omission").map(f => ({ field_key: f.field_key, notes_value: f.notes_value, section: f.section })),
       } : undefined;
 
-      // Suppress confirmed/corrected fields from unanswered list
       let adjustedUnanswered = unanswered_fields;
       if (localReconciliation?.reliable_for_review) {
         const suppressedKeys = new Set(
@@ -794,7 +835,6 @@ export default function Reviewer() {
         adjustedUnanswered = unanswered_fields.filter(f => !suppressedKeys.has(f.field_key));
       }
 
-      // LANGUAGE-FIRST: Only send narrative-eligible structured answers
       const eligibleStructuredAnswers = structured_answers.filter(isRecoveredFieldReviewerEligible);
 
       const payload = {
@@ -810,7 +850,6 @@ export default function Reviewer() {
       };
       setReconContextSent(!!reconciliationContext);
 
-      // DIAGNOSTIC: Log payload shape (no sensitive content)
       if (import.meta.env.DEV) {
         console.info("[Reviewer][Diag] Payload shape:", {
           has_document_text: !!payload.document_text,
@@ -819,7 +858,6 @@ export default function Reviewer() {
           review_worthy_count: payload.review_worthy_answers.length,
           unanswered_count: payload.unanswered_fields.length,
           has_reconciliation_context: !!reconciliationContext,
-          reconciliation_keys: reconciliationContext ? Object.keys(reconciliationContext) : [],
         });
       }
       const { data, error } = await supabase.functions.invoke("run-reviewer", { body: payload });
@@ -835,7 +873,6 @@ export default function Reviewer() {
       if (!data?.review_report) throw new Error("Invalid response from reviewer");
       let report = data.review_report as ReviewerV2Report;
 
-      // LANGUAGE-FIRST post-processing: suppress structured-field findings
       const issuesBefore = report.issues.length;
       const { filtered: filteredIssues, suppressed: completenessSuppressions, reclassified: discrepancyReclassifications } =
         applyLanguageFirstFiltering(report.issues, localReconciliation, schemaFields);
@@ -849,12 +886,7 @@ export default function Reviewer() {
         },
       };
 
-      setPostProcessStats({
-        before: issuesBefore,
-        after: filteredIssues.length,
-        suppressed: completenessSuppressions,
-        reclassified: discrepancyReclassifications,
-      });
+      setPostProcessStats({ before: issuesBefore, after: filteredIssues.length, suppressed: completenessSuppressions, reclassified: discrepancyReclassifications });
 
       logEvent({
         eventType: "tool.run.completed", sessionId, requestId, toolName: "run_reviewer_v2",
@@ -910,7 +942,6 @@ export default function Reviewer() {
   };
 
   const handleBack = () => {
-    // SECURITY: Relock vault when leaving Reviewer
     vault.relock("manual");
     navigate("/dashboard");
   };
@@ -925,7 +956,6 @@ export default function Reviewer() {
     }, {} as Record<ReviewIssueType, ReviewIssue[]>);
   }, [output]);
 
-  // ─── Dev diagnostics (counts/flags only, no sensitive data) ─
   const devDiagnostics: ReviewerDiagnostics = useMemo(() => ({
     reviewTier,
     notesSource: (notesSource === "case_notes" ? "vault_case_notes" : notesSource === "field_recovery" ? "field_recovery" : "none") as NotesSourceType,
@@ -984,77 +1014,37 @@ export default function Reviewer() {
     );
   }
 
-  // ─── Readiness checks ─────────────────────────────────
-  const docReady: ReadinessState = hasDocument ? "ready" : "missing";
-  const extractReady: ReadinessState = extracting ? "attention" : extractedFullText.length > 0 ? "ready" : "missing";
-  const schemaReady: ReadinessState = schemaFields ? "ready" : "attention";
-  const artifactReady: ReadinessState = artifactStatus === "ready" ? "ready" : artifactStatus === "generating" ? "attention" : "attention";
-  const vaultReady: ReadinessState =
-    vault.vaultState === "unlocked" ? "ready" :
-    vault.vaultState === "sealed" ? "attention" :
-    "missing";
-
   return (
     <div className="h-screen bg-[hsl(var(--canvas))] flex flex-col overflow-hidden">
-      {/* Two-step reauth modal for vault unlock */}
       <ReauthModal
         open={showReauthModal}
         onOpenChange={setShowReauthModal}
         onReauthenticate={vault.reauthenticate}
         onDecrypt={vault.decrypt}
       />
+
+      {/* ─── Header ──────────────────────────────────────── */}
       <header className="border-b border-border bg-card shrink-0">
-        <div className="px-6 py-3 flex items-center justify-between">
+        <div className="px-6 py-3.5 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="icon" onClick={handleBack} className="h-8 w-8">
               <ArrowLeft className="h-4 w-4" />
             </Button>
-            <Separator orientation="vertical" className="h-6" />
+            <Separator orientation="vertical" className="h-5" />
             <div>
               <div className="flex items-center gap-2">
                 <Shield className="h-4 w-4 text-primary" />
                 <h1 className="text-base font-semibold text-foreground">Reviewer</h1>
-                <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">Step 3</Badge>
+                <span className="text-xs text-muted-foreground">Step 3 of 3</span>
               </div>
-              <div className="flex items-center gap-1.5 mt-0.5">
-                <p className="text-xs text-muted-foreground">
-                  {sessionInfo.caseLabel}{sessionInfo.interactionType ? ` · ${sessionInfo.interactionType}` : ""}
-                </p>
-                <Lock className="h-3 w-3 text-muted-foreground/50" />
-                <span className="text-[10px] text-muted-foreground/60">In-memory only</span>
-              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {sessionInfo.caseLabel}{sessionInfo.interactionType ? ` · ${sessionInfo.interactionType}` : ""}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {schemaFields && (
-              <Badge variant="outline" className="text-[10px] text-primary border-primary/30">
-                Schema · {schemaFields.length} fields
-              </Badge>
-            )}
-            {artifactStatus === "ready" && parserArtifact ? (
-              <Badge variant="outline" className="text-[10px] text-primary border-primary/30">
-                Parser · {parserArtifact.sections?.length ?? 0} sections
-              </Badge>
-            ) : artifactStatus === "generating" ? (
-              <Badge variant="outline" className="text-[10px] text-muted-foreground border-muted-foreground/30">
-                <Loader2 className="h-3 w-3 animate-spin mr-1" /> Parser generating…
-              </Badge>
-            ) : artifactStatus === "missing" ? (
-              <Badge variant="outline" className="text-[10px] text-[hsl(var(--status-warning))] border-[hsl(var(--status-warning))]/30">
-                <AlertTriangle className="h-3 w-3 mr-1" /> Parser unavailable
-              </Badge>
-            ) : null}
-            {vault.vaultState === "unlocked" && (
-              <Badge variant="outline" className="text-[10px] text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30">
-                <ShieldCheck className="h-3 w-3 mr-1" /> Case notes unlocked
-                {vault.unlockTimeRemaining != null && (
-                  <span className="ml-1">· {Math.ceil(vault.unlockTimeRemaining / 1000)}s</span>
-                )}
-              </Badge>
-            )}
-            {reviewTier !== "basic" && toolState === "success" && (
-              <ReviewTierBadge tier={reviewTier} />
-            )}
+            <Lock className="h-3 w-3 text-muted-foreground/40" />
+            <span className="text-[10px] text-muted-foreground/50">In-memory only · Nothing stored</span>
           </div>
         </div>
       </header>
@@ -1063,21 +1053,23 @@ export default function Reviewer() {
       <div className="flex-1 overflow-hidden flex flex-col">
         {!hasDocument ? (
           /* ─── Upload state ──────────────────────────────── */
-          <div className="flex-1 flex items-center justify-center p-6">
-            <div className="w-full max-w-lg space-y-4">
-              <div className="text-center mb-6">
-                <Shield className="h-10 w-10 mx-auto text-primary/30 mb-3" />
-                <h2 className="text-lg font-semibold text-foreground">Review authored language</h2>
-                <p className="text-sm text-muted-foreground mt-1">
+          <div className="flex-1 flex items-center justify-center p-8">
+            <div className="w-full max-w-lg space-y-5">
+              <div className="text-center mb-2">
+                <div className="h-14 w-14 rounded-2xl bg-primary/5 flex items-center justify-center mx-auto mb-4">
+                  <Shield className="h-7 w-7 text-primary/40" />
+                </div>
+                <h2 className="text-xl font-semibold text-foreground">Review authored language</h2>
+                <p className="text-sm text-muted-foreground mt-2 max-w-sm mx-auto leading-relaxed">
                   Upload the completed form to check authored narrative text for tone, bias, policy language, and clarity.
                 </p>
-                <p className="text-[11px] text-muted-foreground/70 mt-1">
-                  Reviewer focuses on authored language quality — it does not verify every checkbox or structured field.
+                <p className="text-xs text-muted-foreground/60 mt-1.5">
+                  Focuses on authored language quality — does not verify every checkbox or structured field.
                 </p>
               </div>
 
-              <Card>
-                <CardContent className="pt-6 space-y-4">
+              <Card className="border-border shadow-sm">
+                <CardContent className="pt-6 pb-6 space-y-4">
                   <input ref={fileInputRef} type="file" accept="application/pdf" onChange={handleFileInputChange} className="sr-only" aria-label="Upload PDF file" />
                   <div
                     role="button" tabIndex={0}
@@ -1085,16 +1077,16 @@ export default function Reviewer() {
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInputRef.current?.click(); } }}
                     onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave}
                     className={cn(
-                      "border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors",
+                      "border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all",
                       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                      isDragging ? "border-primary bg-primary/5" : "border-muted-foreground/25 hover:border-primary/50 hover:bg-accent/5"
+                      isDragging ? "border-primary bg-primary/5 scale-[1.01]" : "border-muted-foreground/20 hover:border-primary/40 hover:bg-accent/5"
                     )}
                   >
-                    <Upload className="h-8 w-8 mx-auto text-muted-foreground/40 mb-3" />
+                    <Upload className="h-8 w-8 mx-auto text-muted-foreground/30 mb-3" />
                     <p className="text-sm font-medium text-foreground mb-1">Drag & drop your PDF here</p>
-                    <p className="text-xs text-muted-foreground mb-3">or click to choose a file</p>
+                    <p className="text-xs text-muted-foreground mb-4">or click to choose a file</p>
                     <Button type="button" variant="outline" size="sm" className="pointer-events-none">Choose file</Button>
-                    <p className="text-xs text-muted-foreground mt-3">PDF only · Max {MAX_FILE_SIZE_MB}MB</p>
+                    <p className="text-xs text-muted-foreground/60 mt-4">PDF only · Max {MAX_FILE_SIZE_MB}MB</p>
                   </div>
                   {fileError && (
                     <div className="flex items-center gap-2 text-destructive">
@@ -1105,40 +1097,35 @@ export default function Reviewer() {
                 </CardContent>
               </Card>
 
-              {/* Vault status in upload state */}
               {vault.vaultState === "sealed" && (
-                <Card className="border border-border shadow-none">
-                  <CardContent className="px-5 py-4">
-                    <div className="flex items-start gap-2.5">
-                      <Lock className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-                      <div className="space-y-1.5 flex-1">
-                        <p className="text-xs font-medium text-foreground">Encrypted case notes available</p>
-                        <p className="text-xs text-muted-foreground">
-                          Upload a document first, then unlock case notes for full notes-to-form comparison.
-                        </p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                <VaultSection
+                  vaultState={vault.vaultState}
+                  metadata={vault.vaultMetadata}
+                  unlockTimeRemaining={vault.unlockTimeRemaining}
+                  onUnlockClick={() => setShowReauthModal(true)}
+                  onRelockClick={() => vault.relock("manual")}
+                  hasDocument={false}
+                  toolState={toolState}
+                />
               )}
 
-              <Alert className="border-primary/20 bg-primary/5">
-                <Lock className="h-4 w-4 text-primary" />
-                <AlertDescription className="text-xs text-muted-foreground">
-                  Files are extracted locally in your browser. <strong className="text-foreground">Nothing is uploaded or stored.</strong> All working content is cleared when you leave this page.
-                </AlertDescription>
-              </Alert>
+              <div className="flex items-center gap-2 px-1">
+                <Lock className="h-3.5 w-3.5 text-primary/40 shrink-0" />
+                <p className="text-xs text-muted-foreground">
+                  Files are extracted locally in your browser. <span className="text-foreground font-medium">Nothing is uploaded or stored.</span>
+                </p>
+              </div>
             </div>
           </div>
         ) : (
           /* ─── Workspace layout ─────────────────────────── */
           <div className="flex-1 overflow-hidden flex flex-col lg:flex-row">
-            {/* ─── Left column: Document + Text ──────────── */}
-            <div className="flex-1 min-w-0 flex flex-col lg:flex-row overflow-hidden">
-              {/* PDF Preview panel */}
+            {/* ─── Left: Document workspace ──────────────── */}
+            <div className="flex-1 min-w-0 flex flex-col lg:flex-row overflow-hidden lg:basis-[45%]">
+              {/* PDF Preview */}
               {selectedFile && (
-                <div className="lg:w-[340px] xl:w-[380px] shrink-0 border-r border-border flex flex-col overflow-hidden">
-                  <div className="px-4 py-2.5 border-b border-border bg-card flex items-center justify-between shrink-0">
+                <div className="lg:w-[340px] xl:w-[400px] shrink-0 border-r border-border flex flex-col overflow-hidden">
+                  <div className="px-4 py-3 border-b border-border bg-card flex items-center justify-between shrink-0">
                     <div className="flex items-center gap-2 min-w-0">
                       <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                       <span className="text-xs text-foreground font-medium truncate">{fileName}</span>
@@ -1146,52 +1133,58 @@ export default function Reviewer() {
                     </div>
                     {toolState !== "success" && (
                       <div className="flex items-center gap-1 shrink-0">
-                        <Button variant="ghost" size="sm" onClick={handleReplace} className="h-6 px-2 text-[10px] gap-1">
+                        <Button variant="ghost" size="sm" onClick={handleReplace} className="h-7 px-2 text-xs gap-1">
                           <RefreshCw className="h-3 w-3" /> Replace
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={handleRemoveFile} className="h-6 px-2 text-[10px] gap-1 text-destructive hover:text-destructive">
+                        <Button variant="ghost" size="sm" onClick={handleRemoveFile} className="h-7 px-2 text-xs gap-1 text-destructive hover:text-destructive">
                           <X className="h-3 w-3" />
                         </Button>
                       </div>
                     )}
                   </div>
-                  <div className="flex-1 overflow-hidden bg-muted/30 p-1">
+                  <div className="flex-1 overflow-hidden bg-muted/20 p-1">
                     <iframe src={selectedFile.objectUrl} title="PDF preview" className="w-full h-full rounded border-0" />
                   </div>
                   <input ref={fileInputRef} type="file" accept="application/pdf" onChange={handleFileInputChange} className="sr-only" />
                 </div>
               )}
 
-              {/* Extracted text panel */}
+              {/* Extracted text */}
               <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-                <div className="px-4 py-2.5 border-b border-border bg-card flex items-center justify-between shrink-0">
+                <div className="px-5 py-3 border-b border-border bg-card flex items-center justify-between shrink-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-foreground">Extracted Text</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {activeSnippet && (
-                      <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={() => setActiveSnippet(null)}>
-                        Clear highlight
-                      </Button>
+                    <span className="text-sm font-medium text-foreground">Extracted Text</span>
+                    {extractedPages.length > 0 && (
+                      <span className="text-xs text-muted-foreground">
+                        {extractedFullText.length.toLocaleString()} characters
+                      </span>
                     )}
                   </div>
+                  {activeSnippet && (
+                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setActiveSnippet(null)}>
+                      Clear highlight
+                    </Button>
+                  )}
                 </div>
                 <ScrollArea className="flex-1">
-                  <div ref={textPanelRef} className="p-4 space-y-4 text-sm leading-relaxed">
+                  <div ref={textPanelRef} className="p-5 space-y-6 text-sm leading-relaxed">
                     {extracting && (
-                      <div className="flex items-center gap-2 text-muted-foreground py-8 justify-center">
+                      <div className="flex items-center gap-2 text-muted-foreground py-12 justify-center">
                         <Loader2 className="h-4 w-4 animate-spin" />
-                        <span className="text-xs">Extracting text…</span>
+                        <span className="text-sm">Extracting text…</span>
                       </div>
                     )}
-                    {extractError && <div className="text-destructive text-xs p-4">{extractError}</div>}
+                    {extractError && <div className="text-destructive text-sm p-4">{extractError}</div>}
                     {!extracting && extractedPages.length === 0 && !extractError && (
-                      <p className="text-xs text-muted-foreground text-center py-8">No text extracted yet.</p>
+                      <p className="text-sm text-muted-foreground text-center py-12">No text extracted yet.</p>
                     )}
                     {extractedPages.map((page) => (
-                      <div key={page.pageNumber}>
-                        <Badge variant="outline" className="text-[10px] mb-2">Page {page.pageNumber}</Badge>
-                        <p className="text-foreground whitespace-pre-wrap break-words text-[13px]">
+                      <div key={page.pageNumber} className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="text-[10px]">Page {page.pageNumber}</Badge>
+                          <Separator className="flex-1" />
+                        </div>
+                        <p className="text-foreground whitespace-pre-wrap break-words text-[13px] leading-relaxed">
                           {page.text
                             ? renderHighlightedText(page.text, activeSnippet)
                             : <span className="text-muted-foreground italic">(no text on this page)</span>}
@@ -1203,347 +1196,270 @@ export default function Reviewer() {
               </div>
             </div>
 
-            {/* ─── Right rail: Action + Results ──────────── */}
-            <div className="lg:w-[340px] xl:w-[380px] shrink-0 border-l border-border bg-card flex flex-col overflow-hidden">
-              {/* Vault status — always show when vault exists */}
-              {vault.vaultState !== "empty" && (
-                <div className="p-4 border-b border-border shrink-0">
-                  <VaultStatusIndicator
-                    vaultState={vault.vaultState}
-                    metadata={vault.vaultMetadata}
-                    unlockTimeRemaining={vault.unlockTimeRemaining}
-                    onUnlockClick={() => setShowReauthModal(true)}
-                    onRelockClick={vault.relock}
-                    compact={vault.vaultState === "unlocked"}
-                  />
-                  {/* Contextual hint when sealed and about to run */}
-                  {vault.vaultState === "sealed" && toolState !== "success" && hasDocument && (
-                    <p className="text-[10px] text-muted-foreground mt-2">
-                      Unlock before running for full notes-to-form comparison.
-                      Without it, only template-only comparison is available.
-                    </p>
-                  )}
-                </div>
-              )}
+            {/* ─── Right: Insights panel ─────────────────── */}
+            <div className="lg:basis-[55%] xl:basis-[50%] shrink-0 border-l border-border bg-[hsl(var(--canvas))] flex flex-col overflow-hidden">
+              <ScrollArea className="flex-1">
+                <div className="p-6 space-y-5 max-w-2xl">
 
-              {/* Readiness + Action area */}
-              <div className="p-4 border-b border-border space-y-3 shrink-0">
-                <div className="space-y-0.5">
-                  <ReadinessRow label="Document uploaded" state={docReady} />
-                  <ReadinessRow label="Text extracted" state={extractReady} detail={extracting ? "Extracting…" : extractedFullText.length > 0 ? `${extractedFullText.length.toLocaleString()} characters · ${pageCount} pages` : undefined} />
-                  <ReadinessRow label="Template schema" state={schemaReady} detail={schemaFields ? `${schemaFields.length} fields` : "No schema — text-only review"} />
-                  <ReadinessRow
-                    label="Parser artifacts"
-                    state={artifactReady}
-                    detail={
-                      artifactStatus === "ready" ? `${parserArtifact?.sections?.length ?? 0} sections` :
-                      artifactStatus === "generating" ? "Auto-generating…" :
-                      "Not available — basic recovery only"
-                    }
+                  {/* Review Configuration */}
+                  <ReviewConfigCard
+                    schemaFields={schemaFields}
+                    parserArtifact={parserArtifact}
+                    artifactStatus={artifactStatus}
+                    vaultState={vault.vaultState}
+                    reviewTier={reviewTier}
+                    toolState={toolState}
                   />
+
+                  {/* Vault section */}
                   {vault.vaultState !== "empty" && (
-                    <ReadinessRow
-                      label="Case notes comparison"
-                      state={vaultReady}
-                      detail={
-                        vault.vaultState === "unlocked" ? "Unlocked — full comparison available" :
-                        vault.vaultState === "sealed" ? "Sealed — unlock for full comparison" :
-                        "Not available"
-                      }
+                    <VaultSection
+                      vaultState={vault.vaultState}
+                      metadata={vault.vaultMetadata}
+                      unlockTimeRemaining={vault.unlockTimeRemaining}
+                      onUnlockClick={() => setShowReauthModal(true)}
+                      onRelockClick={() => vault.relock("manual")}
+                      hasDocument={hasDocument}
+                      toolState={toolState}
                     />
                   )}
-                </div>
 
-                {/* Primary CTA */}
-                {toolState !== "success" && (
-                  <Button
-                    onClick={handleRun}
-                    disabled={!canRun}
-                    className="w-full gap-2"
-                    size="lg"
-                  >
-                    {toolState === "running" || toolState === "recovering" ? (
-                      <><Loader2 className="h-4 w-4 animate-spin" /> {toolState === "recovering" ? "Recovering fields…" : "Analyzing…"}</>
-                    ) : (
-                      <><Shield className="h-4 w-4" /> Run Reviewer</>
-                    )}
-                  </Button>
-                )}
-
-                {toolState === "success" && (
-                  <Button variant="default" onClick={handleBack} className="w-full gap-2" size="lg">
-                    <CheckCircle2 className="h-4 w-4" /> Done — Back to Dashboard
-                  </Button>
-                )}
-
-                {toolState === "error" && (
-                  <div className="flex gap-2">
-                    <Button onClick={handleRun} disabled={!canRun} className="flex-1 gap-1.5">
-                      <RefreshCw className="h-3.5 w-3.5" /> Try again
-                    </Button>
-                    <Button variant="outline" onClick={handleClear} className="gap-1.5">
-                      <RotateCcw className="h-3.5 w-3.5" /> Clear
-                    </Button>
-                  </div>
-                )}
-              </div>
-
-              {/* Results area */}
-              <ScrollArea className="flex-1">
-                <div className="p-4 space-y-4">
-                  {/* Idle / Ready */}
-                  {(toolState === "idle" || toolState === "ready") && !output && (
-                    <div className="text-center py-10">
-                      <Shield className="h-10 w-10 mx-auto text-muted-foreground/20 mb-3" />
-                      <p className="text-sm text-muted-foreground">
-                         {extracting ? "Waiting for extraction…" : canRun ? "Ready to review" : "Upload a document to begin"}
-                       </p>
-                       <p className="text-xs text-muted-foreground/70 mt-1">
-                         Reviews authored narrative language for tone, bias, and policy compliance
+                  {/* Primary CTA */}
+                  {toolState !== "success" && (
+                    <div className="space-y-3">
+                      <Button
+                        onClick={handleRun}
+                        disabled={!canRun}
+                        className="w-full gap-2 h-12 text-sm"
+                        size="lg"
+                      >
+                        {toolState === "running" || toolState === "recovering" ? (
+                          <><Loader2 className="h-4 w-4 animate-spin" /> {toolState === "recovering" ? "Recovering fields…" : "Analyzing narrative…"}</>
+                        ) : (
+                          <><Shield className="h-4 w-4" /> Run Reviewer</>
+                        )}
+                      </Button>
+                      <p className="text-xs text-muted-foreground text-center">
+                        Checks authored narrative text for tone, bias, and policy compliance
                       </p>
                     </div>
                   )}
 
-                  {/* Recovering */}
+                  {toolState === "success" && (
+                    <Button variant="default" onClick={handleBack} className="w-full gap-2 h-12 text-sm" size="lg">
+                      <CheckCircle2 className="h-4 w-4" /> Done — Back to Dashboard
+                    </Button>
+                  )}
+
+                  {toolState === "error" && (
+                    <div className="space-y-3">
+                      <div className="text-center py-4">
+                        <AlertTriangle className="h-8 w-8 mx-auto text-destructive/40 mb-3" />
+                        <p className="text-sm text-destructive font-medium mb-1">Review failed</p>
+                        <p className="text-xs text-muted-foreground">{errorMessage}</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button onClick={handleRun} disabled={!canRun} className="flex-1 gap-1.5">
+                          <RefreshCw className="h-3.5 w-3.5" /> Try again
+                        </Button>
+                        <Button variant="outline" onClick={handleClear} className="gap-1.5">
+                          <RotateCcw className="h-3.5 w-3.5" /> Clear
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Idle / Ready / Loading states */}
+                  {(toolState === "idle" || toolState === "ready") && !output && (
+                    <div className="text-center py-8">
+                      <Shield className="h-10 w-10 mx-auto text-muted-foreground/15 mb-3" />
+                      <p className="text-sm text-muted-foreground">
+                        {extracting ? "Waiting for extraction…" : canRun ? "Ready to review" : "Upload a document to begin"}
+                      </p>
+                    </div>
+                  )}
+
                   {toolState === "recovering" && (
-                    <div className="text-center py-10">
+                    <div className="text-center py-8">
                       <Loader2 className="h-8 w-8 mx-auto text-primary animate-spin mb-3" />
                       <p className="text-sm text-muted-foreground">Recovering field structure…</p>
-                      <p className="text-xs text-muted-foreground/70 mt-1">Parsing template + reconciling fields</p>
                     </div>
                   )}
 
-                  {/* Running */}
                   {toolState === "running" && (
-                    <div className="text-center py-10">
-                      <Loader2 className="h-8 w-8 mx-auto text-primary animate-spin mb-3" />
-                      <p className="text-sm text-muted-foreground">Analyzing document…</p>
-                      <p className="text-xs text-muted-foreground/70 mt-1">Analyzing authored narrative for tone, bias, and policy language</p>
-                      {recoveryStats && (
-                        <div className="flex items-center justify-center gap-2 mt-3 flex-wrap">
-                          <Badge variant="outline" className="text-[10px]">{recoveryStats.answered} recovered</Badge>
-                          {recoveryStats.missing > 0 && <Badge variant="secondary" className="text-[10px]">{recoveryStats.missing} missing</Badge>}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Error */}
-                  {toolState === "error" && (
                     <div className="text-center py-8">
-                      <AlertTriangle className="h-8 w-8 mx-auto text-destructive/50 mb-3" />
-                      <p className="text-sm text-destructive font-medium mb-1">Review failed</p>
-                      <p className="text-xs text-muted-foreground">{errorMessage}</p>
+                      <Loader2 className="h-8 w-8 mx-auto text-primary animate-spin mb-3" />
+                      <p className="text-sm text-muted-foreground">Analyzing authored narrative…</p>
+                      <p className="text-xs text-muted-foreground/60 mt-1">Checking tone, bias, and policy language</p>
                     </div>
                   )}
 
-                  {/* Review tier + Reconciliation Panel */}
+                  {/* ─── RESULTS ─────────────────────────── */}
                   {toolState === "success" && output && (
-                    <div className="space-y-3">
-                      {/* Tier indicator */}
-                      <div className="flex items-center justify-between">
-                        <ReviewTierBadge tier={reviewTier} />
-                        {reviewTier === "basic" && (
-                          <span className="text-[10px] text-muted-foreground">No schema available</span>
-                        )}
-                      </div>
-
-                      {/* Full tier: notes source indicator */}
-                      {reviewTier === "full" && notesSource === "case_notes" && (
-                        <div className="flex items-start gap-2 p-2.5 rounded-lg bg-[hsl(var(--status-success-muted))]/50 border border-[hsl(var(--status-success))]/15">
-                          <ShieldCheck className="h-3.5 w-3.5 text-[hsl(var(--status-success))] shrink-0 mt-0.5" />
-                          <div>
-                            <p className="text-[11px] text-foreground font-medium">Secure notes-to-form comparison</p>
-                            <p className="text-[10px] text-muted-foreground">
-                              Comparison uses unlocked case notes as the source of truth.
-                            </p>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Reconciliation panel */}
+                    <>
+                      {/* ── Section A: Comparison Evidence ── */}
                       {reconciliationResult && (
-                        <div className="pb-1">
+                        <div className="space-y-4">
+                          <div className="flex items-center gap-2">
+                            <h2 className="text-sm font-semibold text-foreground">Comparison Evidence</h2>
+                            {reviewTier === "full" && notesSource === "case_notes" && (
+                              <Badge variant="outline" className="text-[10px] text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30 gap-1">
+                                <ShieldCheck className="h-2.5 w-2.5" /> Vault-backed
+                              </Badge>
+                            )}
+                          </div>
+
+                          {reviewTier === "full" && notesSource === "case_notes" && (
+                            <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-[hsl(var(--status-success-muted))]/40 border border-[hsl(var(--status-success))]/10">
+                              <ShieldCheck className="h-4 w-4 text-[hsl(var(--status-success))] shrink-0 mt-0.5" />
+                              <div>
+                                <p className="text-xs text-foreground font-medium">Secure notes-to-form comparison</p>
+                                <p className="text-xs text-muted-foreground mt-0.5">
+                                  Narrative comparison uses unlocked case notes as the source of truth.
+                                </p>
+                              </div>
+                            </div>
+                          )}
+
                           <ReconciliationPanel
                             result={reconciliationResult}
                             notesSource={notesSource ?? "field_recovery"}
                             artifactStatus={artifactStatus}
                           />
-                          <Separator className="mt-3" />
+
+                          <Separator className="my-2" />
                         </div>
                       )}
 
-                      {/* Template-only tier notice */}
+                      {/* Tier context notices */}
                       {reviewTier === "template_only" && !reconciliationResult && (
-                        <div className="flex items-start gap-2 p-2.5 rounded-lg bg-muted/50 border border-border">
-                          <Info className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                        <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-muted/40 border border-border">
+                          <Info className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
                           <div>
-                            <p className="text-[11px] text-muted-foreground font-medium">Template-only comparison</p>
-                            <p className="text-[10px] text-muted-foreground/70">
+                            <p className="text-xs text-muted-foreground font-medium">Template-only comparison</p>
+                            <p className="text-xs text-muted-foreground/70 mt-0.5">
                               Parser artifacts were not available. Review based on field recovery only.
                             </p>
                           </div>
                         </div>
                       )}
 
-                      {/* Sealed vault hint when running without unlock */}
                       {vault.vaultState === "sealed" && reviewTier !== "full" && (
-                        <div className="flex items-start gap-2 p-2.5 rounded-lg bg-muted/50 border border-border">
-                          <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                        <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-muted/40 border border-border">
+                          <Lock className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
                           <div>
-                            <p className="text-[11px] text-muted-foreground font-medium">
-                              Notes comparison not included
-                            </p>
-                            <p className="text-[10px] text-muted-foreground/70">
-                              Encrypted case notes are available but were not unlocked before this run.
-                              Unlock and re-run for full notes-to-form comparison.
+                            <p className="text-xs text-muted-foreground font-medium">Notes comparison not included</p>
+                            <p className="text-xs text-muted-foreground/70 mt-0.5">
+                              Encrypted case notes are available but were not unlocked. Unlock and re-run for full comparison.
                             </p>
                           </div>
                         </div>
                       )}
 
-                      {/* Basic tier notice */}
                       {reviewTier === "basic" && (
-                        <div className="flex items-start gap-2 p-2.5 rounded-lg bg-muted/50 border border-border">
-                          <Info className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                        <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-muted/40 border border-border">
+                          <Info className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
                           <div>
-                            <p className="text-[11px] text-muted-foreground font-medium">Basic review mode</p>
-                            <p className="text-[10px] text-muted-foreground/70">
-                              No template schema available. Findings are based on text-only analysis without structured field comparison.
+                            <p className="text-xs text-muted-foreground font-medium">Basic review mode</p>
+                            <p className="text-xs text-muted-foreground/70 mt-0.5">
+                              No template schema available. Findings are based on text-only analysis.
                             </p>
                           </div>
                         </div>
                       )}
-                    </div>
-                  )}
 
-                  {/* Success — Findings */}
-                  {toolState === "success" && output && issuesByType && (
-                    <div className="space-y-4">
-                      {/* Summary header */}
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Badge
-                            variant={output.summary.overall_risk === "high" ? "destructive" : output.summary.overall_risk === "medium" ? "default" : "secondary"}
-                            className="text-xs"
-                          >
-                            {output.summary.overall_risk.toUpperCase()} risk
-                          </Badge>
-                          <Badge variant="secondary" className="text-xs">
-                            {totalIssues} {totalIssues === 1 ? "issue" : "issues"}
-                          </Badge>
-                        </div>
-                        <Button variant="ghost" size="sm" onClick={handleCopyAll} className="h-7 px-2 text-[10px] gap-1">
-                          {copiedCategory === "__all__" ? <><Check className="h-3 w-3" /> Copied</> : <><Copy className="h-3 w-3" /> Copy all</>}
-                        </Button>
-                      </div>
+                      {/* ── Section B: Review Findings ───── */}
+                      {issuesByType && (
+                        <div className="space-y-5">
+                          <div className="flex items-center justify-between">
+                            <h2 className="text-sm font-semibold text-foreground">Review Findings</h2>
+                            <Button variant="ghost" size="sm" onClick={handleCopyAll} className="h-7 px-2 text-xs gap-1.5">
+                              {copiedCategory === "__all__" ? <><Check className="h-3 w-3" /> Copied</> : <><Copy className="h-3 w-3" /> Copy all</>}
+                            </Button>
+                          </div>
 
-                      {/* Key findings */}
-                      {output.summary.key_findings.length > 0 && (
-                        <div className="rounded-lg border p-3 bg-accent/5">
-                          <p className="text-[10px] uppercase font-medium text-muted-foreground mb-2 tracking-wide">Key Findings</p>
-                          <ul className="space-y-1">
-                            {output.summary.key_findings.map((f, i) => (
-                              <li key={i} className="text-xs text-foreground">• {f}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-
-                      {/* Recovery stats */}
-                      {recoveryStats && (
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <Badge variant="outline" className="text-[10px]">{recoveryStats.answered} fields answered</Badge>
-                          {recoveryStats.missing > 0 && (
-                            <Badge variant="outline" className="text-[10px] text-[hsl(var(--status-warning))] border-[hsl(var(--status-warning))]/30">
-                              {recoveryStats.missing} missing
-                            </Badge>
-                          )}
-                          {recoveryStats.humanReview > 0 && (
-                            <Badge variant="outline" className="text-[10px]">{recoveryStats.humanReview} human-review</Badge>
-                          )}
-                        </div>
-                      )}
-
-                       <p className="text-[10px] text-muted-foreground italic">
-                         AI-generated language audit — focuses on authored narrative text. Does not verify every structured field.
-                       </p>
-
-                      {totalIssues === 0 && (
-                        <div className="text-center py-6">
-                          <CheckCircle2 className="h-8 w-8 mx-auto text-[hsl(var(--status-success))]/50 mb-2" />
-                          <p className="text-sm text-foreground font-medium">No issues found</p>
-                          <p className="text-xs text-muted-foreground">Documentation looks good.</p>
-                        </div>
-                      )}
-
-                      {/* Issue groups */}
-                      {ISSUE_TYPES.map((type) => {
-                        const issues = issuesByType[type];
-                        if (!issues || issues.length === 0) return null;
-                        const meta = ISSUE_TYPE_META[type];
-                        const Icon = meta.icon;
-
-                        return (
-                          <Collapsible key={type} defaultOpen>
-                            <div className="flex items-center justify-between">
-                              <CollapsibleTrigger className="flex items-center gap-2 group">
-                                <ChevronDown className="h-3 w-3 text-muted-foreground transition-transform group-data-[state=closed]:rotate-[-90deg]" />
-                                <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-                                <span className="text-xs font-medium text-foreground">{meta.label}</span>
-                                <Badge variant="secondary" className="text-[10px] px-1.5 h-4">{issues.length}</Badge>
-                              </CollapsibleTrigger>
-                              <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[10px] text-muted-foreground" onClick={() => handleCopyType(type)}>
-                                {copiedCategory === type ? <><Check className="h-2.5 w-2.5 mr-0.5" /> Copied</> : <><Copy className="h-2.5 w-2.5 mr-0.5" /> Copy</>}
-                              </Button>
+                          {/* Summary */}
+                          <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+                            <div className="flex items-center gap-3">
+                              <Badge
+                                variant={output.summary.overall_risk === "high" ? "destructive" : output.summary.overall_risk === "medium" ? "default" : "secondary"}
+                                className="text-xs px-2.5"
+                              >
+                                {output.summary.overall_risk.toUpperCase()} risk
+                              </Badge>
+                              <span className="text-sm text-muted-foreground">
+                                {totalIssues} {totalIssues === 1 ? "finding" : "findings"}
+                              </span>
                             </div>
-                            <CollapsibleContent>
-                              <div className="space-y-2 mt-2">
-                                {issues.map((issue, i) => {
-                                  const sev = SEVERITY_CONFIG[issue.severity];
-                                  const isActive = activeSnippet === issue.excerpt && !!issue.excerpt && issue.excerpt.length > 0;
-                                  return (
-                                    <div
-                                      key={i}
-                                      className={cn(
-                                        "p-2.5 rounded-lg border text-sm",
-                                        isActive ? "border-[hsl(var(--status-warning))] bg-[hsl(var(--status-warning-muted))]" : "bg-muted/30"
-                                      )}
-                                    >
-                                      <div className="flex items-start gap-2">
-                                        <Badge variant={sev.variant} className="text-[10px] shrink-0 mt-0.5 px-1.5">{sev.label}</Badge>
-                                        <div className="flex-1 min-w-0">
-                                          <p className="text-xs text-foreground leading-relaxed">{issue.explanation}</p>
-                                          {issue.field_key && (
-                                            <p className="text-[10px] text-muted-foreground mt-0.5 font-mono">Field: {issue.field_key}</p>
-                                          )}
-                                          {issue.excerpt && (
-                                            <p className="text-[11px] text-muted-foreground mt-1 italic border-l-2 border-border pl-2">"{issue.excerpt}"</p>
-                                          )}
-                                        </div>
-                                      </div>
-                                      {issue.excerpt && issue.excerpt.length > 0 && (
-                                        <div className="flex items-center gap-1 mt-2 pt-1.5 border-t border-border/50">
-                                          <Button
-                                            variant={isActive ? "secondary" : "ghost"}
-                                            size="sm"
-                                            className="h-6 px-2 text-[10px] gap-1"
-                                            onClick={() => handleHighlight(isActive ? "" : issue.excerpt)}
-                                          >
-                                            <Search className="h-2.5 w-2.5" />
-                                            {isActive ? "Unhighlight" : "Highlight in text"}
-                                          </Button>
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })}
+
+                            {output.summary.key_findings.length > 0 && (
+                              <div className="space-y-1.5 pt-1">
+                                <p className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Key Findings</p>
+                                <ul className="space-y-1.5">
+                                  {output.summary.key_findings.map((f, i) => (
+                                    <li key={i} className="text-sm text-foreground leading-relaxed flex items-start gap-2">
+                                      <span className="text-muted-foreground/40 mt-0.5">•</span>
+                                      <span>{f}</span>
+                                    </li>
+                                  ))}
+                                </ul>
                               </div>
-                            </CollapsibleContent>
-                          </Collapsible>
-                        );
-                      })}
-                    </div>
+                            )}
+                          </div>
+
+                          <p className="text-xs text-muted-foreground/60 italic">
+                            AI-generated language audit — focuses on authored narrative text. Does not verify structured fields.
+                          </p>
+
+                          {totalIssues === 0 && (
+                            <div className="text-center py-10">
+                              <CheckCircle2 className="h-10 w-10 mx-auto text-[hsl(var(--status-success))]/30 mb-3" />
+                              <p className="text-base text-foreground font-medium">No issues found</p>
+                              <p className="text-sm text-muted-foreground mt-1">Documentation looks good.</p>
+                            </div>
+                          )}
+
+                          {/* Issue groups */}
+                          {ISSUE_TYPES.map((type) => {
+                            const issues = issuesByType[type];
+                            if (!issues || issues.length === 0) return null;
+                            const meta = ISSUE_TYPE_META[type];
+                            const Icon = meta.icon;
+
+                            return (
+                              <Collapsible key={type} defaultOpen>
+                                <div className="space-y-3">
+                                  <div className="flex items-center justify-between">
+                                    <CollapsibleTrigger className="flex items-center gap-2.5 group">
+                                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition-transform group-data-[state=closed]:rotate-[-90deg]" />
+                                      <Icon className="h-4 w-4 text-muted-foreground" />
+                                      <span className="text-sm font-medium text-foreground">{meta.label}</span>
+                                      <Badge variant="secondary" className="text-[10px] px-2 h-5">{issues.length}</Badge>
+                                    </CollapsibleTrigger>
+                                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground gap-1" onClick={() => handleCopyType(type)}>
+                                      {copiedCategory === type ? <><Check className="h-3 w-3" /> Copied</> : <><Copy className="h-3 w-3" /> Copy</>}
+                                    </Button>
+                                  </div>
+                                  <p className="text-xs text-muted-foreground/60 -mt-1 ml-9">{meta.description}</p>
+                                  <CollapsibleContent>
+                                    <div className="space-y-2.5">
+                                      {issues.map((issue, i) => (
+                                        <IssueCard
+                                          key={i}
+                                          issue={issue}
+                                          isActive={activeSnippet === issue.excerpt && !!issue.excerpt && issue.excerpt.length > 0}
+                                          onHighlight={handleHighlight}
+                                        />
+                                      ))}
+                                    </div>
+                                  </CollapsibleContent>
+                                </div>
+                              </Collapsible>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </ScrollArea>
@@ -1551,7 +1467,6 @@ export default function Reviewer() {
           </div>
         )}
       </div>
-      {/* Dev-only verification panel */}
       {import.meta.env.DEV && <ReviewerVerificationPanel diagnostics={devDiagnostics} />}
     </div>
   );
