@@ -961,7 +961,7 @@ export default function Reviewer() {
           ...report.summary,
           overall_risk: recalcRisk as "low" | "medium" | "high",
           key_findings: report.summary.key_findings.filter(
-            (f: string) => !isExplanationAboutBlockedFieldPublic(f)
+            (f: string) => !isExplanationAboutBlockedField(f, "")
           ),
         },
         metrics: {
