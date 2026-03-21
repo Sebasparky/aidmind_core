@@ -197,32 +197,30 @@ const SCOPE_OPERATIONAL_TERMS: Record<string, string[]> = {
 
 /**
  * Generic positive signals indicating assessment/intake/interview utility.
+ * IMPORTANT: These must be domain-neutral. Domain-specific terms belong
+ * in SCOPE_OPERATIONAL_TERMS to avoid cross-domain contamination.
  */
 const USEFULNESS_POSITIVE_PHRASES: string[] = [
   "assessment", "screening", "intake", "interview", "evaluate", "determine",
   "document", "documentation", "required information", "data collection",
   "risk factors", "safety factors", "indicators", "criteria", "checklist",
   "responsibilities", "required reporting", "must assess", "shall document",
-  "caseworker", "case worker", "worker must", "worker shall", "worker should",
   "information gathering", "questions to ask", "areas to explore",
   "factors to consider", "elements to assess", "items to document",
   "referral", "service coordination", "agency involvement", "provider",
-  "records", "case plan", "service plan", "treatment plan",
-  "household composition", "family members", "caregiver", "parent",
-  "child", "children", "placement", "living arrangement",
-  "safety", "risk", "protective factors", "strengths",
+  "records", "service plan", "treatment plan",
   "prior history", "prior services", "prior contact", "prior involvement",
-  "visit", "home visit", "observation",
+  "visit", "observation",
 ];
 
 /**
  * Concrete case-fact nouns that indicate operational content.
+ * Domain-neutral only — scope-specific nouns are in SCOPE_OPERATIONAL_TERMS.
  */
 const USEFULNESS_FACT_NOUNS: string[] = [
-  "child", "parent", "caregiver", "household", "family", "placement",
   "safety", "risk", "services", "referral", "treatment", "records",
-  "case plan", "assessment", "screening", "documentation", "visit",
-  "agency", "provider", "medication", "diagnosis", "symptoms",
+  "assessment", "screening", "documentation",
+  "agency", "provider", "eligibility",
   "income", "housing", "employment", "education", "transportation",
 ];
 
