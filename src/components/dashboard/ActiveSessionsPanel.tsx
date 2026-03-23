@@ -90,6 +90,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         guidanceCompleted: note.guidanceCompleted,
         caseNotesCompleted: note.caseNotesCompleted,
         reviewerCompleted: note.reviewerCompleted,
+        sessionCompleted: note.sessionCompleted,
       }));
   }, [notes]);
 
