@@ -14,6 +14,7 @@ export interface RecentNote {
   guidanceCompleted: boolean;
   caseNotesCompleted: boolean;
   reviewerCompleted: boolean;
+  sessionCompleted: boolean;
 }
 
 type SessionRow = Tables<"sessions">;
