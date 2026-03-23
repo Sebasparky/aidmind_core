@@ -1724,7 +1724,74 @@ export default function Reviewer() {
 
       {/* ─── Main content ────────────────────────────────── */}
       <div className="flex-1 overflow-hidden flex flex-col">
-        {!hasDocument ? (
+        {!hasDocument && reviewerPreviouslyCompleted && toolState !== "success" ? (
+          /* ─── Completed Reviewer read-only overview ──────── */
+          <div className="flex-1 flex items-center justify-center p-8">
+            <div className="w-full max-w-lg space-y-6">
+              <div className="text-center">
+                <div className="h-14 w-14 rounded-2xl bg-[hsl(var(--status-success-muted))] flex items-center justify-center mx-auto mb-4">
+                  <CheckCircle2 className="h-7 w-7 text-[hsl(var(--status-success))]" />
+                </div>
+                <h2 className="text-xl font-semibold text-foreground">Review completed</h2>
+                <p className="text-sm text-muted-foreground mt-2 max-w-sm mx-auto leading-relaxed">
+                  The language review for this session was completed successfully.
+                </p>
+              </div>
+
+              {/* Summary card */}
+              <div className="rounded-xl border border-border bg-card p-5 space-y-4">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground">Status</span>
+                    <Badge variant="outline" className="text-[10px] text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30">
+                      Completed
+                    </Badge>
+                  </div>
+                  {reviewerCompletedAt && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">Completed</span>
+                      <span className="text-xs text-foreground font-medium">
+                        {new Date(reviewerCompletedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                        {" at "}
+                        {new Date(reviewerCompletedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
+                      </span>
+                    </div>
+                  )}
+                  {previousReviewTier && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">Review mode</span>
+                      <span className="text-xs text-foreground font-medium">
+                        {previousReviewTier === "full" ? "Full notes-to-form comparison" : previousReviewTier === "template_only" ? "Template-only" : "Basic text review"}
+                      </span>
+                    </div>
+                  )}
+                </div>
+                <Separator />
+                <div className="flex items-start gap-2.5">
+                  <Lock className="h-3.5 w-3.5 text-muted-foreground/50 mt-0.5 shrink-0" />
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Detailed findings are not retained after completion. This is intentional — reviewer output is processed in-memory only and cleared when the review is finished, protecting client privacy.
+                  </p>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="space-y-3">
+                <Button onClick={() => setReviewerPreviouslyCompleted(false)} className="w-full gap-2 h-11">
+                  <Shield className="h-4 w-4" /> Run Reviewer Again
+                </Button>
+                <Button variant="outline" onClick={() => navigate("/dashboard")} className="w-full gap-2 h-11">
+                  <ArrowLeft className="h-4 w-4" /> Back to Dashboard
+                </Button>
+              </div>
+
+              <div className="flex items-center justify-center gap-2">
+                <ShieldCheck className="h-3 w-3 text-muted-foreground/30" />
+                <span className="text-[10px] text-muted-foreground/40">Zero-retention privacy model</span>
+              </div>
+            </div>
+          </div>
+        ) : !hasDocument ? (
           /* ─── Upload state ──────────────────────────────── */
           <div className="flex-1 flex items-center justify-center p-8">
             <div className="w-full max-w-lg space-y-5">
