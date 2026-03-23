@@ -1028,7 +1028,7 @@ function ResultsMode({
 
 
         {/* ═══ SOURCE DOCUMENT TAB ═══ */}
-        <TabsContent value="source" className="flex-1 overflow-hidden mt-0">
+        <TabsContent value="source" className={cn("flex-1 overflow-hidden mt-0", activeTab !== "source" && "hidden")} forceMount>
           {selectedFile ? (
             <div className="h-full flex flex-col">
               <div className="px-6 py-3 border-b border-border bg-card flex items-center gap-3 shrink-0">
@@ -1048,7 +1048,7 @@ function ResultsMode({
         </TabsContent>
 
         {/* ═══ EXTRACTED TEXT TAB ═══ */}
-        <TabsContent value="text" className="flex-1 overflow-hidden mt-0">
+        <TabsContent value="text" className={cn("flex-1 overflow-hidden mt-0", activeTab !== "text" && "hidden")} forceMount>
           <ScrollArea className="h-full">
             <div className="max-w-3xl mx-auto px-6 py-8">
               <div className="flex items-center justify-between mb-6">
