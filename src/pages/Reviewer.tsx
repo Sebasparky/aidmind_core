@@ -1560,7 +1560,37 @@ export default function Reviewer() {
     setTimeout(() => setCopiedCategory(null), 2000);
   };
 
-  const handleBack = () => {
+  const handleBack = async () => {
+    // Persist reviewer completion metadata (non-sensitive workflow state only)
+    if (sessionInfo && output) {
+      try {
+        const { data: currentSession } = await supabase
+          .from("sessions")
+          .select("metadata")
+          .eq("session_id", sessionId!)
+          .maybeSingle();
+
+        const existingMeta = (currentSession?.metadata as Record<string, unknown>) ?? {};
+        const updatedMeta: Record<string, unknown> = {
+          ...existingMeta,
+          reviewer_completed_at: new Date().toISOString(),
+        };
+
+        // Check if all three tools are complete → mark session as fully completed
+        const guidanceDone = !!existingMeta.guidance_completed_at;
+        const caseNotesDone = !!existingMeta.case_notes_completed_at;
+        if (guidanceDone && caseNotesDone) {
+          updatedMeta.session_completed_at = new Date().toISOString();
+        }
+
+        await supabase
+          .from("sessions")
+          .update({ metadata: updatedMeta as any })
+          .eq("session_id", sessionId!);
+      } catch (err) {
+        console.warn("[Reviewer] Failed to persist completion metadata:", err);
+      }
+    }
     vault.relock("manual");
     navigate("/dashboard");
   };
