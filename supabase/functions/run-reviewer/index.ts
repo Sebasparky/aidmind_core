@@ -675,14 +675,26 @@ serve(async (req) => {
 
     // Step 1: Filter blocked fields + deduplicate + suppress weak comparison
     const { filtered: filteredIssues, suppressed: serverSuppressed } = dedupeAndFilterIssues(reportObj.issues);
-    reportObj.issues = filteredIssues;
 
-    // Step 2: Assign finding_track deterministically (server-side, not model)
+    // Step 2: Deterministic classification pipeline
+    // Normalize spans, apply rule-based category assignment, resolve overlaps,
+    // calibrate severity, and deduplicate near-identical findings
+    const classificationResult = deterministicClassify(filteredIssues);
+    reportObj.issues = classificationResult.issues.map((ci: any) => ({
+      type: ci.type,
+      severity: ci.severity,
+      excerpt: ci.excerpt,
+      explanation: ci.explanation,
+      field_key: ci.field_key,
+      finding_track: undefined, // will be assigned below
+    }));
+
+    // Step 3: Assign finding_track deterministically (server-side, not model)
     for (const issue of reportObj.issues) {
       issue.finding_track = assignFindingTrack(issue.type);
     }
 
-    // Step 3: Compute deterministic confidence/coverage caps
+    // Step 4: Compute deterministic confidence/coverage caps
     const { coverageCap, confidenceCap } = computeDeterministicCaps(
       v2.document_text.length,
       reviewWorthyCount,
@@ -693,7 +705,7 @@ serve(async (req) => {
     summary.review_confidence = capConfidence(summary.review_confidence, confidenceCap);
     summary.narrative_coverage = capCoverage(summary.narrative_coverage, coverageCap);
 
-    // Step 4: Recalculate metrics from filtered issues
+    // Step 5: Recalculate metrics from classified issues
     const primaryIssues = reportObj.issues.filter((i: ReviewIssue) => i.finding_track === "primary");
     const secondaryIssues = reportObj.issues.filter((i: ReviewIssue) => i.finding_track === "secondary");
 
@@ -702,7 +714,7 @@ serve(async (req) => {
       high_severity_count: reportObj.issues.filter((i: ReviewIssue) => i.severity === "high").length,
     };
 
-    // Step 5: overall_risk must not be driven to high by secondary findings alone
+    // Step 6: overall_risk must not be driven to high by secondary findings alone
     const primaryHighCount = primaryIssues.filter((i: ReviewIssue) => i.severity === "high").length;
     const primaryMedCount = primaryIssues.filter((i: ReviewIssue) => i.severity === "medium").length;
 
@@ -711,7 +723,6 @@ serve(async (req) => {
     } else if (primaryMedCount > 0) {
       summary.overall_risk = "medium";
     } else {
-      // Secondary findings alone: cap at medium
       const anySecondaryHigh = secondaryIssues.some((i: ReviewIssue) => i.severity === "high");
       summary.overall_risk = anySecondaryHigh ? "medium" : "low";
     }
