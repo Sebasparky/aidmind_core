@@ -5,10 +5,11 @@ import {
   AlertTriangle, MessageSquare, Scale, CheckSquare, Eye,
   Upload, FileText, X, RefreshCw, CheckCircle2, FileWarning,
   Search, ChevronDown, ChevronRight, Circle, Lock, Unlock,
-  ShieldCheck, Clock, AlertCircle,
+  ShieldCheck, Clock, AlertCircle, ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
