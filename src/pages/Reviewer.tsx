@@ -5,7 +5,7 @@ import {
   AlertTriangle, MessageSquare, Scale, CheckSquare, Eye,
   Upload, FileText, X, RefreshCw, CheckCircle2, FileWarning,
   Search, ChevronDown, ChevronRight, Circle, Lock, Unlock,
-  ShieldCheck, Clock,
+  ShieldCheck, Clock, AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
