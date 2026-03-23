@@ -5,7 +5,7 @@ import {
   AlertTriangle, MessageSquare, Scale, CheckSquare, Eye,
   Upload, FileText, X, RefreshCw, CheckCircle2, FileWarning,
   Search, ChevronDown, ChevronRight, Circle, Lock, Unlock,
-  ShieldCheck, Clock, AlertCircle,
+  ShieldCheck, Clock, AlertCircle, ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -13,6 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Collapsible,
   CollapsibleContent,
@@ -257,25 +258,18 @@ function applyLanguageFirstFiltering(
   }
 
   const result = issues.filter((issue) => {
-    // Hard-block findings that reference blocked structured fields by field_key
     if (isFieldKeyBlocked(issue.field_key)) {
       suppressed++;
       return false;
     }
-
-    // Hard-block findings whose text clearly references structured fields
     if ((issue.type === "completeness" || issue.type === "consistency") &&
         isExplanationAboutBlockedField(issue.explanation, issue.excerpt || "")) {
       suppressed++;
       return false;
     }
-
-    // Tone, bias, policy_language, unsupported_conclusion always pass (they're about authored text)
     if (issue.type === "tone" || issue.type === "bias" || issue.type === "policy_language" || issue.type === "unsupported_conclusion") {
       return true;
     }
-
-    // For completeness/consistency, check schema eligibility
     if (issue.field_key) {
       const sf = schemaMap?.get(issue.field_key);
       if (sf) {
@@ -540,7 +534,7 @@ function VaultSection({
   );
 }
 
-// ─── Issue Card (Redesigned) ─────────────────────────────
+// ─── Issue Card (Redesigned for results mode) ────────────
 function IssueCard({
   issue,
   isActive,
@@ -556,40 +550,38 @@ function IssueCard({
   const typeLabel = ISSUE_TYPE_LABELS[issue.type] ?? issue.type;
   const isPrimary = variant === "primary";
 
-  // Format field_key for display — replace underscores with spaces, title-case
   const sectionLabel = issue.field_key
     ? issue.field_key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
     : null;
 
   return (
     <div className={cn(
-      "rounded-lg border transition-colors",
+      "rounded-xl border transition-colors",
       isActive
         ? "border-[hsl(var(--status-warning))]/50 bg-[hsl(var(--status-warning-muted))]/30"
         : isPrimary
-          ? "border-border bg-card hover:bg-accent/5"
-          : "border-border/60 bg-card/60 hover:bg-accent/5",
+          ? "border-border bg-card shadow-sm"
+          : "border-border/50 bg-card/50",
     )}>
-      {/* Collapsed-visible content */}
-      <div className={cn("p-4", isPrimary ? "space-y-2.5" : "space-y-2")}>
+      <div className={cn("space-y-3", isPrimary ? "p-5" : "p-4")}>
         {/* Row 1: Issue type label — bold, prominent */}
         <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2 min-w-0">
-            <div className={cn("h-2 w-2 rounded-full shrink-0 mt-0.5", sev.dotClass)} />
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className={cn("h-2.5 w-2.5 rounded-full shrink-0", sev.dotClass)} />
             <h4 className={cn(
               "font-semibold leading-tight",
-              isPrimary ? "text-sm text-foreground" : "text-xs text-muted-foreground"
+              isPrimary ? "text-base text-foreground" : "text-sm text-muted-foreground"
             )}>
               {typeLabel}
             </h4>
           </div>
-          <Badge variant={sev.variant} className="text-[10px] shrink-0 px-2">{sev.label}</Badge>
+          <Badge variant={sev.variant} className="text-[10px] shrink-0 px-2.5 py-0.5">{sev.label}</Badge>
         </div>
 
         {/* Row 2: Plain-English summary */}
         <p className={cn(
           "leading-relaxed",
-          isPrimary ? "text-sm text-foreground/90" : "text-xs text-muted-foreground"
+          isPrimary ? "text-sm text-foreground/85" : "text-xs text-muted-foreground"
         )}>
           {issue.explanation}
         </p>
@@ -597,7 +589,7 @@ function IssueCard({
         {/* Row 3: Metadata — section name, actions */}
         <div className="flex items-center gap-3 flex-wrap">
           {sectionLabel && (
-            <span className="text-[11px] text-muted-foreground/70 font-medium">
+            <span className="text-[11px] text-muted-foreground/60 font-medium bg-muted/50 px-2 py-0.5 rounded">
               {sectionLabel}
             </span>
           )}
@@ -614,10 +606,10 @@ function IssueCard({
           )}
         </div>
 
-        {/* Excerpt — revealed inline */}
+        {/* Excerpt */}
         {issue.excerpt && (
           <blockquote className={cn(
-            "border-l-2 pl-3 py-1 italic",
+            "border-l-2 pl-3 py-1.5 italic",
             isPrimary
               ? "text-xs text-muted-foreground border-border"
               : "text-[11px] text-muted-foreground/60 border-border/60"
@@ -626,6 +618,393 @@ function IssueCard({
           </blockquote>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Results Mode Component ─────────────────────────────
+function ResultsMode({
+  output,
+  reconciliationResult,
+  reviewTier,
+  notesSource,
+  vault,
+  selectedFile,
+  fileName,
+  pageCount,
+  extractedPages,
+  extractedFullText,
+  activeSnippet,
+  artifactStatus,
+  copiedCategory,
+  onHighlight,
+  onCopyAll,
+  onCopyType,
+  onBack,
+  textPanelRef,
+}: {
+  output: ReviewerV2Report;
+  reconciliationResult: ReconciliationResult | null;
+  reviewTier: ReviewTier;
+  notesSource: "case_notes" | "field_recovery" | null;
+  vault: any;
+  selectedFile: SelectedFile | null;
+  fileName: string | null;
+  pageCount: number;
+  extractedPages: PageText[];
+  extractedFullText: string;
+  activeSnippet: string | null;
+  artifactStatus: "loading" | "ready" | "missing" | "generating";
+  copiedCategory: string | null;
+  onHighlight: (snippet: string) => void;
+  onCopyAll: () => void;
+  onCopyType: (type: ReviewIssueType) => void;
+  onBack: () => void;
+  textPanelRef: React.RefObject<HTMLDivElement>;
+}) {
+  const primaryIssues = output.issues.filter(i => assignFindingTrack(i.type) === "primary");
+  const secondaryIssues = output.issues.filter(i => assignFindingTrack(i.type) === "secondary");
+  const primaryCount = primaryIssues.length;
+  const coverage = output.summary.narrative_coverage ?? "sufficient";
+  const confidence = output.summary.review_confidence ?? "high";
+  const isInsufficient = coverage === "insufficient";
+  const isLimited = coverage === "partial" || confidence === "medium" || confidence === "low";
+
+  const hasComparison = !!reconciliationResult;
+
+  return (
+    <div className="flex-1 overflow-hidden flex flex-col">
+      <Tabs defaultValue="findings" className="flex-1 flex flex-col overflow-hidden">
+        {/* Tab bar */}
+        <div className="border-b border-border bg-card px-6 shrink-0">
+          <TabsList className="bg-transparent h-auto p-0 gap-0 rounded-none">
+            <TabsTrigger
+              value="findings"
+              className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-3 text-sm"
+            >
+              Findings
+              {primaryCount > 0 && (
+                <Badge variant="destructive" className="ml-2 text-[10px] px-1.5 h-4">{primaryCount}</Badge>
+              )}
+            </TabsTrigger>
+            {hasComparison && (
+              <TabsTrigger
+                value="comparison"
+                className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-3 text-sm"
+              >
+                Comparison Details
+              </TabsTrigger>
+            )}
+            <TabsTrigger
+              value="source"
+              className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-3 text-sm"
+            >
+              Source Document
+            </TabsTrigger>
+            <TabsTrigger
+              value="text"
+              className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-3 text-sm"
+            >
+              Extracted Text
+            </TabsTrigger>
+          </TabsList>
+        </div>
+
+        {/* ═══ FINDINGS TAB ═══ */}
+        <TabsContent value="findings" className="flex-1 overflow-hidden mt-0">
+          <ScrollArea className="h-full">
+            <div className="max-w-3xl mx-auto px-6 py-8 space-y-8">
+
+              {/* ── Top Verdict ─────────────────────────── */}
+              <div className={cn(
+                "rounded-2xl border p-6",
+                primaryCount > 0
+                  ? "border-[hsl(var(--status-danger))]/20 bg-[hsl(var(--status-danger-muted))]/30"
+                  : isInsufficient
+                    ? "border-[hsl(var(--status-warning))]/20 bg-[hsl(var(--status-warning-muted))]/30"
+                    : "border-[hsl(var(--status-success))]/20 bg-[hsl(var(--status-success-muted))]/30"
+              )}>
+                <div className="flex items-start gap-5">
+                  <div className={cn(
+                    "h-12 w-12 rounded-2xl flex items-center justify-center shrink-0",
+                    primaryCount > 0
+                      ? "bg-[hsl(var(--status-danger-muted))]"
+                      : isInsufficient
+                        ? "bg-[hsl(var(--status-warning-muted))]"
+                        : "bg-[hsl(var(--status-success-muted))]"
+                  )}>
+                    {primaryCount > 0 ? (
+                      <AlertTriangle className="h-6 w-6 text-[hsl(var(--status-danger))]" />
+                    ) : isInsufficient ? (
+                      <Info className="h-6 w-6 text-[hsl(var(--status-warning))]" />
+                    ) : (
+                      <CheckCircle2 className="h-6 w-6 text-[hsl(var(--status-success))]" />
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0 space-y-3">
+                    <h2 className="text-xl font-semibold text-foreground leading-tight">
+                      {primaryCount > 0
+                        ? `${primaryCount} language ${primaryCount === 1 ? "concern" : "concerns"} found`
+                        : isInsufficient
+                          ? "Limited review coverage"
+                          : isLimited
+                            ? "No high-confidence language concerns detected"
+                            : "No language concerns detected"}
+                    </h2>
+                    <p className="text-sm text-muted-foreground leading-relaxed">
+                      {primaryCount > 0
+                        ? "Review the findings below for tone, bias, or policy-language concerns in the authored narrative."
+                        : isInsufficient
+                          ? "Limited authored narrative was found in this document. Review coverage is insufficient for a confident assessment."
+                          : isLimited
+                            ? "No language concerns were detected, but review coverage was limited. Consider providing more narrative text for a thorough review."
+                            : "The reviewed narrative text appears professionally written and compliant with language standards."}
+                    </p>
+                    {/* Metadata badges */}
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <Badge
+                        variant={output.summary.overall_risk === "high" ? "destructive" : output.summary.overall_risk === "medium" ? "default" : "secondary"}
+                        className="text-[11px] px-2.5 py-0.5"
+                      >
+                        {output.summary.overall_risk === "low" ? "Low" : output.summary.overall_risk === "medium" ? "Medium" : "High"} risk
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">
+                        Confidence: <span className="font-medium text-foreground/80 capitalize">{confidence}</span>
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        Coverage: <span className="font-medium text-foreground/80 capitalize">{coverage}</span>
+                      </span>
+                    </div>
+                    {secondaryIssues.length > 0 && primaryCount === 0 && (
+                      <p className="text-xs text-muted-foreground/70">
+                        {secondaryIssues.length} lower-priority comparison {secondaryIssues.length === 1 ? "observation" : "observations"} available below.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* ── PRIMARY LANGUAGE FINDINGS ────────────── */}
+              {primaryCount > 0 && (
+                <section className="space-y-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-lg font-semibold text-foreground">Primary Language Findings</h3>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Tone, bias, unsupported conclusions, and policy-language concerns in authored narrative
+                      </p>
+                    </div>
+                    <Button variant="ghost" size="sm" onClick={onCopyAll} className="h-8 px-3 text-xs gap-1.5 shrink-0">
+                      {copiedCategory === "__all__" ? <><Check className="h-3 w-3" /> Copied</> : <><Copy className="h-3 w-3" /> Copy all</>}
+                    </Button>
+                  </div>
+
+                  {PRIMARY_ISSUE_TYPES.map((type) => {
+                    const issues = primaryIssues.filter(i => i.type === type);
+                    if (issues.length === 0) return null;
+                    const meta = ISSUE_TYPE_META[type];
+                    const Icon = meta.icon;
+                    return (
+                      <Collapsible key={type} defaultOpen>
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <CollapsibleTrigger className="flex items-center gap-2.5 group">
+                              <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-data-[state=closed]:rotate-[-90deg]" />
+                              <Icon className="h-4 w-4 text-muted-foreground" />
+                              <span className="text-sm font-semibold text-foreground">{meta.label}</span>
+                              <Badge variant="secondary" className="text-[10px] px-2 h-5">{issues.length}</Badge>
+                            </CollapsibleTrigger>
+                            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground gap-1" onClick={() => onCopyType(type)}>
+                              {copiedCategory === type ? <><Check className="h-3 w-3" /> Copied</> : <><Copy className="h-3 w-3" /> Copy</>}
+                            </Button>
+                          </div>
+                          <CollapsibleContent>
+                            <div className="space-y-3">
+                              {issues.map((issue, i) => (
+                                <IssueCard
+                                  key={i}
+                                  issue={issue}
+                                  isActive={activeSnippet === issue.excerpt && !!issue.excerpt && issue.excerpt.length > 0}
+                                  onHighlight={onHighlight}
+                                  variant="primary"
+                                />
+                              ))}
+                            </div>
+                          </CollapsibleContent>
+                        </div>
+                      </Collapsible>
+                    );
+                  })}
+                </section>
+              )}
+
+              {/* ── SECONDARY COMPARISON OBSERVATIONS ────── */}
+              {secondaryIssues.length > 0 && (
+                <Collapsible defaultOpen={false}>
+                  <div className="space-y-3 pt-4 border-t border-border/40">
+                    <CollapsibleTrigger className="flex items-center gap-2.5 group w-full">
+                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground/50 transition-transform group-data-[state=closed]:rotate-[-90deg]" />
+                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Secondary Comparison Observations</span>
+                      <Badge variant="outline" className="text-[9px] px-1.5 h-4 text-muted-foreground/50 border-border/40">{secondaryIssues.length}</Badge>
+                    </CollapsibleTrigger>
+                    <p className="text-[11px] text-muted-foreground/50 ml-9">Lower-priority notes-to-form observations</p>
+                    <CollapsibleContent>
+                      <div className="space-y-4 pt-1">
+                        {SECONDARY_ISSUE_TYPES.map((type) => {
+                          const issues = secondaryIssues.filter(i => i.type === type);
+                          if (issues.length === 0) return null;
+                          const meta = ISSUE_TYPE_META[type];
+                          const Icon = meta.icon;
+                          return (
+                            <div key={type} className="space-y-2">
+                              <div className="flex items-center gap-2 ml-2">
+                                <Icon className="h-3 w-3 text-muted-foreground/40" />
+                                <span className="text-[11px] font-medium text-muted-foreground/60">{meta.label}</span>
+                                <Badge variant="outline" className="text-[9px] px-1.5 h-4 text-muted-foreground/40 border-border/40">{issues.length}</Badge>
+                              </div>
+                              {issues.map((issue, i) => (
+                                <IssueCard
+                                  key={i}
+                                  issue={issue}
+                                  isActive={activeSnippet === issue.excerpt && !!issue.excerpt && issue.excerpt.length > 0}
+                                  onHighlight={onHighlight}
+                                  variant="secondary"
+                                />
+                              ))}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </CollapsibleContent>
+                  </div>
+                </Collapsible>
+              )}
+
+              {/* ── What to do next ─────────────────────── */}
+              <section className="rounded-xl border border-border bg-card p-5 space-y-4">
+                <h3 className="text-sm font-semibold text-foreground">What to do next</h3>
+                <div className="grid gap-2">
+                  {primaryCount > 0 && (
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      • Review highlighted language in the source document using the <span className="font-medium text-foreground">Source Document</span> or <span className="font-medium text-foreground">Extracted Text</span> tabs above.
+                    </p>
+                  )}
+                  {hasComparison && (
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      • Check the <span className="font-medium text-foreground">Comparison Details</span> tab for notes-to-form differences.
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    • When finished reviewing, return to the dashboard to continue your workflow.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 pt-1">
+                  <Button variant="default" onClick={onBack} className="gap-2 h-10 text-sm">
+                    <CheckCircle2 className="h-4 w-4" /> Done — Back to Dashboard
+                  </Button>
+                </div>
+              </section>
+
+              {/* Disclaimer */}
+              <p className="text-[11px] text-muted-foreground/40 italic text-center pb-4">
+                AI-generated language audit — focuses on authored narrative text. Does not verify every structured field.
+              </p>
+            </div>
+          </ScrollArea>
+        </TabsContent>
+
+        {/* ═══ COMPARISON DETAILS TAB ═══ */}
+        {hasComparison && (
+          <TabsContent value="comparison" className="flex-1 overflow-hidden mt-0">
+            <ScrollArea className="h-full">
+              <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
+                <div>
+                  <h3 className="text-lg font-semibold text-foreground">Comparison Details</h3>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Side-by-side notes-to-form observations from reconciliation
+                  </p>
+                </div>
+
+                {reviewTier === "full" && notesSource === "case_notes" && (
+                  <div className="flex items-start gap-2.5 p-4 rounded-xl bg-[hsl(var(--status-success-muted))]/40 border border-[hsl(var(--status-success))]/10">
+                    <ShieldCheck className="h-4 w-4 text-[hsl(var(--status-success))] shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-xs text-foreground font-medium">Secure notes-to-form comparison</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Narrative comparison uses unlocked case notes as the source of truth.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {reconciliationResult && (
+                  <ReconciliationPanel
+                    result={reconciliationResult}
+                    notesSource={notesSource ?? "field_recovery"}
+                    artifactStatus={artifactStatus}
+                  />
+                )}
+              </div>
+            </ScrollArea>
+          </TabsContent>
+        )}
+
+        {/* ═══ SOURCE DOCUMENT TAB ═══ */}
+        <TabsContent value="source" className="flex-1 overflow-hidden mt-0">
+          {selectedFile ? (
+            <div className="h-full flex flex-col">
+              <div className="px-6 py-3 border-b border-border bg-card flex items-center gap-3 shrink-0">
+                <FileText className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm text-foreground font-medium">{fileName}</span>
+                {pageCount > 0 && <Badge variant="secondary" className="text-[10px]">{pageCount} pages</Badge>}
+              </div>
+              <div className="flex-1 overflow-hidden bg-muted/20 p-2">
+                <iframe src={selectedFile.objectUrl} title="PDF preview" className="w-full h-full rounded border-0" />
+              </div>
+            </div>
+          ) : (
+            <div className="flex-1 flex items-center justify-center">
+              <p className="text-sm text-muted-foreground">Source document is no longer available. Re-upload to view.</p>
+            </div>
+          )}
+        </TabsContent>
+
+        {/* ═══ EXTRACTED TEXT TAB ═══ */}
+        <TabsContent value="text" className="flex-1 overflow-hidden mt-0">
+          <ScrollArea className="h-full">
+            <div className="max-w-3xl mx-auto px-6 py-8">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h3 className="text-lg font-semibold text-foreground">Extracted Text</h3>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {extractedFullText.length.toLocaleString()} characters extracted from the document
+                  </p>
+                </div>
+                {activeSnippet && (
+                  <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => onHighlight("")}>
+                    Clear highlight
+                  </Button>
+                )}
+              </div>
+              <div ref={textPanelRef} className="space-y-6 text-sm leading-relaxed">
+                {extractedPages.map((page) => (
+                  <div key={page.pageNumber} className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="text-[10px]">Page {page.pageNumber}</Badge>
+                      <Separator className="flex-1" />
+                    </div>
+                    <p className="text-foreground whitespace-pre-wrap break-words text-[13px] leading-relaxed">
+                      {page.text
+                        ? renderHighlightedText(page.text, activeSnippet)
+                        : <span className="text-muted-foreground italic">(no text on this page)</span>}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </ScrollArea>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
@@ -1028,7 +1407,6 @@ export default function Reviewer() {
       const { filtered: filteredIssues, suppressed: completenessSuppressions, reclassified: discrepancyReclassifications } =
         applyLanguageFirstFiltering(report.issues, localReconciliation, schemaFields);
 
-      // Recalculate risk from eligible findings only
       const eligibleHighCount = filteredIssues.filter(i => i.severity === "high").length;
       const eligibleMedCount = filteredIssues.filter(i => i.severity === "medium").length;
       const recalcRisk = eligibleHighCount > 0 ? "high" : eligibleMedCount > 0 ? "medium" : "low";
@@ -1198,7 +1576,13 @@ export default function Reviewer() {
               <div className="flex items-center gap-2">
                 <Shield className="h-4 w-4 text-primary" />
                 <h1 className="text-base font-semibold text-foreground">Reviewer</h1>
-                <span className="text-xs text-muted-foreground">Step 3 of 3</span>
+                {toolState === "success" ? (
+                  <Badge variant="outline" className="text-[10px] text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30">
+                    Complete
+                  </Badge>
+                ) : (
+                  <span className="text-xs text-muted-foreground">Step 3 of 3</span>
+                )}
               </div>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {sessionInfo.caseLabel}{sessionInfo.interactionType ? ` · ${sessionInfo.interactionType}` : ""}
@@ -1280,8 +1664,30 @@ export default function Reviewer() {
               </div>
             </div>
           </div>
+        ) : toolState === "success" && output ? (
+          /* ─── Results mode (post-run) ────────────────── */
+          <ResultsMode
+            output={output}
+            reconciliationResult={reconciliationResult}
+            reviewTier={reviewTier}
+            notesSource={notesSource}
+            vault={vault}
+            selectedFile={selectedFile}
+            fileName={fileName}
+            pageCount={pageCount}
+            extractedPages={extractedPages}
+            extractedFullText={extractedFullText}
+            activeSnippet={activeSnippet}
+            artifactStatus={artifactStatus}
+            copiedCategory={copiedCategory}
+            onHighlight={handleHighlight}
+            onCopyAll={handleCopyAll}
+            onCopyType={handleCopyType}
+            onBack={handleBack}
+            textPanelRef={textPanelRef}
+          />
         ) : (
-          /* ─── Workspace layout ─────────────────────────── */
+          /* ─── Pre-run workspace layout ─────────────────── */
           <div className="flex-1 overflow-hidden flex flex-col lg:flex-row">
             {/* ─── Left: Document workspace ──────────────── */}
             <div className="flex-1 min-w-0 flex flex-col lg:flex-row overflow-hidden lg:basis-[45%]">
@@ -1294,16 +1700,14 @@ export default function Reviewer() {
                       <span className="text-xs text-foreground font-medium truncate">{fileName}</span>
                       {pageCount > 0 && <Badge variant="secondary" className="text-[10px] shrink-0">{pageCount}p</Badge>}
                     </div>
-                    {toolState !== "success" && (
-                      <div className="flex items-center gap-1 shrink-0">
-                        <Button variant="ghost" size="sm" onClick={handleReplace} className="h-7 px-2 text-xs gap-1">
-                          <RefreshCw className="h-3 w-3" /> Replace
-                        </Button>
-                        <Button variant="ghost" size="sm" onClick={handleRemoveFile} className="h-7 px-2 text-xs gap-1 text-destructive hover:text-destructive">
-                          <X className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    )}
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Button variant="ghost" size="sm" onClick={handleReplace} className="h-7 px-2 text-xs gap-1">
+                        <RefreshCw className="h-3 w-3" /> Replace
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={handleRemoveFile} className="h-7 px-2 text-xs gap-1 text-destructive hover:text-destructive">
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </div>
                   </div>
                   <div className="flex-1 overflow-hidden bg-muted/20 p-1">
                     <iframe src={selectedFile.objectUrl} title="PDF preview" className="w-full h-full rounded border-0" />
@@ -1388,31 +1792,23 @@ export default function Reviewer() {
                   )}
 
                   {/* Primary CTA */}
-                  {toolState !== "success" && (
-                    <div className="space-y-3">
-                      <Button
-                        onClick={handleRun}
-                        disabled={!canRun}
-                        className="w-full gap-2 h-12 text-sm"
-                        size="lg"
-                      >
-                        {toolState === "running" || toolState === "recovering" ? (
-                          <><Loader2 className="h-4 w-4 animate-spin" /> {toolState === "recovering" ? "Recovering fields…" : "Analyzing narrative…"}</>
-                        ) : (
-                          <><Shield className="h-4 w-4" /> Run Reviewer</>
-                        )}
-                      </Button>
-                      <p className="text-xs text-muted-foreground text-center">
-                        Checks authored narrative text for tone, bias, and policy compliance
-                      </p>
-                    </div>
-                  )}
-
-                  {toolState === "success" && (
-                    <Button variant="default" onClick={handleBack} className="w-full gap-2 h-12 text-sm" size="lg">
-                      <CheckCircle2 className="h-4 w-4" /> Done — Back to Dashboard
+                  <div className="space-y-3">
+                    <Button
+                      onClick={handleRun}
+                      disabled={!canRun}
+                      className="w-full gap-2 h-12 text-sm"
+                      size="lg"
+                    >
+                      {toolState === "running" || toolState === "recovering" ? (
+                        <><Loader2 className="h-4 w-4 animate-spin" /> {toolState === "recovering" ? "Recovering fields…" : "Analyzing narrative…"}</>
+                      ) : (
+                        <><Shield className="h-4 w-4" /> Run Reviewer</>
+                      )}
                     </Button>
-                  )}
+                    <p className="text-xs text-muted-foreground text-center">
+                      Checks authored narrative text for tone, bias, and policy compliance
+                    </p>
+                  </div>
 
                   {toolState === "error" && (
                     <div className="space-y-3">
@@ -1456,261 +1852,6 @@ export default function Reviewer() {
                       <p className="text-xs text-muted-foreground/60 mt-1">Checking tone, bias, and policy language</p>
                     </div>
                   )}
-
-                  {/* ─── RESULTS ─────────────────────────── */}
-                  {toolState === "success" && output && (() => {
-                    const primaryIssues = output.issues.filter(i => assignFindingTrack(i.type) === "primary");
-                    const secondaryIssues = output.issues.filter(i => assignFindingTrack(i.type) === "secondary");
-                    const primaryCount = primaryIssues.length;
-                    const coverage = output.summary.narrative_coverage ?? "sufficient";
-                    const confidence = output.summary.review_confidence ?? "high";
-                    const isInsufficient = coverage === "insufficient";
-                    const isLimited = coverage === "partial" || confidence === "medium" || confidence === "low";
-
-                    return (
-                      <>
-                        {/* ── Summary Strip ─────────────────── */}
-                        <div className={cn(
-                          "rounded-xl border p-5",
-                          primaryCount > 0
-                            ? "border-[hsl(var(--status-danger))]/20 bg-[hsl(var(--status-danger-muted))]/40"
-                            : isInsufficient
-                              ? "border-[hsl(var(--status-warning))]/20 bg-[hsl(var(--status-warning-muted))]/40"
-                              : "border-[hsl(var(--status-success))]/20 bg-[hsl(var(--status-success-muted))]/40"
-                        )}>
-                          <div className="flex items-start gap-4">
-                            <div className={cn(
-                              "h-10 w-10 rounded-xl flex items-center justify-center shrink-0",
-                              primaryCount > 0
-                                ? "bg-[hsl(var(--status-danger-muted))]"
-                                : isInsufficient
-                                  ? "bg-[hsl(var(--status-warning-muted))]"
-                                  : "bg-[hsl(var(--status-success-muted))]"
-                            )}>
-                              {primaryCount > 0 ? (
-                                <AlertTriangle className="h-5 w-5 text-[hsl(var(--status-danger))]" />
-                              ) : isInsufficient ? (
-                                <Info className="h-5 w-5 text-[hsl(var(--status-warning))]" />
-                              ) : (
-                                <CheckCircle2 className="h-5 w-5 text-[hsl(var(--status-success))]" />
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0 space-y-2">
-                              <p className="text-base font-semibold text-foreground">
-                                {primaryCount > 0
-                                  ? `${primaryCount} language ${primaryCount === 1 ? "issue" : "issues"} found`
-                                  : isInsufficient
-                                    ? "Limited review coverage"
-                                    : isLimited
-                                      ? "No high-confidence language issues detected"
-                                      : "No language issues detected in reviewed narrative"}
-                              </p>
-                              <p className="text-sm text-muted-foreground leading-relaxed">
-                                {primaryCount > 0
-                                  ? "Review the findings below for tone, bias, or policy-language concerns in authored narrative."
-                                  : isInsufficient
-                                    ? "Limited authored narrative found — review coverage is insufficient for a confident assessment."
-                                    : isLimited
-                                      ? "Limited review coverage. Consider providing more authored narrative text for a thorough review."
-                                      : "The reviewed narrative text appears professionally written and compliant."}
-                              </p>
-                              {/* Metadata row */}
-                              <div className="flex items-center gap-3 flex-wrap pt-0.5">
-                                <Badge
-                                  variant={output.summary.overall_risk === "high" ? "destructive" : output.summary.overall_risk === "medium" ? "default" : "secondary"}
-                                  className="text-[10px] px-2"
-                                >
-                                  {output.summary.overall_risk === "low" ? "Low" : output.summary.overall_risk === "medium" ? "Medium" : "High"} risk
-                                </Badge>
-                                <span className="text-[11px] text-muted-foreground">
-                                  Confidence: <span className="font-medium text-foreground/80">{confidence}</span>
-                                </span>
-                                <span className="text-[11px] text-muted-foreground">
-                                  Coverage: <span className="font-medium text-foreground/80">{coverage}</span>
-                                </span>
-                              </div>
-                              {secondaryIssues.length > 0 && primaryCount === 0 && (
-                                <p className="text-xs text-muted-foreground/70 pt-1">
-                                  {secondaryIssues.length} lower-priority comparison {secondaryIssues.length === 1 ? "observation" : "observations"} available below.
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        <p className="text-[11px] text-muted-foreground/50 italic">
-                          AI-generated language audit — focuses on authored narrative text. Does not verify structured fields.
-                        </p>
-
-                        {/* ── Comparison Evidence (moved below summary) ── */}
-                        {reconciliationResult && (
-                          <div className="space-y-4">
-                            <div className="flex items-center gap-2">
-                              <h2 className="text-sm font-semibold text-foreground">Comparison Evidence</h2>
-                              {reviewTier === "full" && notesSource === "case_notes" && (
-                                <Badge variant="outline" className="text-[10px] text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30 gap-1">
-                                  <ShieldCheck className="h-2.5 w-2.5" /> Vault-backed
-                                </Badge>
-                              )}
-                            </div>
-
-                            {reviewTier === "full" && notesSource === "case_notes" && (
-                              <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-[hsl(var(--status-success-muted))]/40 border border-[hsl(var(--status-success))]/10">
-                                <ShieldCheck className="h-4 w-4 text-[hsl(var(--status-success))] shrink-0 mt-0.5" />
-                                <div>
-                                  <p className="text-xs text-foreground font-medium">Secure notes-to-form comparison</p>
-                                  <p className="text-xs text-muted-foreground mt-0.5">
-                                    Narrative comparison uses unlocked case notes as the source of truth.
-                                  </p>
-                                </div>
-                              </div>
-                            )}
-
-                            <ReconciliationPanel
-                              result={reconciliationResult}
-                              notesSource={notesSource ?? "field_recovery"}
-                              artifactStatus={artifactStatus}
-                            />
-
-                            <Separator className="my-2" />
-                          </div>
-                        )}
-
-                        {/* Tier context notices */}
-                        {reviewTier === "template_only" && !reconciliationResult && (
-                          <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-muted/40 border border-border">
-                            <Info className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                            <div>
-                              <p className="text-xs text-muted-foreground font-medium">Template-only comparison</p>
-                              <p className="text-xs text-muted-foreground/70 mt-0.5">
-                                Parser artifacts were not available. Review based on field recovery only.
-                              </p>
-                            </div>
-                          </div>
-                        )}
-
-                        {vault.vaultState === "sealed" && reviewTier !== "full" && (
-                          <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-muted/40 border border-border">
-                            <Lock className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                            <div>
-                              <p className="text-xs text-muted-foreground font-medium">Notes comparison not included</p>
-                              <p className="text-xs text-muted-foreground/70 mt-0.5">
-                                Encrypted case notes are available but were not unlocked. Unlock and re-run for full comparison.
-                              </p>
-                            </div>
-                          </div>
-                        )}
-
-                        {reviewTier === "basic" && (
-                          <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-muted/40 border border-border">
-                            <Info className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                            <div>
-                              <p className="text-xs text-muted-foreground font-medium">Basic review mode</p>
-                              <p className="text-xs text-muted-foreground/70 mt-0.5">
-                                No template schema available. Findings are based on text-only analysis.
-                              </p>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* ── PRIMARY LANGUAGE FINDINGS ────── */}
-                        {primaryCount > 0 && (
-                          <div className="space-y-5">
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <h2 className="text-sm font-semibold text-foreground">Primary Language Findings</h2>
-                                <p className="text-xs text-muted-foreground mt-0.5">
-                                  Tone, bias, unsupported conclusions, and policy-language concerns in authored narrative
-                                </p>
-                              </div>
-                              <Button variant="ghost" size="sm" onClick={handleCopyAll} className="h-7 px-2 text-xs gap-1.5 shrink-0">
-                                {copiedCategory === "__all__" ? <><Check className="h-3 w-3" /> Copied</> : <><Copy className="h-3 w-3" /> Copy all</>}
-                              </Button>
-                            </div>
-
-                            {PRIMARY_ISSUE_TYPES.map((type) => {
-                              const issues = primaryIssues.filter(i => i.type === type);
-                              if (issues.length === 0) return null;
-                              const meta = ISSUE_TYPE_META[type];
-                              const Icon = meta.icon;
-                              return (
-                                <Collapsible key={type} defaultOpen>
-                                  <div className="space-y-3">
-                                    <div className="flex items-center justify-between">
-                                      <CollapsibleTrigger className="flex items-center gap-2.5 group">
-                                        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition-transform group-data-[state=closed]:rotate-[-90deg]" />
-                                        <Icon className="h-4 w-4 text-muted-foreground" />
-                                        <span className="text-sm font-medium text-foreground">{meta.label}</span>
-                                        <Badge variant="secondary" className="text-[10px] px-2 h-5">{issues.length}</Badge>
-                                      </CollapsibleTrigger>
-                                      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground gap-1" onClick={() => handleCopyType(type)}>
-                                        {copiedCategory === type ? <><Check className="h-3 w-3" /> Copied</> : <><Copy className="h-3 w-3" /> Copy</>}
-                                      </Button>
-                                    </div>
-                                    <CollapsibleContent>
-                                      <div className="space-y-2.5">
-                                        {issues.map((issue, i) => (
-                                          <IssueCard
-                                            key={i}
-                                            issue={issue}
-                                            isActive={activeSnippet === issue.excerpt && !!issue.excerpt && issue.excerpt.length > 0}
-                                            onHighlight={handleHighlight}
-                                            variant="primary"
-                                          />
-                                        ))}
-                                      </div>
-                                    </CollapsibleContent>
-                                  </div>
-                                </Collapsible>
-                              );
-                            })}
-                          </div>
-                        )}
-
-                        {/* ── SECONDARY COMPARISON OBSERVATIONS ── */}
-                        {secondaryIssues.length > 0 && (
-                          <Collapsible defaultOpen={false}>
-                            <div className="space-y-3 pt-3 border-t border-border/50">
-                              <CollapsibleTrigger className="flex items-center gap-2.5 group w-full">
-                                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground/60 transition-transform group-data-[state=closed]:rotate-[-90deg]" />
-                                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Secondary Comparison Observations</span>
-                                <Badge variant="outline" className="text-[9px] px-1.5 h-4 text-muted-foreground/60 border-border/50">{secondaryIssues.length}</Badge>
-                              </CollapsibleTrigger>
-                              <p className="text-[11px] text-muted-foreground/50 ml-9">Lower-priority notes-to-form observations</p>
-                              <CollapsibleContent>
-                                <div className="space-y-4 pt-1">
-                                  {SECONDARY_ISSUE_TYPES.map((type) => {
-                                    const issues = secondaryIssues.filter(i => i.type === type);
-                                    if (issues.length === 0) return null;
-                                    const meta = ISSUE_TYPE_META[type];
-                                    const Icon = meta.icon;
-                                    return (
-                                      <div key={type} className="space-y-2">
-                                        <div className="flex items-center gap-2 ml-2">
-                                          <Icon className="h-3 w-3 text-muted-foreground/40" />
-                                          <span className="text-[11px] font-medium text-muted-foreground/60">{meta.label}</span>
-                                          <Badge variant="outline" className="text-[9px] px-1.5 h-4 text-muted-foreground/40 border-border/40">{issues.length}</Badge>
-                                        </div>
-                                        {issues.map((issue, i) => (
-                                          <IssueCard
-                                            key={i}
-                                            issue={issue}
-                                            isActive={activeSnippet === issue.excerpt && !!issue.excerpt && issue.excerpt.length > 0}
-                                            onHighlight={handleHighlight}
-                                            variant="secondary"
-                                          />
-                                        ))}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </CollapsibleContent>
-                            </div>
-                          </Collapsible>
-                        )}
-                      </>
-                    );
-                  })()}
                 </div>
               </ScrollArea>
             </div>
