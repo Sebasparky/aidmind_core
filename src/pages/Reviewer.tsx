@@ -637,10 +637,15 @@ function ResultsMode({
   activeSnippet,
   artifactStatus,
   copiedCategory,
+  schemaFields,
+  parserArtifact,
+  toolState,
   onHighlight,
   onCopyAll,
   onCopyType,
   onBack,
+  onUnlockClick,
+  onRelockClick,
   textPanelRef,
 }: {
   output: ReviewerV2Report;
@@ -656,12 +661,18 @@ function ResultsMode({
   activeSnippet: string | null;
   artifactStatus: "loading" | "ready" | "missing" | "generating";
   copiedCategory: string | null;
+  schemaFields: Phase2SchemaField[] | null;
+  parserArtifact: TemplateParserArtifact | null;
+  toolState: ToolState;
   onHighlight: (snippet: string) => void;
   onCopyAll: () => void;
   onCopyType: (type: ReviewIssueType) => void;
   onBack: () => void;
+  onUnlockClick: () => void;
+  onRelockClick: () => void;
   textPanelRef: React.RefObject<HTMLDivElement>;
 }) {
+  const [activeTab, setActiveTab] = useState("findings");
   const primaryIssues = output.issues.filter(i => assignFindingTrack(i.type) === "primary");
   const secondaryIssues = output.issues.filter(i => assignFindingTrack(i.type) === "secondary");
   const primaryCount = primaryIssues.length;
@@ -672,9 +683,12 @@ function ResultsMode({
 
   const hasComparison = !!reconciliationResult;
 
+  // Count for comparison CTA
+  const secondaryTotal = secondaryIssues.length + (reconciliationResult?.total_fields ?? 0);
+
   return (
     <div className="flex-1 overflow-hidden flex flex-col">
-      <Tabs defaultValue="findings" className="flex-1 flex flex-col overflow-hidden">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
         {/* Tab bar */}
         <div className="border-b border-border bg-card px-6 shrink-0">
           <TabsList className="bg-transparent h-auto p-0 gap-0 rounded-none">
@@ -713,9 +727,32 @@ function ResultsMode({
         {/* ═══ FINDINGS TAB ═══ */}
         <TabsContent value="findings" className="flex-1 overflow-hidden mt-0">
           <ScrollArea className="h-full">
-            <div className="max-w-3xl mx-auto px-6 py-8 space-y-8">
+            <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
 
-              {/* ── Top Verdict ─────────────────────────── */}
+              {/* ── 1. Review Configuration ────────────── */}
+              <ReviewConfigCard
+                schemaFields={schemaFields}
+                parserArtifact={parserArtifact}
+                artifactStatus={artifactStatus}
+                vaultState={vault.vaultState}
+                reviewTier={reviewTier}
+                toolState={toolState}
+              />
+
+              {/* ── 2. Vault / Case Notes status ───────── */}
+              {vault.vaultState !== "empty" && (
+                <VaultSection
+                  vaultState={vault.vaultState}
+                  metadata={vault.vaultMetadata}
+                  unlockTimeRemaining={vault.unlockTimeRemaining}
+                  onUnlockClick={onUnlockClick}
+                  onRelockClick={onRelockClick}
+                  hasDocument={!!selectedFile}
+                  toolState={toolState}
+                />
+              )}
+
+              {/* ── 3. Top Verdict ─────────────────────── */}
               <div className={cn(
                 "rounded-2xl border p-6",
                 primaryCount > 0
@@ -742,6 +779,7 @@ function ResultsMode({
                     )}
                   </div>
                   <div className="flex-1 min-w-0 space-y-3">
+                    {/* Headline: primary findings take priority over coverage */}
                     <h2 className="text-xl font-semibold text-foreground leading-tight">
                       {primaryCount > 0
                         ? `${primaryCount} language ${primaryCount === 1 ? "concern" : "concerns"} found`
@@ -752,13 +790,15 @@ function ResultsMode({
                             : "No language concerns detected"}
                     </h2>
                     <p className="text-sm text-muted-foreground leading-relaxed">
-                      {primaryCount > 0
-                        ? "Review the findings below for tone, bias, or policy-language concerns in the authored narrative."
-                        : isInsufficient
-                          ? "Limited authored narrative was found in this document. Review coverage is insufficient for a confident assessment."
-                          : isLimited
-                            ? "No language concerns were detected, but review coverage was limited. Consider providing more narrative text for a thorough review."
-                            : "The reviewed narrative text appears professionally written and compliant with language standards."}
+                      {primaryCount > 0 && (isInsufficient || isLimited)
+                        ? "Review coverage was limited. These findings were detected in the analyzed sections."
+                        : primaryCount > 0
+                          ? "Review the findings below for tone, bias, or policy-language concerns in the authored narrative."
+                          : isInsufficient
+                            ? "Limited authored narrative was found in this document. Review coverage is insufficient for a confident assessment."
+                            : isLimited
+                              ? "No language concerns were detected, but review coverage was limited. Consider providing more narrative text for a thorough review."
+                              : "The reviewed narrative text appears professionally written and compliant with language standards."}
                     </p>
                     {/* Metadata badges */}
                     <div className="flex items-center gap-3 flex-wrap">
@@ -775,16 +815,16 @@ function ResultsMode({
                         Coverage: <span className="font-medium text-foreground/80 capitalize">{coverage}</span>
                       </span>
                     </div>
-                    {secondaryIssues.length > 0 && primaryCount === 0 && (
+                    {primaryCount === 0 && hasComparison && secondaryTotal > 0 && (
                       <p className="text-xs text-muted-foreground/70">
-                        {secondaryIssues.length} lower-priority comparison {secondaryIssues.length === 1 ? "observation" : "observations"} available below.
+                        {secondaryTotal} lower-priority notes-to-template {secondaryTotal === 1 ? "observation" : "observations"} available in Comparison Details.
                       </p>
                     )}
                   </div>
                 </div>
               </div>
 
-              {/* ── PRIMARY LANGUAGE FINDINGS ────────────── */}
+              {/* ── 4. PRIMARY LANGUAGE FINDINGS ────────── */}
               {primaryCount > 0 && (
                 <section className="space-y-6">
                   <div className="flex items-center justify-between">
@@ -838,49 +878,33 @@ function ResultsMode({
                 </section>
               )}
 
-              {/* ── SECONDARY COMPARISON OBSERVATIONS ────── */}
-              {secondaryIssues.length > 0 && (
-                <Collapsible defaultOpen={false}>
-                  <div className="space-y-3 pt-4 border-t border-border/40">
-                    <CollapsibleTrigger className="flex items-center gap-2.5 group w-full">
-                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground/50 transition-transform group-data-[state=closed]:rotate-[-90deg]" />
-                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Secondary Comparison Observations</span>
-                      <Badge variant="outline" className="text-[9px] px-1.5 h-4 text-muted-foreground/50 border-border/40">{secondaryIssues.length}</Badge>
-                    </CollapsibleTrigger>
-                    <p className="text-[11px] text-muted-foreground/50 ml-9">Lower-priority notes-to-form observations</p>
-                    <CollapsibleContent>
-                      <div className="space-y-4 pt-1">
-                        {SECONDARY_ISSUE_TYPES.map((type) => {
-                          const issues = secondaryIssues.filter(i => i.type === type);
-                          if (issues.length === 0) return null;
-                          const meta = ISSUE_TYPE_META[type];
-                          const Icon = meta.icon;
-                          return (
-                            <div key={type} className="space-y-2">
-                              <div className="flex items-center gap-2 ml-2">
-                                <Icon className="h-3 w-3 text-muted-foreground/40" />
-                                <span className="text-[11px] font-medium text-muted-foreground/60">{meta.label}</span>
-                                <Badge variant="outline" className="text-[9px] px-1.5 h-4 text-muted-foreground/40 border-border/40">{issues.length}</Badge>
-                              </div>
-                              {issues.map((issue, i) => (
-                                <IssueCard
-                                  key={i}
-                                  issue={issue}
-                                  isActive={activeSnippet === issue.excerpt && !!issue.excerpt && issue.excerpt.length > 0}
-                                  onHighlight={onHighlight}
-                                  variant="secondary"
-                                />
-                              ))}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </CollapsibleContent>
+              {/* ── 5. Comparison CTA (replaces inline secondary) ── */}
+              {hasComparison && secondaryTotal > 0 && (
+                <div
+                  className="rounded-xl border border-border bg-card p-5 cursor-pointer hover:bg-muted/30 transition-colors"
+                  onClick={() => setActiveTab("comparison")}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setActiveTab("comparison"); } }}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-1">
+                      <p className="text-sm font-semibold text-foreground">More notes-to-template observations</p>
+                      <p className="text-xs text-muted-foreground">
+                        See notes-to-form comparison details in the Comparison Details tab
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Badge variant="outline" className="text-[10px] px-2 h-5 text-muted-foreground">
+                        {secondaryTotal}
+                      </Badge>
+                      <ExternalLink className="h-3.5 w-3.5 text-muted-foreground/50" />
+                    </div>
                   </div>
-                </Collapsible>
+                </div>
               )}
 
-              {/* ── What to do next ─────────────────────── */}
+              {/* ── 6. What to do next ─────────────────── */}
               <section className="rounded-xl border border-border bg-card p-5 space-y-4">
                 <h3 className="text-sm font-semibold text-foreground">What to do next</h3>
                 <div className="grid gap-2">
@@ -912,6 +936,86 @@ function ResultsMode({
             </div>
           </ScrollArea>
         </TabsContent>
+
+        {/* ═══ COMPARISON DETAILS TAB ═══ */}
+        {hasComparison && (
+          <TabsContent value="comparison" className="flex-1 overflow-hidden mt-0">
+            <ScrollArea className="h-full">
+              <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
+                <div>
+                  <h3 className="text-lg font-semibold text-foreground">Comparison Details</h3>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Notes-to-template observations from narrative comparison
+                  </p>
+                </div>
+
+                {reviewTier === "full" && notesSource === "case_notes" && (
+                  <div className="flex items-start gap-2.5 p-4 rounded-xl bg-[hsl(var(--status-success-muted))]/40 border border-[hsl(var(--status-success))]/10">
+                    <ShieldCheck className="h-4 w-4 text-[hsl(var(--status-success))] shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-xs text-foreground font-medium">Secure notes-to-form comparison</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Narrative comparison uses unlocked case notes as the source of truth.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Secondary review issues (consistency/completeness) */}
+                {secondaryIssues.length > 0 && (
+                  <section className="space-y-4">
+                    <div>
+                      <h4 className="text-sm font-semibold text-foreground">Narrative Observations</h4>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Lower-priority observations about narrative consistency and completeness
+                      </p>
+                    </div>
+                    {SECONDARY_ISSUE_TYPES.map((type) => {
+                      const issues = secondaryIssues.filter(i => i.type === type);
+                      if (issues.length === 0) return null;
+                      const meta = ISSUE_TYPE_META[type];
+                      const Icon = meta.icon;
+                      return (
+                        <Collapsible key={type} defaultOpen={type !== "consistency"}>
+                          <div className="space-y-2">
+                            <CollapsibleTrigger className="flex items-center gap-2 group w-full">
+                              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground/50 transition-transform group-data-[state=closed]:rotate-[-90deg]" />
+                              <Icon className="h-3.5 w-3.5 text-muted-foreground/60" />
+                              <span className="text-xs font-medium text-muted-foreground">{meta.label}</span>
+                              <Badge variant="outline" className="text-[9px] px-1.5 h-4 text-muted-foreground/50 border-border/40 ml-auto">{issues.length}</Badge>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                              <div className="space-y-2 ml-6">
+                                {issues.map((issue, i) => (
+                                  <IssueCard
+                                    key={i}
+                                    issue={issue}
+                                    isActive={activeSnippet === issue.excerpt && !!issue.excerpt && issue.excerpt.length > 0}
+                                    onHighlight={onHighlight}
+                                    variant="secondary"
+                                  />
+                                ))}
+                              </div>
+                            </CollapsibleContent>
+                          </div>
+                        </Collapsible>
+                      );
+                    })}
+                    <Separator />
+                  </section>
+                )}
+
+                {reconciliationResult && (
+                  <ReconciliationPanel
+                    result={reconciliationResult}
+                    notesSource={notesSource ?? "field_recovery"}
+                    artifactStatus={artifactStatus}
+                  />
+                )}
+              </div>
+            </ScrollArea>
+          </TabsContent>
+        )}
 
         {/* ═══ COMPARISON DETAILS TAB ═══ */}
         {hasComparison && (
@@ -1680,10 +1784,15 @@ export default function Reviewer() {
             activeSnippet={activeSnippet}
             artifactStatus={artifactStatus}
             copiedCategory={copiedCategory}
+            schemaFields={schemaFields}
+            parserArtifact={parserArtifact}
+            toolState={toolState}
             onHighlight={handleHighlight}
             onCopyAll={handleCopyAll}
             onCopyType={handleCopyType}
             onBack={handleBack}
+            onUnlockClick={() => setShowReauthModal(true)}
+            onRelockClick={() => vault.relock("manual")}
             textPanelRef={textPanelRef}
           />
         ) : (

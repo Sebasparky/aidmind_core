@@ -33,36 +33,42 @@ import type {
 const RESOLUTION_CONFIG: Record<ReconciliationResolution, {
   label: string;
   singularLabel: string;
+  description: string;
   icon: typeof CheckCircle2;
   badgeClass: string;
 }> = {
   possible_discrepancy: {
-    label: "Possible Discrepancies",
-    singularLabel: "Discrepancy",
+    label: "Final Template Differs From Case Notes",
+    singularLabel: "Differs",
+    description: "These fields appear to have different content between the case notes and the final template.",
     icon: AlertTriangle,
     badgeClass: "text-[hsl(var(--status-warning))] border-[hsl(var(--status-warning))]/30 bg-[hsl(var(--status-warning-muted))]",
   },
   likely_omission: {
-    label: "Likely Omissions",
-    singularLabel: "Omission",
+    label: "Present In Case Notes But Missing From Template",
+    singularLabel: "Missing",
+    description: "Information found in case notes that does not appear in the final template.",
     icon: XCircle,
     badgeClass: "text-[hsl(var(--status-danger))] border-[hsl(var(--status-danger))]/30 bg-[hsl(var(--status-danger-muted))]",
   },
   unresolved: {
-    label: "Needs Review",
-    singularLabel: "Unresolved",
+    label: "Could Not Be Determined Automatically",
+    singularLabel: "Undetermined",
+    description: "These fields could not be confidently compared — manual review is recommended.",
     icon: HelpCircle,
     badgeClass: "text-muted-foreground border-muted bg-muted/30",
   },
   likely_correction: {
-    label: "Likely Corrections",
-    singularLabel: "Correction",
+    label: "Final Template Likely Intentionally Changed",
+    singularLabel: "Changed",
+    description: "These fields differ from case notes but appear to be intentional corrections or updates.",
     icon: ArrowRightLeft,
     badgeClass: "text-[hsl(var(--status-info))] border-[hsl(var(--status-info))]/30 bg-[hsl(var(--status-info-muted))]",
   },
   confirmed_match: {
-    label: "Matches",
-    singularLabel: "Match",
+    label: "Final Template Matches Case Notes",
+    singularLabel: "Matches",
+    description: "These fields have consistent content between the case notes and the final template.",
     icon: CheckCircle2,
     badgeClass: "text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30 bg-[hsl(var(--status-success-muted))]",
   },
@@ -82,7 +88,7 @@ interface ReconciliationPanelProps {
 }
 
 export function ReconciliationPanel({ result, notesSource }: ReconciliationPanelProps) {
-  // Actionable groups start expanded; matches start collapsed
+  // Actionable groups start expanded; matches/corrections start collapsed
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
     new Set(["possible_discrepancy", "likely_omission", "unresolved"]),
   );
@@ -122,12 +128,12 @@ export function ReconciliationPanel({ result, notesSource }: ReconciliationPanel
   const confidence = CONFIDENCE_LABEL[result.template_parse_confidence];
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <ArrowRightLeft className="h-3.5 w-3.5 text-primary" />
-          <span className="text-xs font-medium text-foreground">Narrative Comparison</span>
+          <span className="text-sm font-medium text-foreground">Field-Level Comparison</span>
         </div>
         <Badge variant="outline" className={cn("text-[10px]", confidence.className)}>
           Parse confidence: {confidence.text}
@@ -135,25 +141,25 @@ export function ReconciliationPanel({ result, notesSource }: ReconciliationPanel
       </div>
 
       {/* Summary stats */}
-      <div className="grid grid-cols-3 gap-1.5">
+      <div className="grid grid-cols-3 gap-2">
         {actionableCount > 0 && (
-          <div className="col-span-3 rounded-md bg-[hsl(var(--status-warning-muted))]/50 px-2.5 py-1.5 flex items-center gap-1.5">
-            <AlertTriangle className="h-3 w-3 text-[hsl(var(--status-warning))]" />
-            <span className="text-[11px] font-medium text-[hsl(var(--status-warning-muted-foreground))]">
+          <div className="col-span-3 rounded-lg bg-[hsl(var(--status-warning-muted))]/50 px-3 py-2 flex items-center gap-2">
+            <AlertTriangle className="h-3.5 w-3.5 text-[hsl(var(--status-warning))]" />
+            <span className="text-xs font-medium text-[hsl(var(--status-warning-muted-foreground))]">
               {actionableCount} narrative {actionableCount === 1 ? "field needs" : "fields need"} attention
             </span>
           </div>
         )}
         <StatCell count={result.matches} label="Matched" />
-        <StatCell count={result.likely_corrections} label="Corrected" />
-        <StatCell count={result.possible_discrepancies + result.likely_omissions} label="Issues" />
+        <StatCell count={result.likely_corrections} label="Changed" />
+        <StatCell count={result.possible_discrepancies + result.likely_omissions} label="Needs attention" />
       </div>
 
       {/* Low confidence warning */}
       {result.template_parse_confidence === "low" && (
-        <div className="flex items-start gap-2 p-2.5 rounded-lg bg-[hsl(var(--status-warning-muted))] border border-[hsl(var(--status-warning))]/20">
+        <div className="flex items-start gap-2 p-3 rounded-lg bg-[hsl(var(--status-warning-muted))] border border-[hsl(var(--status-warning))]/20">
           <ShieldAlert className="h-3.5 w-3.5 text-[hsl(var(--status-warning))] shrink-0 mt-0.5" />
-          <p className="text-[11px] text-[hsl(var(--status-warning-muted-foreground))]">
+          <p className="text-xs text-[hsl(var(--status-warning-muted-foreground))]">
             Form parsing confidence is low — comparison results may need manual verification.
           </p>
         </div>
@@ -161,9 +167,9 @@ export function ReconciliationPanel({ result, notesSource }: ReconciliationPanel
 
       {/* Partial reconciliation notice */}
       {!result.reliable_for_review && result.template_parse_confidence !== "low" && (
-        <div className="flex items-start gap-2 p-2.5 rounded-lg bg-muted/50 border border-border">
+        <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/50 border border-border">
           <Info className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             Partial comparison — not enough fields resolved for strong completeness claims.
           </p>
         </div>
@@ -192,22 +198,27 @@ export function ReconciliationPanel({ result, notesSource }: ReconciliationPanel
             open={isExpanded}
             onOpenChange={() => toggleGroup(resolution)}
           >
-            <CollapsibleTrigger className="flex items-center gap-2 w-full group py-1 hover:bg-muted/30 rounded-md px-1 -mx-1 transition-colors">
-              <ChevronDown className={cn(
-                "h-3 w-3 text-muted-foreground transition-transform",
-                !isExpanded && "-rotate-90",
-              )} />
-              <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-              <span className="text-xs font-medium text-foreground">{config.label}</span>
-              <Badge variant="secondary" className="text-[10px] px-1.5 h-4 ml-auto">{fields.length}</Badge>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <div className="space-y-1 mt-1 ml-5">
-                {fields.map((field) => (
-                  <FieldRow key={field.field_key} field={field} resolution={resolution} />
-                ))}
-              </div>
-            </CollapsibleContent>
+            <div className="space-y-2">
+              <CollapsibleTrigger className="flex items-center gap-2 w-full group py-1.5 hover:bg-muted/30 rounded-md px-2 -mx-2 transition-colors">
+                <ChevronDown className={cn(
+                  "h-3.5 w-3.5 text-muted-foreground transition-transform",
+                  !isExpanded && "-rotate-90",
+                )} />
+                <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
+                <span className="text-sm font-medium text-foreground text-left flex-1">{config.label}</span>
+                <Badge variant="secondary" className="text-[10px] px-1.5 h-5 ml-auto shrink-0">{fields.length}</Badge>
+              </CollapsibleTrigger>
+              {isExpanded && (
+                <p className="text-xs text-muted-foreground/60 ml-10 -mt-1">{config.description}</p>
+              )}
+              <CollapsibleContent>
+                <div className="space-y-2 mt-1 ml-6">
+                  {fields.map((field) => (
+                    <FieldRow key={field.field_key} field={field} resolution={resolution} />
+                  ))}
+                </div>
+              </CollapsibleContent>
+            </div>
           </Collapsible>
         );
       })}
@@ -218,7 +229,7 @@ export function ReconciliationPanel({ result, notesSource }: ReconciliationPanel
 // ── Stat cell ────────────────────────────────────────────
 function StatCell({ count, label }: { count: number; label: string }) {
   return (
-    <div className="rounded-md bg-muted/40 px-2.5 py-1.5 text-center">
+    <div className="rounded-lg bg-muted/40 px-3 py-2 text-center">
       <p className="text-sm font-semibold text-foreground tabular-nums">{count}</p>
       <p className="text-[10px] text-muted-foreground">{label}</p>
     </div>
@@ -231,11 +242,12 @@ function FieldRow({ field, resolution }: { field: FieldReconciliation; resolutio
   const config = RESOLUTION_CONFIG[resolution];
 
   const hasDetail = !!(field.template_value || field.notes_value || field.template_source_excerpt);
+  const fieldLabel = field.field_key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 
   return (
     <div
       className={cn(
-        "px-2.5 py-2 rounded-md border text-xs transition-colors",
+        "p-4 rounded-lg border text-sm transition-colors",
         field.needs_review
           ? "bg-[hsl(var(--status-warning-muted))]/30 border-[hsl(var(--status-warning))]/15"
           : "bg-card/50 border-border/50",
@@ -244,34 +256,34 @@ function FieldRow({ field, resolution }: { field: FieldReconciliation; resolutio
       onClick={() => hasDetail && setExpanded(!expanded)}
     >
       <div className="flex items-center gap-2">
-        <span className="text-foreground font-medium flex-1 min-w-0 truncate">
-          {field.field_key.replace(/_/g, " ")}
+        <span className="text-foreground font-semibold flex-1 min-w-0">
+          {fieldLabel}
         </span>
         {field.section && (
-          <span className="text-[9px] text-muted-foreground/60 shrink-0">
+          <span className="text-[10px] text-muted-foreground/60 shrink-0">
             {field.section}
           </span>
         )}
-        <Badge variant="outline" className={cn("text-[9px] px-1.5 h-4 shrink-0", config.badgeClass)}>
+        <Badge variant="outline" className={cn("text-[9px] px-1.5 h-5 shrink-0", config.badgeClass)}>
           {config.singularLabel}
         </Badge>
       </div>
 
       {field.diff_summary && (
-        <p className="text-[10px] text-muted-foreground mt-1 line-clamp-1">{field.diff_summary}</p>
+        <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">{field.diff_summary}</p>
       )}
 
       {expanded && hasDetail && (
-        <div className="mt-2 pt-2 border-t border-border/30 space-y-1.5">
+        <div className="mt-3 pt-3 border-t border-border/30 space-y-3">
           {field.notes_value && (
-            <ValueRow label="Case Notes" value={field.notes_value} confidence={field.notes_confidence} />
+            <ValueBlock label="Case notes" value={field.notes_value} confidence={field.notes_confidence} />
           )}
           {field.template_value && (
-            <ValueRow label="Completed Form" value={field.template_value} confidence={field.template_confidence} />
+            <ValueBlock label="Final template" value={field.template_value} confidence={field.template_confidence} />
           )}
           {field.template_source_excerpt && (
-            <div className="text-[10px] text-muted-foreground/60 italic border-l-2 border-border/30 pl-2 mt-1">
-              Source: "{field.template_source_excerpt.slice(0, 100)}"
+            <div className="text-[11px] text-muted-foreground/60 italic border-l-2 border-border/30 pl-3 mt-1">
+              Source: "{field.template_source_excerpt.slice(0, 150)}"
             </div>
           )}
         </div>
@@ -280,18 +292,20 @@ function FieldRow({ field, resolution }: { field: FieldReconciliation; resolutio
   );
 }
 
-// ── Value row ────────────────────────────────────────────
-function ValueRow({ label, value, confidence }: { label: string; value: string; confidence?: ParseConfidence | null }) {
+// ── Value block (stacked layout) ─────────────────────────
+function ValueBlock({ label, value, confidence }: { label: string; value: string; confidence?: ParseConfidence | null }) {
   const conf = confidence ? CONFIDENCE_LABEL[confidence] : null;
   return (
-    <div className="flex gap-2">
-      <span className="text-[10px] text-muted-foreground shrink-0 w-16">{label}:</span>
-      <span className="text-[11px] text-foreground break-words flex-1">
-        {value.length > 120 ? `${value.slice(0, 120)}…` : value}
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">{label}</span>
         {conf && (
-          <span className={cn("ml-1 text-[9px]", conf.className)}>({conf.text})</span>
+          <span className={cn("text-[9px]", conf.className)}>({conf.text} confidence)</span>
         )}
-      </span>
+      </div>
+      <p className="text-xs text-foreground leading-relaxed bg-muted/30 rounded-md px-3 py-2">
+        {value.length > 200 ? `${value.slice(0, 200)}…` : value}
+      </p>
     </div>
   );
 }
