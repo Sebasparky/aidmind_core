@@ -1,27 +1,23 @@
 /**
- * run-reviewer v3.1 Edge Function — language-first, reconciliation-aware
+ * run-reviewer v3.2 Edge Function — deterministic classification engine
  *
- * Accepts a TRANSIENT structured reviewer payload with:
- *   - document_text: raw text for tone/bias/policy-language review
- *   - structured_answers: ALL recovered fields for completeness/consistency
- *   - review_worthy_answers: only authored-text fields for tone/bias analysis
- *   - unanswered_fields / human_review_fields
- *   - reconciliation_context (optional): structured comparison data
- *   - language_trigger_metadata (optional): category-level trigger counts (metadata only)
- *
- * v3.1 changes:
- *   - finding_track assigned server-side deterministically, not by model
- *   - Hybrid confidence/coverage: deterministic caps, LLM can only lower
- *   - unsupported_conclusion as first-class issue type
- *   - Authored-vs-quoted awareness in prompt
- *   - Stronger comparison noise suppression
- *   - Secondary findings cannot alone drive overall_risk to high
+ * v3.2 changes:
+ *   - Full deterministic classification pipeline via _shared/deterministic-classifier
+ *   - LLM prompt refactored: model is a conservative candidate span detector, not final authority
+ *   - Lovable AI gateway instead of direct OpenAI
+ *   - Staged pipeline: detect → normalize → classify → resolve → calibrate → align → emit
+ *   - DCE stats logged to Eye for observability
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
+import {
+  classifyAndDeduplicate,
+  type CandidateIssue,
+  type ClassifiedIssue,
+} from "../_shared/deterministic-classifier.ts";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -30,6 +26,7 @@ const MAX_DOC_TEXT_CHARS = 120_000;
 const MIN_DOC_TEXT_CHARS = 50;
 const MAX_STRUCTURED_ANSWERS = 200;
 const SERVICE_NAME = "run-reviewer";
+const LOVABLE_AI_GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -62,102 +59,75 @@ async function eye(
   }
 }
 
-// ── Reviewer v3.1 System Prompt ────────────────────────────────────────────
+// ── Reviewer v3.2 System Prompt ────────────────────────────────────────────
+// The model is now a CONSERVATIVE CANDIDATE SPAN DETECTOR.
+// Final category assignment, severity calibration, and deduplication
+// are handled by the deterministic classification engine (DCE).
 
-const REVIEWER_V3_SYSTEM_PROMPT = `You are AidMind Reviewer, a LANGUAGE-FIRST auditor for social-services case documentation.
+const REVIEWER_V3_SYSTEM_PROMPT = `You are AidMind Reviewer's span detection layer. Your job is to CONSERVATIVELY identify candidate problematic text spans in caseworker documentation.
 
-YOUR PRIMARY JOB is reviewing AUTHORED NARRATIVE TEXT for quality, professionalism, and compliance. You are NOT a form-completion verifier.
+IMPORTANT: You are NOT the final authority on issue categorization, severity, or deduplication. A deterministic classification engine will post-process your output to assign final categories, resolve overlaps, calibrate severity, and deduplicate findings. Your job is to surface candidate spans accurately and conservatively.
+
+YOUR PRIMARY JOB:
+- Identify text spans in AUTHORED NARRATIVE that may contain language quality issues
+- Provide your best-guess category and severity as starting points for the deterministic engine
+- Anchor each finding to a specific, short excerpt (≤ 30 words)
+- Provide a clear explanation of why the span is potentially problematic
 
 You receive a STRUCTURED REVIEW PACKET containing:
-1. "review_worthy_answers" — AUTHORED TEXT FIELDS (narratives, comments, summaries, "specify" fields). These are your PRIMARY targets.
-2. "structured_answers" — narrative-eligible recovered field values. Use for context only.
+1. "review_worthy_answers" — AUTHORED TEXT FIELDS (narratives, comments, summaries). PRIMARY targets.
+2. "structured_answers" — narrative-eligible recovered field values. Context only.
 3. "unanswered_fields" — NARRATIVE FIELDS that appear blank. Only these qualify for completeness findings.
-4. "human_review_fields" — fields requiring manual human verification (do NOT flag their absence).
-5. "document_text" — raw document text for reviewing all authored narrative language for tone, bias, and policy compliance.
-6. "reconciliation_context" (when present) — NARRATIVE-ONLY comparison between case notes and the completed form.
+4. "human_review_fields" — fields requiring manual human verification (do NOT flag).
+5. "document_text" — raw document text for reviewing all authored narrative language.
+6. "reconciliation_context" (when present) — NARRATIVE-ONLY comparison data.
 
-ISSUE CATEGORIES — STRICT DEFINITIONS:
+CANDIDATE ISSUE CATEGORIES (suggest your best guess — the deterministic engine may reclassify):
 
-- tone: For unprofessional, judgmental, emotionally charged, blaming, shaming, or condescending language in AUTHORED text. This is your highest-priority category.
-
-- bias: For stigmatizing language, unsupported assumptions, stereotypes, or subjective labels presented as fact in AUTHORED text. Labeling a person rather than describing observable facts.
-
-- unsupported_conclusion: For conclusions presented with more certainty than the evidence supports. Inference stated as fact. Mental-state claims stated as fact when only behavior was observed. Clinical or legal conclusions without documented basis. Intent or motive attributed without supporting evidence.
-
-- policy_language: For prohibited terminology, incorrect policy terms, or wording that conflicts with policy standards in AUTHORED text.
-
-- completeness: ONLY for NARRATIVE SECTIONS that appear blank, empty, or obviously insufficient. You may ONLY flag fields that appear in the unanswered_fields list. Do NOT flag checkbox, date, boolean, categorical, demographic, or administrative fields as missing. Report ONE issue per missing narrative field.
-
-- consistency: ONLY for genuine narrative contradictions when reconciliation_context is provided. Use ONLY when notes and form narratives genuinely conflict in meaning. Do NOT use for structured field differences.
+- tone: Judgmental, blaming, shaming, condescending, emotionally charged, or unprofessional language in AUTHORED text.
+- bias: Stigmatizing labels, unsupported assumptions, stereotypes, or subjective labels presented as fact. Labeling a person rather than describing observable behavior.
+- unsupported_conclusion: Conclusions with more certainty than evidence supports. Inference stated as fact. Mental-state claims without behavioral basis. Clinical/legal conclusions without documentation. Intent/motive attributed without evidence.
+- policy_language: Prohibited terminology, incorrect policy terms, informal language, or emotionally charged qualifiers in professional documentation.
+- completeness: ONLY for NARRATIVE SECTIONS that appear blank/empty. ONLY flag fields from the unanswered_fields list. Do NOT flag checkboxes, dates, booleans, demographics, or identifiers.
+- consistency: ONLY for genuine narrative contradictions when reconciliation_context is provided. Do NOT use for structured field differences.
 
 AUTHORED VS QUOTED — CRITICAL DISTINCTION:
-You MUST distinguish between the caseworker's own authored language and quoted/attributed speech from clients, collaterals, or other sources.
-- Quoted speech (in quotes, or following "client stated", "mother reported", "according to", etc.) should NOT be flagged for tone or bias UNLESS the caseworker adopts, amplifies, or presents that language uncritically as their own assessment.
-- Example of safe quoting: 'Client stated "he is dangerous and should be locked up."' — The harsh language belongs to the client, not the caseworker. Do NOT flag.
-- Example of adoption: 'The neighbor reported the mother is a mess, and based on this, the mother clearly cannot provide care.' — The caseworker adopted the neighbor's characterization and overclaimed. DO flag.
+- Quoted speech ("client stated", "mother reported", "according to") should NOT be flagged UNLESS the caseworker adopts or amplifies that language as their own assessment.
+- Example of safe quoting: 'Client stated "he is dangerous."' → Do NOT flag.
+- Example of adoption: 'The neighbor said she is a mess, and based on this, she clearly cannot provide care.' → DO flag.
 
-FINDING THRESHOLDS — STRICT:
-Each finding MUST have:
-1. A clear anchored text span (excerpt ≤ 30 words)
-2. A clear risk category
-3. An explanation DIRECTLY tied to that specific text
-4. Enough confidence to avoid speculation
-
-Prefer ZERO findings over weak, speculative, or vaguely-anchored findings. If you are uncertain, do not report it.
+DETECTION THRESHOLD:
+- Be CONSERVATIVE. Only surface spans you are reasonably confident contain a real issue.
+- Prefer ZERO findings over weak, speculative, or vaguely-anchored findings.
+- If you are uncertain, do NOT report it. The deterministic engine cannot fix false positives.
+- One span = one finding. Do NOT report the same span multiple times with different categories. The deterministic engine handles multi-category resolution.
 
 WHAT YOU MUST NOT DO:
-1. Do NOT flag missing checkboxes, select-many values, dates, phone numbers, addresses, SSNs, booleans, or categorical fields.
-2. Do NOT flag demographics, repeated person blocks, relationship matrices, or administrative markers.
-3. Do NOT infer that a structured field is "missing" — you cannot reliably detect checkbox or categorical completeness from text.
-4. Do NOT treat the absence of a date, number, or identifier as a completeness issue.
-5. Do NOT analyze checkbox/categorical/boolean/number/date fields for tone or bias.
-6. Do NOT produce any finding about a field type you cannot confidently verify from narrative text alone.
-7. Do NOT flag quoted speech for tone/bias unless the caseworker adopts that language as their own assessment.
-8. Do NOT produce vague or speculative findings without a clear anchored excerpt.
-
-WHAT YOU SHOULD DO:
-1. Focus deeply on the quality of AUTHORED NARRATIVE language.
-2. Identify judgmental, biased, stigmatizing, or unprofessional phrasing — in the caseworker's voice specifically.
-3. Flag unsupported conclusions: observations stated as fact, intent attributed without evidence, certainty stronger than evidence supports.
-4. Flag policy-language violations in narrative text.
-5. Note when major narrative sections (intake narrative, decision summary, reason for involvement) are blank.
-6. When reconciliation shows narrative discrepancies, report them as consistency issues.
-7. When in doubt between flagging and not flagging, prefer NO FINDING over a weak finding.
-
-RECONCILIATION-AWARE RULES (when reconciliation_context is provided):
-1. Do NOT flag confirmed_fields as completeness issues.
-2. Do NOT flag likely_corrections as errors — they are intentional refinements.
-3. DO flag narrative discrepancies as consistency issues with careful, measured language.
-4. DO flag narrative omissions as completeness issues.
-5. ALL reconciliation data has already been filtered to narrative fields only. Trust this filtering.
-
-CONFIDENCE RULES:
-1. Be conservative. If you are uncertain whether something is an issue, do not report it.
-2. Prefer precision over recall — fewer, more accurate findings are better than many questionable ones.
-3. If the document is well-written and compliant, return ZERO issues. That is a valid and good outcome.
-
-SEVERITY LEVELS:
-- "low": Minor language concern, may want to refine
-- "medium": Should address before finalising — notable tone/bias/policy issue
-- "high": Must address — serious compliance, bias, or professionalism risk
+1. Do NOT flag missing checkboxes, dates, phone numbers, addresses, SSNs, booleans, or categorical fields.
+2. Do NOT flag demographics, person blocks, relationship matrices, or administrative markers.
+3. Do NOT infer structured field completeness from text.
+4. Do NOT analyze checkbox/categorical/boolean/number/date fields for tone or bias.
+5. Do NOT flag quoted speech unless the caseworker adopts it.
+6. Do NOT produce vague findings without a clear anchored excerpt.
+7. Do NOT report the same problematic span multiple times — report it ONCE with your best category guess.
 
 SELF-ASSESSMENT:
-You must also report your own assessment of review quality:
-- review_confidence: "high" if you are confident in your analysis, "medium" if uncertain about some areas, "low" if the text was difficult to analyze
-- narrative_coverage: "sufficient" if there was ample authored narrative to review, "partial" if limited narrative was available, "insufficient" if very little authored narrative existed
-Note: These values may be adjusted downward by the server based on deterministic signals. You should be honest — do not overclaim confidence.
+Report your own assessment of review quality:
+- review_confidence: "high" if confident, "medium" if uncertain about some areas, "low" if text was difficult to analyze
+- narrative_coverage: "sufficient" if ample narrative, "partial" if limited, "insufficient" if very little
+Note: These may be adjusted downward by deterministic caps. Be honest.
 
-STRICT RULES:
-1. Produce ONLY a JSON report. No markdown, no commentary.
-2. Do NOT rewrite any text from the document.
-3. Do NOT suggest replacement text or alternative wording.
-4. Do NOT act like an editor — you are an auditor.
-5. Do NOT provide suggestions of any kind.
-6. Only identify and explain issues found.
-7. Keep excerpts short (≤ 30 words).
-8. Focus on concrete, identifiable issues — not vague impressions.
-9. If the document is well-written and compliant, return zero issues.
-10. When reporting completeness issues, include the field_key.
+RECONCILIATION RULES (when reconciliation_context is provided):
+1. Do NOT flag confirmed_fields as completeness issues.
+2. Do NOT flag likely_corrections as errors.
+3. DO flag genuine narrative discrepancies as consistency issues.
+4. DO flag narrative omissions as completeness issues.
+5. ALL reconciliation data is pre-filtered to narrative fields.
+
+SEVERITY GUIDANCE (your suggestion — the deterministic engine may override):
+- "low": Minor style concern
+- "medium": Should address before finalizing
+- "high": Serious compliance, bias, or professionalism risk
 
 OUTPUT SCHEMA (return ONLY this JSON):
 {
@@ -174,7 +144,7 @@ OUTPUT SCHEMA (return ONLY this JSON):
     {
       "type": "completeness | policy_language | tone | bias | unsupported_conclusion | consistency",
       "severity": "low | medium | high",
-      "excerpt": "short excerpt from the document (if applicable)",
+      "excerpt": "short excerpt from the document (≤ 30 words)",
       "explanation": "why this is problematic",
       "field_key": "optional — the field this relates to"
     }
@@ -184,6 +154,16 @@ OUTPUT SCHEMA (return ONLY this JSON):
     "high_severity_count": <int>
   }
 }
+
+STRICT RULES:
+1. Produce ONLY a JSON report. No markdown, no commentary.
+2. Do NOT rewrite or suggest replacement text.
+3. Do NOT act like an editor — you are a detection layer.
+4. Keep excerpts short (≤ 30 words).
+5. Focus on concrete, identifiable issues.
+6. If the document is well-written and compliant, return zero issues.
+7. ONE finding per problematic span — do not duplicate.
+8. When reporting completeness issues, include the field_key.
 
 No additional keys. No markdown fences. No commentary outside the JSON.`;
 
@@ -202,7 +182,6 @@ function validateReviewReport(parsed: unknown): boolean {
   const summary = obj.summary as Record<string, unknown>;
   if (!VALID_SEVERITIES.has(summary.overall_risk as string)) return false;
   if (!Array.isArray(summary.key_findings)) return false;
-  // review_confidence and narrative_coverage are optional from LLM (we have defaults)
 
   if (!Array.isArray(obj.issues)) return false;
   for (const issue of obj.issues) {
@@ -225,7 +204,6 @@ function validateReviewReport(parsed: unknown): boolean {
 // ── Finding Track Assignment (deterministic, server-side) ────────────────
 
 type FindingTrack = "primary" | "secondary";
-
 const PRIMARY_ISSUE_TYPES = new Set(["tone", "bias", "policy_language", "unsupported_conclusion"]);
 
 function assignFindingTrack(issueType: string): FindingTrack {
@@ -255,7 +233,6 @@ function computeDeterministicCaps(
   reviewWorthyCount: number,
   hasReconciliation: boolean,
 ): { coverageCap: CoverageLevel; confidenceCap: ConfidenceLevel } {
-  // Coverage cap: based on how much authored narrative was available
   let coverageCap: CoverageLevel;
   if (docTextLength < 200 || reviewWorthyCount === 0) {
     coverageCap = "insufficient";
@@ -265,7 +242,6 @@ function computeDeterministicCaps(
     coverageCap = "sufficient";
   }
 
-  // Confidence cap: based on coverage + reconciliation availability
   let confidenceCap: ConfidenceLevel;
   if (coverageCap === "insufficient") {
     confidenceCap = "low";
@@ -289,10 +265,8 @@ interface ReviewIssue {
   finding_track?: FindingTrack;
 }
 
-/** Hard-blocked field label patterns — server-side safety net */
 const BLOCKED_FIELD_RE = [
-  /^time$/i,
-  /^date$/i,
+  /^time$/i, /^date$/i,
   /\b(dob|date\s*of\s*birth|birth\s*date)\b/i,
   /\b(ssn|social\s*security)\b/i,
   /\b(phone|telephone|fax|cell)\b/i,
@@ -303,8 +277,7 @@ const BLOCKED_FIELD_RE = [
   /\b(case\s*number|case\s*id|worker\s*id)\b/i,
   /\b(application\s*date|received\s*date)\b/i,
   /\b(relationship\s*to|relation\s*to)\b/i,
-  /\bperson\s*\d/i,
-  /\bchild\s*\d/i,
+  /\bperson\s*\d/i, /\bchild\s*\d/i,
   /\b(height|weight)\b/i,
   /\btime\s*(of|for)\b/i,
   /\b(start|end|begin)\s*(time|date)\b/i,
@@ -313,20 +286,9 @@ const BLOCKED_FIELD_RE = [
 ];
 
 const BLOCKED_EXPLANATION_TERMS = [
-  "time narrative section is blank",
-  "time field",
-  "date of birth",
-  "dob field",
-  "ssn field",
-  "phone number",
-  "address field",
-  "checkbox",
-  "select one",
-  "select many",
-  "boolean",
-  "demographic",
-  "relationship matrix",
-  "signature field",
+  "time narrative section is blank", "time field", "date of birth", "dob field",
+  "ssn field", "phone number", "address field", "checkbox", "select one",
+  "select many", "boolean", "demographic", "relationship matrix", "signature field",
 ];
 
 function isIssueAboutBlockedField(issue: ReviewIssue): boolean {
@@ -344,22 +306,16 @@ function isIssueAboutBlockedField(issue: ReviewIssue): boolean {
 function dedupeAndFilterIssues(issues: ReviewIssue[]): { filtered: ReviewIssue[]; suppressed: number } {
   let suppressed = 0;
 
-  // Step 1: Remove any findings about blocked structured fields
   let filtered = issues.filter(i => {
     if (isIssueAboutBlockedField(i)) { suppressed++; return false; }
     return true;
   });
 
-  // Step 2: Suppress weak comparison findings (consistency with tiny excerpts)
   filtered = filtered.filter(i => {
-    if (i.type === "consistency" && i.excerpt.length < 20) {
-      suppressed++;
-      return false;
-    }
+    if (i.type === "consistency" && i.excerpt.length < 20) { suppressed++; return false; }
     return true;
   });
 
-  // Step 3: Deduplicate completeness issues
   const completeness = filtered.filter((i) => i.type === "completeness");
   const others = filtered.filter((i) => i.type !== "completeness");
 
@@ -433,7 +389,6 @@ interface V2Body {
   unanswered_fields?: Array<{ field_key: string; label: string; review_relevance?: string }>;
   human_review_fields?: Array<{ field_key: string; label: string; reason: string }>;
   reconciliation_context?: ReconciliationContext;
-  /** Metadata-only trigger counts from client-side deterministic scanner */
   language_trigger_metadata?: Record<string, number>;
 }
 
@@ -454,11 +409,10 @@ function validateV2Body(body: unknown): body is V2Body {
 function buildUserMessage(body: V2Body): string {
   const parts: string[] = [];
 
-  parts.push("Review the authored narrative language in the following completed case document.\n");
-  parts.push("IMPORTANT: You are reviewing AUTHORED TEXT QUALITY only. Do NOT flag structured fields (checkboxes, dates, booleans, demographics, identifiers) as missing or incomplete.");
+  parts.push("Scan the authored narrative language in the following completed case document for candidate problematic spans.\n");
+  parts.push("IMPORTANT: You are a detection layer. Report each problematic span ONCE with your best category guess. A deterministic engine will handle final categorization, deduplication, and severity calibration.");
   parts.push("IMPORTANT: Distinguish between the caseworker's authored language and quoted/attributed speech. Do NOT flag quoted client statements for tone/bias unless the caseworker adopts that language.\n");
 
-  // Language trigger metadata (metadata only — no text excerpts)
   if (body.language_trigger_metadata && Object.keys(body.language_trigger_metadata).length > 0) {
     const counts = Object.entries(body.language_trigger_metadata)
       .filter(([k]) => !k.startsWith("_"))
@@ -467,41 +421,40 @@ function buildUserMessage(body: V2Body): string {
     const quotedRegions = body.language_trigger_metadata._quoted_regions ?? 0;
     const attributionMarkers = body.language_trigger_metadata._attribution_markers ?? 0;
     if (counts) {
-      parts.push(`LANGUAGE TRIGGER METADATA (deterministic pre-scan — increase scrutiny on these categories): ${counts}`);
+      parts.push(`LANGUAGE TRIGGER METADATA (deterministic pre-scan): ${counts}`);
     }
     if (quotedRegions > 0 || attributionMarkers > 0) {
-      parts.push(`ATTRIBUTION CONTEXT: ${quotedRegions} quoted regions, ${attributionMarkers} attribution markers detected — exercise caution distinguishing caseworker voice from quoted speech.`);
+      parts.push(`ATTRIBUTION CONTEXT: ${quotedRegions} quoted regions, ${attributionMarkers} attribution markers — exercise caution distinguishing caseworker voice from quoted speech.`);
     }
     parts.push("");
   }
 
-  // Reconciliation context (highest priority framing)
   if (body.reconciliation_context) {
     const rc = body.reconciliation_context;
-    parts.push("NARRATIVE RECONCILIATION CONTEXT (comparison between case notes and completed form — narrative fields only):");
-    parts.push("Use this comparison CONSERVATIVELY — only flag meaningful narrative contradictions, not formatting or trivial wording differences.");
+    parts.push("NARRATIVE RECONCILIATION CONTEXT (narrative fields only):");
+    parts.push("Use CONSERVATIVELY — only flag meaningful narrative contradictions.");
     if (rc.reconciliation_summary) {
       const s = rc.reconciliation_summary;
       parts.push(`  Parse confidence: ${s.template_parse_confidence}`);
-      parts.push(`  Narrative matches: ${s.matches}, Corrections: ${s.likely_corrections}, Discrepancies: ${s.possible_discrepancies}, Omissions: ${s.likely_omissions}`);
+      parts.push(`  Matches: ${s.matches}, Corrections: ${s.likely_corrections}, Discrepancies: ${s.possible_discrepancies}, Omissions: ${s.likely_omissions}`);
     }
     if (rc.confirmed_fields && rc.confirmed_fields.length > 0) {
-      parts.push(`  CONFIRMED NARRATIVE FIELDS (present in both — do NOT flag): ${rc.confirmed_fields.join(", ")}`);
+      parts.push(`  CONFIRMED (do NOT flag): ${rc.confirmed_fields.join(", ")}`);
     }
     if (rc.likely_corrections && rc.likely_corrections.length > 0) {
-      parts.push("  NARRATIVE CORRECTIONS (form intentionally refined from notes — NOT errors):");
+      parts.push("  CORRECTIONS (NOT errors):");
       for (const c of rc.likely_corrections.slice(0, 15)) {
         parts.push(`    ${c.field_key}: notes="${(c.notes || "").slice(0, 40)}" → form="${(c.form || "").slice(0, 40)}"`);
       }
     }
     if (rc.discrepancies && rc.discrepancies.length > 0) {
-      parts.push("  NARRATIVE DISCREPANCIES (notes and form genuinely differ — report as CONSISTENCY issues only if meaningful):");
+      parts.push("  DISCREPANCIES (report as consistency if meaningful):");
       for (const d of rc.discrepancies.slice(0, 15)) {
         parts.push(`    ${d.field_key} [${d.section}]: notes="${(d.notes || "").slice(0, 40)}" ≠ form="${(d.form || "").slice(0, 40)}"`);
       }
     }
     if (rc.omissions && rc.omissions.length > 0) {
-      parts.push("  NARRATIVE OMISSIONS (in notes but missing from form — report as COMPLETENESS issues):");
+      parts.push("  OMISSIONS (report as completeness):");
       for (const o of rc.omissions.slice(0, 15)) {
         parts.push(`    ${o.field_key} [${o.section}]: "${(o.notes_value || "").slice(0, 50)}"`);
       }
@@ -509,51 +462,45 @@ function buildUserMessage(body: V2Body): string {
     parts.push("");
   }
 
-  // Review-worthy answers (authored narrative text — primary targets)
   const reviewWorthy = body.review_worthy_answers ?? [];
   if (reviewWorthy.length > 0) {
-    parts.push("AUTHORED NARRATIVE TEXT (primary review targets — check for tone, bias, unsupported conclusions, policy language, clarity):");
+    parts.push("AUTHORED NARRATIVE TEXT (primary targets):");
     for (const a of reviewWorthy) {
       if (a.requires_human_review) continue;
       const conf = a.recovery_confidence === "low" ? " [low confidence]" : "";
-      const val = a.missing ? "(blank — narrative section appears empty)" : (a.answer || "(blank)");
+      const val = a.missing ? "(blank)" : (a.answer || "(blank)");
       parts.push(`  ${a.label}: ${val}${conf}`);
     }
     parts.push("");
   }
 
-  // Narrative-eligible structured answers (for context only)
   if (body.structured_answers && body.structured_answers.length > 0) {
-    parts.push("NARRATIVE-ELIGIBLE FIELDS (for context — do NOT flag checkbox, date, boolean, demographic, or identifier fields):");
+    parts.push("CONTEXT FIELDS (do NOT flag checkbox/date/boolean/demographic/identifier fields):");
     for (const a of body.structured_answers) {
       if (a.requires_human_review) continue;
       const status = a.missing ? "[BLANK]" : `[${a.recovery_confidence}]`;
-      const val = a.answer || "(blank)";
-      parts.push(`  ${status} ${a.label}: ${val}`);
+      parts.push(`  ${status} ${a.label}: ${a.answer || "(blank)"}`);
     }
     parts.push("");
   }
 
-  // Unanswered narrative fields (only these qualify for completeness)
   if (body.unanswered_fields && body.unanswered_fields.length > 0) {
-    parts.push("BLANK NARRATIVE SECTIONS (these are narrative fields that appear empty — report ONE completeness issue per field):");
+    parts.push("BLANK NARRATIVE SECTIONS (report ONE completeness issue per field):");
     for (const f of body.unanswered_fields) {
       parts.push(`  - ${f.label} (field_key: ${f.field_key})`);
     }
     parts.push("");
   }
 
-  // Human review fields
   if (body.human_review_fields && body.human_review_fields.length > 0) {
-    parts.push("HUMAN-REVIEW-ONLY FIELDS (require manual verification, do NOT flag as missing):");
+    parts.push("HUMAN-REVIEW-ONLY FIELDS (do NOT flag):");
     for (const f of body.human_review_fields) {
       parts.push(`  - ${f.label}: ${f.reason}`);
     }
     parts.push("");
   }
 
-  // Raw document text
-  parts.push("DOCUMENT TEXT (use for reviewing all authored narrative language for tone, bias, unsupported conclusions, and policy compliance):");
+  parts.push("DOCUMENT TEXT:");
   const docText = body.document_text.length > MAX_DOC_TEXT_CHARS
     ? body.document_text.slice(0, MAX_DOC_TEXT_CHARS)
     : body.document_text;
@@ -570,9 +517,16 @@ serve(async (req) => {
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
+  // Fallback to OPENAI_API_KEY for backward compatibility
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
 
-  if (!openaiKey) return errJson(500, "CONFIG_ERROR", "OPENAI_API_KEY not configured");
+  const apiKey = lovableApiKey || openaiKey;
+  if (!apiKey) return errJson(500, "CONFIG_ERROR", "No AI API key configured (LOVABLE_API_KEY or OPENAI_API_KEY)");
+
+  const useGateway = !!lovableApiKey;
+  const llmUrl = useGateway ? LOVABLE_AI_GATEWAY : "https://api.openai.com/v1/chat/completions";
+  const model = useGateway ? "google/gemini-2.5-flash" : "gpt-4o-mini";
 
   const supabase = createClient(supabaseUrl, serviceKey);
 
@@ -617,6 +571,7 @@ serve(async (req) => {
 
     await eye(supabase, v2.session_id, "reviewer_v3.started", {
       tenant_id: session.tenant_id,
+      version: "3.2",
       doc_text_length: v2.document_text.length,
       structured_answers_count: v2.structured_answers?.length ?? 0,
       review_worthy_count: reviewWorthyCount,
@@ -625,42 +580,59 @@ serve(async (req) => {
       has_reconciliation: hasReconciliation,
       reconciliation_parse_confidence: v2.reconciliation_context?.reconciliation_summary?.template_parse_confidence ?? null,
       has_trigger_metadata: !!v2.language_trigger_metadata,
+      llm_provider: useGateway ? "lovable_gateway" : "openai_direct",
+      model,
     });
 
     const userMessage = buildUserMessage(v2);
 
-    const llmResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+    // ── Stage 1: LLM candidate span detection ─────────────────────────
+
+    const llmResponse = await fetch(llmUrl, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${openaiKey}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
-        temperature: 0.2,
+        model,
+        temperature: 0.15, // Lower temperature for more deterministic span detection
         messages: [
           { role: "system", content: REVIEWER_V3_SYSTEM_PROMPT },
           { role: "user", content: userMessage },
         ],
-        response_format: { type: "json_object" },
+        ...(useGateway ? {} : { response_format: { type: "json_object" } }),
       }),
     });
 
     if (!llmResponse.ok) {
       const errText = await llmResponse.text();
-      throw new Error(`OpenAI API error ${llmResponse.status}: ${errText.slice(0, 300)}`);
+      if (llmResponse.status === 429) {
+        return errJson(429, "RATE_LIMITED", "AI service rate limit exceeded, please try again later.");
+      }
+      if (llmResponse.status === 402) {
+        return errJson(402, "PAYMENT_REQUIRED", "AI service payment required. Please add credits.");
+      }
+      throw new Error(`AI API error ${llmResponse.status}: ${errText.slice(0, 300)}`);
     }
 
     const llmData = await llmResponse.json();
     const rawContent = llmData?.choices?.[0]?.message?.content;
 
     if (!rawContent || typeof rawContent !== "string") {
-      throw new Error("OpenAI response missing message content");
+      throw new Error("AI response missing message content");
+    }
+
+    // Extract JSON from potential markdown fences
+    let jsonContent = rawContent.trim();
+    const fenceMatch = jsonContent.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+    if (fenceMatch) {
+      jsonContent = fenceMatch[1].trim();
     }
 
     let report: unknown;
     try {
-      report = JSON.parse(rawContent);
+      report = JSON.parse(jsonContent);
     } catch {
       throw new Error("LLM output is not valid JSON");
     }
@@ -671,30 +643,39 @@ serve(async (req) => {
 
     const reportObj = report as Record<string, any>;
 
-    // ── Post-processing ──────────────────────────────────────────────
+    // ── Stage 2: Filter blocked fields (pre-DCE safety net) ──────────
 
-    // Step 1: Filter blocked fields + deduplicate + suppress weak comparison
-    const { filtered: filteredIssues, suppressed: serverSuppressed } = dedupeAndFilterIssues(reportObj.issues);
+    const { filtered: prefilteredIssues, suppressed: serverSuppressed } = dedupeAndFilterIssues(reportObj.issues);
 
-    // Step 2: Deterministic classification pipeline
-    // Normalize spans, apply rule-based category assignment, resolve overlaps,
-    // calibrate severity, and deduplicate near-identical findings
-    const classificationResult = deterministicClassify(filteredIssues);
-    reportObj.issues = classificationResult.issues.map((ci: any) => ({
+    // ── Stage 3-7: Deterministic Classification Engine ───────────────
+    // normalize → rule-match → category-assign → overlap-resolve → severity-calibrate → explain-align → deduplicate
+
+    const candidateIssues: CandidateIssue[] = prefilteredIssues.map((i: any) => ({
+      type: i.type,
+      severity: i.severity,
+      excerpt: i.excerpt,
+      explanation: i.explanation,
+      field_key: i.field_key,
+    }));
+
+    const dceResult = classifyAndDeduplicate(candidateIssues);
+
+    // ── Stage 8: Final issue emission ────────────────────────────────
+
+    reportObj.issues = dceResult.issues.map((ci: ClassifiedIssue) => ({
       type: ci.type,
       severity: ci.severity,
       excerpt: ci.excerpt,
       explanation: ci.explanation,
       field_key: ci.field_key,
-      finding_track: undefined, // will be assigned below
+      finding_track: assignFindingTrack(ci.type),
+      category_source: ci.category_source,
+      severity_adjusted: ci.severity_adjusted,
+      matched_rules: ci.matched_rules,
     }));
 
-    // Step 3: Assign finding_track deterministically (server-side, not model)
-    for (const issue of reportObj.issues) {
-      issue.finding_track = assignFindingTrack(issue.type);
-    }
+    // ── Confidence/Coverage caps ─────────────────────────────────────
 
-    // Step 4: Compute deterministic confidence/coverage caps
     const { coverageCap, confidenceCap } = computeDeterministicCaps(
       v2.document_text.length,
       reviewWorthyCount,
@@ -705,30 +686,34 @@ serve(async (req) => {
     summary.review_confidence = capConfidence(summary.review_confidence, confidenceCap);
     summary.narrative_coverage = capCoverage(summary.narrative_coverage, coverageCap);
 
-    // Step 5: Recalculate metrics from classified issues
-    const primaryIssues = reportObj.issues.filter((i: ReviewIssue) => i.finding_track === "primary");
-    const secondaryIssues = reportObj.issues.filter((i: ReviewIssue) => i.finding_track === "secondary");
+    // ── Recalculate metrics ──────────────────────────────────────────
+
+    const primaryIssues = reportObj.issues.filter((i: any) => i.finding_track === "primary");
+    const secondaryIssues = reportObj.issues.filter((i: any) => i.finding_track === "secondary");
 
     reportObj.metrics = {
       issue_count: reportObj.issues.length,
-      high_severity_count: reportObj.issues.filter((i: ReviewIssue) => i.severity === "high").length,
+      high_severity_count: reportObj.issues.filter((i: any) => i.severity === "high").length,
     };
 
-    // Step 6: overall_risk must not be driven to high by secondary findings alone
-    const primaryHighCount = primaryIssues.filter((i: ReviewIssue) => i.severity === "high").length;
-    const primaryMedCount = primaryIssues.filter((i: ReviewIssue) => i.severity === "medium").length;
+    // overall_risk must not be driven to high by secondary findings alone
+    const primaryHighCount = primaryIssues.filter((i: any) => i.severity === "high").length;
+    const primaryMedCount = primaryIssues.filter((i: any) => i.severity === "medium").length;
 
     if (primaryHighCount > 0) {
       summary.overall_risk = "high";
     } else if (primaryMedCount > 0) {
       summary.overall_risk = "medium";
     } else {
-      const anySecondaryHigh = secondaryIssues.some((i: ReviewIssue) => i.severity === "high");
+      const anySecondaryHigh = secondaryIssues.some((i: any) => i.severity === "high");
       summary.overall_risk = anySecondaryHigh ? "medium" : "low";
     }
 
+    // ── Eye completion event with DCE stats ──────────────────────────
+
     await eye(supabase, v2.session_id, "reviewer_v3.completed", {
       tenant_id: session.tenant_id,
+      version: "3.2",
       issue_count: reportObj.metrics.issue_count,
       high_severity_count: reportObj.metrics.high_severity_count,
       overall_risk: summary.overall_risk,
@@ -739,6 +724,16 @@ serve(async (req) => {
       server_suppressed: serverSuppressed,
       has_reconciliation: hasReconciliation,
       has_trigger_metadata: !!v2.language_trigger_metadata,
+      dce_stats: {
+        input_count: dceResult.stats.input_count,
+        output_count: dceResult.stats.output_count,
+        deduplicated: dceResult.stats.deduplicated,
+        category_overrides: dceResult.stats.category_overrides,
+        severity_adjustments: dceResult.stats.severity_adjustments,
+        overlap_merges: dceResult.stats.overlap_merges,
+      },
+      llm_provider: useGateway ? "lovable_gateway" : "openai_direct",
+      model,
     });
 
     return json(200, {
