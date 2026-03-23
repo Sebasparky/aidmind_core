@@ -1784,10 +1784,15 @@ export default function Reviewer() {
             activeSnippet={activeSnippet}
             artifactStatus={artifactStatus}
             copiedCategory={copiedCategory}
+            schemaFields={schemaFields}
+            parserArtifact={parserArtifact}
+            toolState={toolState}
             onHighlight={handleHighlight}
             onCopyAll={handleCopyAll}
             onCopyType={handleCopyType}
             onBack={handleBack}
+            onUnlockClick={() => setShowReauthModal(true)}
+            onRelockClick={() => vault.relock("manual")}
             textPanelRef={textPanelRef}
           />
         ) : (
