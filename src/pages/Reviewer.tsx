@@ -946,8 +946,8 @@ function ResultsMode({
         </TabsContent>
 
         {/* ═══ COMPARISON DETAILS TAB ═══ */}
-        {hasComparison && (
-          <TabsContent value="comparison" className="flex-1 overflow-hidden mt-0">
+        <TabsContent value="comparison" className={cn("flex-1 overflow-hidden mt-0", activeTab !== "comparison" && "hidden")} forceMount>
+          {hasComparison ? (
             <ScrollArea className="h-full">
               <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
                 <div>
@@ -1022,8 +1022,12 @@ function ResultsMode({
                 )}
               </div>
             </ScrollArea>
-          </TabsContent>
-        )}
+          ) : (
+            <div className="flex-1 flex items-center justify-center">
+              <p className="text-sm text-muted-foreground">No comparison data available for this review.</p>
+            </div>
+          )}
+        </TabsContent>
 
 
 
