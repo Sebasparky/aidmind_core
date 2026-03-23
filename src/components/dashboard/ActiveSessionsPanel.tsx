@@ -34,6 +34,7 @@ interface ActiveSession {
   guidanceCompleted: boolean;
   caseNotesCompleted: boolean;
   reviewerCompleted: boolean;
+  sessionCompleted: boolean;
 }
 
 function formatRelativeTime(date: Date): string {
