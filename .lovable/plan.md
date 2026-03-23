@@ -1,86 +1,129 @@
-# Reviewer Post-Run Results: Findings-First Redesign
+# Reviewer Post-Run UX Fixes
 
-## Summary
+## 6 Changes
 
-Restructure the `ResultsMode` component so the Findings tab is a complete decision screen showing configuration, vault status, verdict, primary findings, and a comparison CTA — all in one scroll. Use plain-English everywhere possible. In the Findings tab CTA, prefer “notes-to-template observations” over “comparison observations.” In Comparison Details cards, use a stacked layout with clearly labeled “Case notes” and “Final template” sections, not compressed inline text.
+### 1. Remove duplicate Comparison Details tab
 
-## Changes to `src/pages/Reviewer.tsx`
+Lines 1020-1054 in `Reviewer.tsx` are a second `TabsContent value="comparison"` block — an exact duplicate of lines 940-1017. Delete lines 1020-1054.
 
-### 1. ResultsMode receives additional props
+### 2. Redesign comparison FieldRow cards (ReconciliationPanel.tsx)
 
-Pass `schemaFields`, `parserArtifact`, `artifactStatus`, `reviewTier`, `toolState`, `onUnlockClick`, `onRelockClick` into `ResultsMode` so it can render ReviewConfigCard and VaultSection.
+Currently the `FieldRow` title is the field name (e.g. "Behavioral Concerns Child Issues"). Flip the hierarchy:
 
-### 2. Findings tab content order (top to bottom)
+- **card title:** a human-readable issue sentence tied to the item
+Example: “Child issues differ between case notes and final template”
+- **subtitle:** section + field
+Example: “Behavioral Concerns and Family Issues · Child Issues”
+- **badge:** “Differs” / “Missing” / “Could not verify”
+- Increase card padding
+- Make the stacked "Case notes said:" / "Final template says:" labels more prominent with clear visual separation
 
-Replace the current Findings tab content with this order inside the ScrollArea:
+### 3. Strengthen the comparison CTA on Findings tab
 
-1. **ReviewConfigCard** — same component already exists, rendered with `toolState="success"`
-2. **VaultSection** — same component, shows lock/unlock/timer/relock
-3. **Verdict card** — existing verdict, but adjusted:
-  - If `primaryCount > 0`, the verdict headline is dominant ("2 language concerns found")
-  - Coverage/confidence become small metadata badges *below* the headline, not the headline itself
-  - Even if coverage is `insufficient`, if `primaryCount > 0`, show "X language concerns found" as the headline, with a subtitle noting limited coverage
-  - Only use "Limited review coverage" as the *headline* when `primaryCount === 0` AND coverage is insufficient
-4. **Primary Language Findings** — existing grouped cards, unchanged behavior (expanded by default)
-5. **Comparison observations CTA** — new bordered card:
-  - Only shown if `hasComparison` is true
-  - Title: "More comparison observations"
-  - Subtitle: "See notes-to-form comparison details in the Comparison Details tab"
-  - Small count badge showing secondary issue count + reconciliation field count
-  - This replaces the current inline secondary findings collapsible on the Findings tab
-6. **Secondary comparison observations** — REMOVE from Findings tab entirely. Move them to Comparison Details tab only. The Findings tab should only show primary language findings.
-7. **What to do next** — existing section, keep as-is
-8. **Disclaimer** — existing, keep
+Replace the current subtle card (lines 881-905) with a more prominent design:
 
-### 3. Verdict card logic fix
+- Tinted background (`bg-primary/5` or `bg-muted`)
+- Stronger border
+- Larger text and clear "Open Comparison Details →" button
+- Count badge more prominent
+- Full-width click target preserved
 
-The key logic change:
+### 4. Persist reviewer completion on Done
+
+In handleBack:
 
 ```
-// Headline priority:
-if (primaryCount > 0) → "X language concern(s) found"
-else if (isInsufficient) → "Limited review coverage"
-else if (isLimited) → "No high-confidence language concerns detected"
-else → "No language concerns detected"
+•	Before navigating, update session metadata with:
 
-// Sub-line when primaryCount > 0 AND isLimited/isInsufficient:
-"Review coverage was limited. These findings were detected in the analyzed sections."
+•	reviewer_completed_at: new Date().toISOString()
+
+•	session_completed_at: new Date().toISOString() when Reviewer is the final completed step
+
+•	This should follow the same metadata update pattern already used by Guidance / Case Notes.
 ```
 
-### 4. Comparison Details tab: plain-English labels
+In useRecentNotes.ts:
 
-Rewrite `ReconciliationPanel` resolution labels. Instead of modifying the shared component, override the labels in the Comparison Details tab by wrapping the panel with context or by creating a new `ComparisonDetailsTab` sub-component that renders reconciliation data with friendlier labels.
+```
+•	Change reviewerCompleted from:
 
-Since `ReconciliationPanel` uses `RESOLUTION_CONFIG` internally, the cleanest approach is to update `src/components/session/ReconciliationPanel.tsx` directly:
+•	!![session.review](http://session.review)_document_id
 
+•	To:
 
-| Current label          | New label                                       |
-| ---------------------- | ----------------------------------------------- |
-| Possible Discrepancies | Final Template Differs From Case Notes          |
-| Likely Omissions       | Present In Case Notes But Missing From Template |
-| Needs Review           | Could Not Be Determined Automatically           |
-| Likely Corrections     | Final Template Likely Intentionally Changed     |
-| Matches                | Final Template Matches Case Notes               |
+•	!!meta?.reviewer_completed_at || !![session.review](http://session.review)_document_id
 
+•	Also add:
 
-Also add a one-line `description` to each resolution config and render it below the group header as muted helper text.
+•	sessionCompleted = !!meta?.session_completed_at
 
-Update the individual field cards in ReconciliationPanel to have more padding (`p-4` instead of current), bolder title, and stacked layout for notes/template values.
+•	Keep this backward-compatible with any older sessions.
+```
 
-### 5. Remove secondary findings from Findings tab
+Dashboard session card UI changes:
 
-The secondary `Collapsible` section (lines ~841-881) is removed from the Findings tab. Secondary issues are only visible on the Comparison Details tab. The Comparison Details tab will now also render secondary `ReviewIssue` items (consistency/completeness) above the ReconciliationPanel, with the same plain-English treatment.
+```
+•	Do not stop at just marking Reviewer complete.
 
-### Files changed
+•	When sessionCompleted === true, update the session card into a more obvious final-complete state:
 
-- `src/pages/Reviewer.tsx` — ResultsMode restructure, prop additions, verdict logic, comparison CTA, remove secondary from Findings
-- `src/components/session/ReconciliationPanel.tsx` — Plain-English labels, descriptions, card padding
+•	Make the card slightly taller than the in-progress version
 
-### What stays the same
+•	Keep all prior completed steps visible
 
-- All backend logic, edge function, security model
-- IssueCard component design
-- Source Document and Extracted Text tabs
+•	Show a full-width green completion bar/button at the bottom of the card
+
+•	Label it something like:
+
+•	Session complete
+
+•	or Completed — move to history
+
+•	This final state should visually communicate:
+
+•	all required steps are done
+
+•	the user can still review prior steps from the card
+
+•	pressing the final completion action moves the session to history
+
+•	Since Reviewer data is ephemeral, the card should still allow returning to Guidance, but not imply that full Reviewer results remain stored.
+```
+
+Important behavior note:
+
+```
+•	Reviewer completion should persist as workflow progress
+
+•	Reviewer findings themselves should still remain ephemeral and cleared on exit / relock / unmount
+
+•	The dashboard should reflect completion state without implying long-term storage of sensitive reviewer output5. Preserve tab state across switches (prevent remount)
+```
+
+**5. Preserve tab state across switches (prevent remount)**  
+  
+The current `<TabsContent>` uses Radix default behavior which unmounts inactive tabs. Fix by:
+
+- Adding `forceMount` to all `TabsContent` components
+- Using `hidden` class to hide inactive tabs instead of unmounting
+- This preserves scroll position, iframe state, highlights, and vault timer across tab switches
+- Ephemeral data still clears on Done/unmount/relock as before
+
+### 6. Comparison CTA wording
+
+Use "See differences between case notes and final template" as title with subtitle "Inspect notes-to-template differences, omissions, and unresolved items"
+
+## Files Changed
+
+- `src/pages/Reviewer.tsx` — remove duplicate tab, strengthen CTA, add `forceMount` to tabs, persist completion in `handleBack`
+- `src/components/session/ReconciliationPanel.tsx` — flip FieldRow title to resolution label, field name as subtitle
+- `src/hooks/useRecentNotes.ts` — add `reviewer_completed_at` metadata check
+
+## What stays the same
+
+- All backend logic, edge functions, security model
+- No new database columns (uses existing metadata JSON)
+- Vault relock/unmount/timeout behavior
 - Pre-run workspace layout
-- VaultSection and ReviewConfigCard components (reused, not modified)
+- IssueCard component
 - Dev diagnostics panel
