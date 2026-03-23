@@ -442,17 +442,19 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                     </div>
                   </div>
 
-                  {/* Session complete strip */}
+                  {/* Session complete — refined, calm */}
                   {session.sessionCompleted && (
-                    <div
-                      className="px-4 py-3 bg-emerald-600 text-white flex items-center justify-between cursor-pointer hover:bg-emerald-700 transition-colors"
-                      onClick={() => handleMarkDoneClick(session)}
-                    >
-                      <div className="flex items-center gap-2">
-                        <CheckCircle2 className="h-4 w-4" />
-                        <span className="text-sm font-medium">Session complete</span>
+                    <div className="px-4 pb-3 pt-1">
+                      <div
+                        className="rounded-lg border border-[hsl(var(--status-success))]/20 bg-[hsl(var(--status-success-muted))]/30 px-4 py-2.5 flex items-center justify-between cursor-pointer hover:bg-[hsl(var(--status-success-muted))]/50 transition-colors"
+                        onClick={() => handleMarkDoneClick(session)}
+                      >
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 className="h-4 w-4 text-[hsl(var(--status-success))]" />
+                          <span className="text-sm font-medium text-foreground">Session complete</span>
+                        </div>
+                        <span className="text-xs text-muted-foreground">Move to history →</span>
                       </div>
-                      <span className="text-xs opacity-80">Move to history →</span>
                     </div>
                   )}
                 </div>
