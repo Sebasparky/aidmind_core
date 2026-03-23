@@ -1151,18 +1151,31 @@ export default function Reviewer() {
     try { sessionStorage.removeItem(`aidmind:reviewer:${sessionId}`); } catch {}
   }, [sessionId]);
 
-  // ─── Load session info + schema + auto-ensure artifacts ─
+   // ─── Load session info + schema + auto-ensure artifacts ─
+  const [reviewerPreviouslyCompleted, setReviewerPreviouslyCompleted] = useState(false);
+  const [reviewerCompletedAt, setReviewerCompletedAt] = useState<string | null>(null);
+  const [previousReviewTier, setPreviousReviewTier] = useState<string | null>(null);
+
   useEffect(() => {
     async function fetchSession() {
       if (!sessionId) { setPageError("No session ID provided"); setPageLoading(false); return; }
       try {
         const { data, error } = await supabase
           .from("sessions")
-          .select("id, case_label, interaction_type, template_id, phase2_schema_id, tenant_id")
+          .select("id, case_label, interaction_type, template_id, phase2_schema_id, tenant_id, metadata")
           .eq("session_id", sessionId)
           .maybeSingle();
         if (error) throw error;
         if (!data) { setPageError("Session not found"); setPageLoading(false); return; }
+
+        // Check if reviewer was previously completed
+        const meta = data.metadata as Record<string, unknown> | null;
+        if (meta?.reviewer_completed_at) {
+          setReviewerPreviouslyCompleted(true);
+          setReviewerCompletedAt(meta.reviewer_completed_at as string);
+          if (meta.reviewer_tier) setPreviousReviewTier(meta.reviewer_tier as string);
+        }
+
         setSessionInfo({
           caseLabel: data.case_label || "Untitled session",
           interactionType: data.interaction_type,
