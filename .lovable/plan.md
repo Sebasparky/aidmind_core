@@ -1,177 +1,86 @@
-# Reviewer v3.1 Revised Implementation Plan
+# Reviewer Post-Run Results: Findings-First Redesign
 
-## Key Revisions from Prior v3.1 Plan
+## Summary
 
+Restructure the `ResultsMode` component so the Findings tab is a complete decision screen showing configuration, vault status, verdict, primary findings, and a comparison CTA — all in one scroll. Use plain-English everywhere possible. In the Findings tab CTA, prefer “notes-to-template observations” over “comparison observations.” In Comparison Details cards, use a stacked layout with clearly labeled “Case notes” and “Final template” sections, not compressed inline text.
 
-| Prior Plan                                              | This Revision                                                                   |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Model assigns `finding_track` per issue                 | Server assigns `finding_track` deterministically based on issue type            |
-| Triggers scan full extracted text                       | Triggers scan only reviewer-eligible narrative fields                           |
-| Confidence/coverage called "floor" (LLM bounded upward) | Renamed to "cap" — deterministic logic sets ceiling, LLM can only lower         |
-| `unsupported_conclusion` left ambiguous                 | First-class issue type added to taxonomy                                        |
-| No authored-vs-quoted heuristic                         | Deterministic attribution markers detect likely quoted content                  |
-| Secondary findings mixed with primary                   | UI separates into primary (always visible) and secondary (collapsed by default) |
-| Eval fixtures missing subtle-but-acceptable cases       | Added professional-but-firm, quoted-not-adopted, quoted-adopted fixtures        |
+## Changes to `src/pages/Reviewer.tsx`
 
+### 1. ResultsMode receives additional props
 
----
+Pass `schemaFields`, `parserArtifact`, `artifactStatus`, `reviewTier`, `toolState`, `onUnlockClick`, `onRelockClick` into `ResultsMode` so it can render ReviewConfigCard and VaultSection.
 
-## Files to Create
+### 2. Findings tab content order (top to bottom)
 
-### 1. `src/lib/tools/language-risk-rubric.ts` (NEW)
+Replace the current Findings tab content with this order inside the ScrollArea:
 
-**Deterministic trigger scanner + authored-vs-quoted heuristic + sentence splitter.**
+1. **ReviewConfigCard** — same component already exists, rendered with `toolState="success"`
+2. **VaultSection** — same component, shows lock/unlock/timer/relock
+3. **Verdict card** — existing verdict, but adjusted:
+  - If `primaryCount > 0`, the verdict headline is dominant ("2 language concerns found")
+  - Coverage/confidence become small metadata badges *below* the headline, not the headline itself
+  - Even if coverage is `insufficient`, if `primaryCount > 0`, show "X language concerns found" as the headline, with a subtitle noting limited coverage
+  - Only use "Limited review coverage" as the *headline* when `primaryCount === 0` AND coverage is insufficient
+4. **Primary Language Findings** — existing grouped cards, unchanged behavior (expanded by default)
+5. **Comparison observations CTA** — new bordered card:
+  - Only shown if `hasComparison` is true
+  - Title: "More comparison observations"
+  - Subtitle: "See notes-to-form comparison details in the Comparison Details tab"
+  - Small count badge showing secondary issue count + reconciliation field count
+  - This replaces the current inline secondary findings collapsible on the Findings tab
+6. **Secondary comparison observations** — REMOVE from Findings tab entirely. Move them to Comparison Details tab only. The Findings tab should only show primary language findings.
+7. **What to do next** — existing section, keep as-is
+8. **Disclaimer** — existing, keep
 
-- **Trigger categories**: `bias_stigma`, `judgmental_tone`, `unsupported_conclusion`, `policy_inconsistent`
-- **Trigger patterns** (regex, domain-neutral):
-  - Certainty intensifiers: `clearly`, `obviously`, `undeniably`, `without question`
-  - Judgmental adjectives: `uncooperative`, `manipulative`, `hostile`, `noncompliant`, `defiant`
-  - Labeling patterns: `the addict`, `the abuser`, `the offender`
-  - Motive attribution: `refused to`, `chose not to`, `failed to cooperate`
-  - Unsupported clinical/legal: `diagnosed with`, `guilty of`, `suffering from`
-- `**scanForLanguageTriggers(text: string)**` → returns `{ category: string, hitCount: number }[]` — metadata only, no text excerpts
-- **Attribution markers** for authored-vs-quoted detection:
-  - Regex patterns: `"client stated"`, `"mother reported"`, `"according to"`, `"source indicated"`, `"[person] said"`, etc.
-  - `**detectAttributionContext(text: string)**` → returns `{ quotedRegionCount: number, attributionMarkerCount: number }` — metadata only
-- `**splitIntoSentences(text: string)**` — naive period/newline splitter
+### 3. Verdict card logic fix
 
-**Critical constraint**: No raw text excerpts in trigger output. Metadata only.
+The key logic change:
 
-### 2. `src/lib/tools/__tests__/language-risk-rubric.test.ts` (NEW)
+```
+// Headline priority:
+if (primaryCount > 0) → "X language concern(s) found"
+else if (isInsufficient) → "Limited review coverage"
+else if (isLimited) → "No high-confidence language concerns detected"
+else → "No language concerns detected"
 
-Unit tests for triggers, attribution detection, sentence splitting. Verifies clean professional text → 0 hits.
-
-### 3. `src/lib/tools/__tests__/reviewer-eval-fixtures.ts` (NEW)
-
-10 fixtures:
-
-1. Clean professional narrative → 0 findings
-2. Subtle but acceptable professional wording → 0 findings (false-positive guard)
-3. **Professional but firm / boundary-setting** → 0 findings
-4. Subtle tone drift → 1-2 findings
-5. Obvious bias/stigma → 1+ findings
-6. Unsupported conclusion → 1+ findings
-7. Policy-language violation → 1+ findings
-8. Low narrative content → coverage = insufficient
-9. Quoted problematic language NOT adopted → 0 findings expected
-10. Quoted language adopted uncritically → 1+ findings expected
-11. clean factual but dense caseworker narrative” → should remain 0 findings
-
----
-
-## Files to Modify
-
-### 4. `src/lib/tools/reviewer-v2-types.ts`
-
-Add:
-
-```ts
-export type ReviewIssueType = "completeness" | "policy_language" | "tone" | "bias" | "consistency" | "unsupported_conclusion";
-
-export type FindingTrack = "primary" | "secondary";
-
-export interface ReviewIssue {
-  // ...existing fields
-  finding_track?: FindingTrack;  // assigned server-side, not by model
-}
-
-export interface ReviewerV2Report {
-  summary: {
-    // ...existing fields
-    review_confidence: "high" | "medium" | "low";
-    narrative_coverage: "sufficient" | "partial" | "insufficient";
-  };
-  // ...rest unchanged
-}
+// Sub-line when primaryCount > 0 AND isLimited/isInsufficient:
+"Review coverage was limited. These findings were detected in the analyzed sections."
 ```
 
-### 5. `supabase/functions/run-reviewer/index.ts`
+### 4. Comparison Details tab: plain-English labels
 
-**Prompt changes:**
+Rewrite `ReconciliationPanel` resolution labels. Instead of modifying the shared component, override the labels in the Comparison Details tab by wrapping the panel with context or by creating a new `ComparisonDetailsTab` sub-component that renders reconciliation data with friendlier labels.
 
-- Add authored-vs-quoted instruction block: "Distinguish between caseworker-authored narrative and quoted/attributed speech. Do not flag quoted material for tone/bias unless the caseworker adopts or amplifies it."
-- Add `unsupported_conclusion` as explicit issue type in the prompt schema
-- Add stricter finding threshold instruction: "Each finding MUST have a clear anchored text span, a clear risk category, and a direct explanation. Prefer zero findings over weak findings."
-- Add `review_confidence` and `narrative_coverage` to output schema (model reports, server caps)
+Since `ReconciliationPanel` uses `RESOLUTION_CONFIG` internally, the cleanest approach is to update `src/components/session/ReconciliationPanel.tsx` directly:
 
-**Server-side post-processing changes:**
 
-- After LLM response, assign `finding_track` deterministically:
-  - `tone, bias, policy_language, unsupported_conclusion → "primary"`
-  - `consistency → "secondary"`
-  - `completeness → "secondary" only if it is true narrative completeness, not structured/form completeness`
-- Deterministic confidence/coverage caps:
-  - `narrative_coverage` cap: `insufficient` if docText < 200 chars or reviewWorthyCount === 0; `partial` if docText < 1000 or reviewWorthyCount < 3; else `sufficient`
-  - `review_confidence` cap: `low` if coverage is insufficient; `medium` if no reconciliation and reviewWorthyCount < 5; else `high`
-  - Server applies: `final = min(llmValue, deterministicCap)` using ordering insufficient < partial < sufficient and low < medium < high
-- Stronger comparison noise suppression: suppress `consistency` issues with excerpt < 20 chars
-- If there are zero primary findings, overall_risk must not be driven to high by secondary findings alone unless there is an explicit severe narrative contradiction
-- Add `unsupported_conclusion` to `VALID_ISSUE_TYPES`
-- Accept optional `language_trigger_metadata` in request body; append one-line scrutiny note to user message if present
-- Update `validateReviewReport` to accept new summary fields
+| Current label          | New label                                       |
+| ---------------------- | ----------------------------------------------- |
+| Possible Discrepancies | Final Template Differs From Case Notes          |
+| Likely Omissions       | Present In Case Notes But Missing From Template |
+| Needs Review           | Could Not Be Determined Automatically           |
+| Likely Corrections     | Final Template Likely Intentionally Changed     |
+| Matches                | Final Template Matches Case Notes               |
 
-**Input body change:**
 
-- Accept optional `language_trigger_metadata: Record<string, number>` (category counts only)
+Also add a one-line `description` to each resolution config and render it below the group header as muted helper text.
 
-### 6. `src/pages/Reviewer.tsx`
+Update the individual field cards in ReconciliationPanel to have more padding (`p-4` instead of current), bolder title, and stacked layout for notes/template values.
 
-**Trigger pre-scan** (in `handleRun`):
+### 5. Remove secondary findings from Findings tab
 
-- Import `scanForLanguageTriggers`, `detectAttributionContext` from rubric
-- Run triggers on reviewer-eligible narrative text only, and exclude clearly quoted/attributed spans from trigger counting when possible, NOT full `extractedFullText`
-- Build `language_trigger_metadata` as `{ [category]: hitCount }` — pass in payload
-- Also compute `attributionContext` metadata (quotedRegionCount, attributionMarkerCount) — pass in payload
+The secondary `Collapsible` section (lines ~841-881) is removed from the Findings tab. Secondary issues are only visible on the Comparison Details tab. The Comparison Details tab will now also render secondary `ReviewIssue` items (consistency/completeness) above the ReconciliationPanel, with the same plain-English treatment.
 
-**Finding track separation in results UI:**
+### Files changed
 
-- Split `output.issues` into `primaryFindings` (finding_track === "primary") and `secondaryFindings` (finding_track === "secondary")
-- Primary findings: render as current prominent treatment
-- Secondary findings: render in a `Collapsible` section, **collapsed by default**, titled "Comparison-based observations" with subtitle "Lower-priority notes-to-form observations"
-- If zero primary findings, show clean-result prominently; secondary section still available but subordinate
+- `src/pages/Reviewer.tsx` — ResultsMode restructure, prop additions, verdict logic, comparison CTA, remove secondary from Findings
+- `src/components/session/ReconciliationPanel.tsx` — Plain-English labels, descriptions, card padding
 
-**Confidence-aware clean result:**
+### What stays the same
 
-- Replace the current "No issues found / Documentation looks good" with:
-  - `sufficient` + `high`: "No language issues detected in reviewed narrative."
-  - `partial` or `medium`: "No high-confidence language issues detected. Limited review coverage."
-  - `insufficient`: "Limited authored narrative found — review coverage is insufficient for a confident assessment."
-
-**Dev diagnostics additions:**
-
-- `triggerCounts`, `attributionMarkerCount`, `reviewConfidence`, `narrativeCoverage`, `primaryFindingCount`, `secondaryFindingCount`
-
-### 7. `src/lib/tools/reviewer-eligibility.ts`
-
-Review for any assumptions that ReviewIssueType is exhaustive and update those references for unsupported_conclusion
-
----
-
-## What Will NOT Change
-
-- Encrypted vault model, reauth flow, auto-relock
-- Parser artifact infrastructure
-- Reconciliation engine internals
-- Field recovery logic
-- ReconciliationPanel component
-- Security model (in-memory only, no persistence)
-- No database changes
-
-## What Reviewer Will Now Catch That It Missed Before
-
-- Unsupported conclusions (first-class type)
-- Better sensitivity to quoted-vs-authored distinction
-- Stronger threshold prevents weak speculative findings
-
-## What Reviewer Will Intentionally Suppress
-
-- Consistency findings with excerpts < 20 chars (server-side)
-- Secondary findings no longer visually compete with primary
-
-## Remaining Limitations
-
-- Authored-vs-quoted distinction ultimately relies on LLM judgment; deterministic heuristic is assistive only
-- Confidence caps use text-length heuristics, not semantic analysis
-- Eval fixtures test triggers locally but cannot round-trip through the edge function automatically
-- Sentence splitting is naive (period-based)
-- All trigger patterns are English-only
+- All backend logic, edge function, security model
+- IssueCard component design
+- Source Document and Extracted Text tabs
+- Pre-run workspace layout
+- VaultSection and ReviewConfigCard components (reused, not modified)
+- Dev diagnostics panel
