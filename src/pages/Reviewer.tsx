@@ -114,12 +114,18 @@ const SEVERITY_CONFIG: Record<ReviewSeverity, { variant: "destructive" | "defaul
 const ISSUE_TYPE_META: Record<ReviewIssueType, { label: string; icon: typeof MessageSquare; description: string }> = {
   tone: { label: "Tone & Clarity", icon: MessageSquare, description: "Judgmental, unprofessional, or emotionally charged language" },
   bias: { label: "Bias & Assumptions", icon: Eye, description: "Stigmatizing language, unsupported assumptions, or stereotypes" },
+  unsupported_conclusion: { label: "Unsupported Conclusions", icon: AlertCircle, description: "Conclusions presented with more certainty than the evidence supports" },
   policy_language: { label: "Policy Language", icon: Scale, description: "Prohibited terminology or policy-inconsistent wording" },
   completeness: { label: "Narrative Completeness", icon: CheckSquare, description: "Major narrative sections that appear blank or insufficient" },
   consistency: { label: "Narrative Consistency", icon: Shield, description: "Narrative content that conflicts between notes and form" },
 };
 
-const ISSUE_TYPES: ReviewIssueType[] = ["tone", "bias", "policy_language", "completeness", "consistency"];
+/** Primary issue types shown prominently */
+const PRIMARY_ISSUE_TYPES: ReviewIssueType[] = ["tone", "bias", "unsupported_conclusion", "policy_language"];
+/** Secondary issue types shown in collapsed section */
+const SECONDARY_ISSUE_TYPES: ReviewIssueType[] = ["completeness", "consistency"];
+/** All issue types for iteration */
+const ISSUE_TYPES: ReviewIssueType[] = [...PRIMARY_ISSUE_TYPES, ...SECONDARY_ISSUE_TYPES];
 
 // ─── Helpers ─────────────────────────────────────────────
 function formatFileSize(bytes: number): string {
