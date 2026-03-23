@@ -934,6 +934,17 @@ export default function Reviewer() {
         unanswered_fields: adjustedUnanswered,
         human_review_fields,
         reconciliation_context: reconciliationContext,
+        // Trigger pre-scan: metadata only, run on reviewer-eligible narrative text
+        language_trigger_metadata: (() => {
+          const narrativeText = review_worthy_answers
+            .filter(a => !a.missing && a.answer)
+            .map(a => a.answer!)
+            .join("\n");
+          if (narrativeText.length < 20) return undefined;
+          const triggers = scanForLanguageTriggers(narrativeText);
+          const attribution = detectAttributionContext(narrativeText);
+          return buildTriggerMetadata(triggers, attribution);
+        })(),
       };
       setReconContextSent(!!reconciliationContext);
 
@@ -945,6 +956,7 @@ export default function Reviewer() {
           review_worthy_count: payload.review_worthy_answers.length,
           unanswered_count: payload.unanswered_fields.length,
           has_reconciliation_context: !!reconciliationContext,
+          has_trigger_metadata: !!payload.language_trigger_metadata,
         });
       }
       const { data, error } = await supabase.functions.invoke("run-reviewer", { body: payload });
