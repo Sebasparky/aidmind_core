@@ -1025,41 +1025,7 @@ function ResultsMode({
           </TabsContent>
         )}
 
-        {/* ═══ COMPARISON DETAILS TAB ═══ */}
-        {hasComparison && (
-          <TabsContent value="comparison" className="flex-1 overflow-hidden mt-0">
-            <ScrollArea className="h-full">
-              <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
-                <div>
-                  <h3 className="text-lg font-semibold text-foreground">Comparison Details</h3>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Side-by-side notes-to-form observations from reconciliation
-                  </p>
-                </div>
 
-                {reviewTier === "full" && notesSource === "case_notes" && (
-                  <div className="flex items-start gap-2.5 p-4 rounded-xl bg-[hsl(var(--status-success-muted))]/40 border border-[hsl(var(--status-success))]/10">
-                    <ShieldCheck className="h-4 w-4 text-[hsl(var(--status-success))] shrink-0 mt-0.5" />
-                    <div>
-                      <p className="text-xs text-foreground font-medium">Secure notes-to-form comparison</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Narrative comparison uses unlocked case notes as the source of truth.
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {reconciliationResult && (
-                  <ReconciliationPanel
-                    result={reconciliationResult}
-                    notesSource={notesSource ?? "field_recovery"}
-                    artifactStatus={artifactStatus}
-                  />
-                )}
-              </div>
-            </ScrollArea>
-          </TabsContent>
-        )}
 
         {/* ═══ SOURCE DOCUMENT TAB ═══ */}
         <TabsContent value="source" className="flex-1 overflow-hidden mt-0">
