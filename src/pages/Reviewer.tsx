@@ -260,8 +260,8 @@ function applyLanguageFirstFiltering(
       return false;
     }
 
-    // Tone, bias, policy_language always pass (they're about authored text)
-    if (issue.type === "tone" || issue.type === "bias" || issue.type === "policy_language") {
+    // Tone, bias, policy_language, unsupported_conclusion always pass (they're about authored text)
+    if (issue.type === "tone" || issue.type === "bias" || issue.type === "policy_language" || issue.type === "unsupported_conclusion") {
       return true;
     }
 
