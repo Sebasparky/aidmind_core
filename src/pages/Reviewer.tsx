@@ -111,13 +111,23 @@ const SEVERITY_CONFIG: Record<ReviewSeverity, { variant: "destructive" | "defaul
   low: { variant: "secondary", label: "Low", dotClass: "bg-muted-foreground/40" },
 };
 
+/** Human-readable labels for issue types — used as the primary card title */
+const ISSUE_TYPE_LABELS: Record<ReviewIssueType, string> = {
+  tone: "Judgmental Tone",
+  bias: "Bias or Assumption",
+  unsupported_conclusion: "Unsupported Conclusion",
+  policy_language: "Policy Language Concern",
+  completeness: "Missing Narrative Context",
+  consistency: "Narrative Discrepancy",
+};
+
 const ISSUE_TYPE_META: Record<ReviewIssueType, { label: string; icon: typeof MessageSquare; description: string }> = {
-  tone: { label: "Tone & Clarity", icon: MessageSquare, description: "Judgmental, unprofessional, or emotionally charged language" },
+  tone: { label: "Judgmental Tone", icon: MessageSquare, description: "Judgmental, unprofessional, or emotionally charged language" },
   bias: { label: "Bias & Assumptions", icon: Eye, description: "Stigmatizing language, unsupported assumptions, or stereotypes" },
   unsupported_conclusion: { label: "Unsupported Conclusions", icon: AlertCircle, description: "Conclusions presented with more certainty than the evidence supports" },
-  policy_language: { label: "Policy Language", icon: Scale, description: "Prohibited terminology or policy-inconsistent wording" },
-  completeness: { label: "Narrative Completeness", icon: CheckSquare, description: "Major narrative sections that appear blank or insufficient" },
-  consistency: { label: "Narrative Consistency", icon: Shield, description: "Narrative content that conflicts between notes and form" },
+  policy_language: { label: "Policy Language Concerns", icon: Scale, description: "Prohibited terminology or policy-inconsistent wording" },
+  completeness: { label: "Missing Narrative Context", icon: CheckSquare, description: "Major narrative sections that appear blank or insufficient" },
+  consistency: { label: "Narrative Discrepancies", icon: Shield, description: "Narrative content that conflicts between notes and form" },
 };
 
 /** Primary issue types shown prominently */
