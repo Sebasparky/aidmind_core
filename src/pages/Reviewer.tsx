@@ -44,9 +44,18 @@ import type {
   ReviewIssue,
   ReviewSeverity,
   ReviewIssueType,
+  ReviewConfidence,
+  NarrativeCoverage,
+  FindingTrack,
   Phase2SchemaField,
   RecoveredField,
 } from "@/lib/tools/reviewer-v2-types";
+import { assignFindingTrack } from "@/lib/tools/reviewer-v2-types";
+import {
+  scanForLanguageTriggers,
+  detectAttributionContext,
+  buildTriggerMetadata,
+} from "@/lib/tools/language-risk-rubric";
 import type {
   TemplateParserArtifact,
   ReconciliationResult,
