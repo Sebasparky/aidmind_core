@@ -126,9 +126,28 @@ export type ReviewIssueType =
   | "policy_language"
   | "tone"
   | "bias"
-  | "consistency";
+  | "consistency"
+  | "unsupported_conclusion";
 
 export type ReviewSeverity = "low" | "medium" | "high";
+
+/** Deterministic finding track — assigned server-side, never by the model */
+export type FindingTrack = "primary" | "secondary";
+
+/** Map issue types to finding tracks deterministically */
+export function assignFindingTrack(type: ReviewIssueType): FindingTrack {
+  switch (type) {
+    case "tone":
+    case "bias":
+    case "policy_language":
+    case "unsupported_conclusion":
+      return "primary";
+    case "consistency":
+    case "completeness":
+    default:
+      return "secondary";
+  }
+}
 
 export interface ReviewIssue {
   type: ReviewIssueType;
@@ -136,7 +155,12 @@ export interface ReviewIssue {
   excerpt: string;
   explanation: string;
   field_key?: string;
+  /** Assigned server-side deterministically based on issue type */
+  finding_track?: FindingTrack;
 }
+
+export type ReviewConfidence = "high" | "medium" | "low";
+export type NarrativeCoverage = "sufficient" | "partial" | "insufficient";
 
 export interface ReviewerV2Report {
   summary: {
@@ -145,6 +169,8 @@ export interface ReviewerV2Report {
     fields_reviewed: number;
     fields_missing: number;
     fields_human_review: number;
+    review_confidence?: ReviewConfidence;
+    narrative_coverage?: NarrativeCoverage;
   };
   issues: ReviewIssue[];
   metrics: {
