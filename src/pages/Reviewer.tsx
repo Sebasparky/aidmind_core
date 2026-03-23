@@ -540,49 +540,91 @@ function VaultSection({
   );
 }
 
-// ─── Issue Card ──────────────────────────────────────────
+// ─── Issue Card (Redesigned) ─────────────────────────────
 function IssueCard({
   issue,
   isActive,
   onHighlight,
+  variant = "primary",
 }: {
   issue: ReviewIssue;
   isActive: boolean;
   onHighlight: (snippet: string) => void;
+  variant?: "primary" | "secondary";
 }) {
   const sev = SEVERITY_CONFIG[issue.severity];
+  const typeLabel = ISSUE_TYPE_LABELS[issue.type] ?? issue.type;
+  const isPrimary = variant === "primary";
+
+  // Format field_key for display — replace underscores with spaces, title-case
+  const sectionLabel = issue.field_key
+    ? issue.field_key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
+    : null;
+
   return (
     <div className={cn(
-      "rounded-lg border p-4 transition-colors",
+      "rounded-lg border transition-colors",
       isActive
         ? "border-[hsl(var(--status-warning))]/50 bg-[hsl(var(--status-warning-muted))]/30"
-        : "border-border bg-card hover:bg-accent/5"
+        : isPrimary
+          ? "border-border bg-card hover:bg-accent/5"
+          : "border-border/60 bg-card/60 hover:bg-accent/5",
     )}>
-      <div className="flex items-start gap-3">
-        <div className={cn("h-2 w-2 rounded-full mt-1.5 shrink-0", sev.dotClass)} />
-        <div className="flex-1 min-w-0 space-y-2">
-          <p className="text-sm text-foreground leading-relaxed">{issue.explanation}</p>
-          {issue.field_key && (
-            <p className="text-xs text-muted-foreground font-mono">Field: {issue.field_key}</p>
-          )}
-          {issue.excerpt && (
-            <blockquote className="text-xs text-muted-foreground italic border-l-2 border-border pl-3 py-1">
-              "{issue.excerpt}"
-            </blockquote>
+      {/* Collapsed-visible content */}
+      <div className={cn("p-4", isPrimary ? "space-y-2.5" : "space-y-2")}>
+        {/* Row 1: Issue type label — bold, prominent */}
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className={cn("h-2 w-2 rounded-full shrink-0 mt-0.5", sev.dotClass)} />
+            <h4 className={cn(
+              "font-semibold leading-tight",
+              isPrimary ? "text-sm text-foreground" : "text-xs text-muted-foreground"
+            )}>
+              {typeLabel}
+            </h4>
+          </div>
+          <Badge variant={sev.variant} className="text-[10px] shrink-0 px-2">{sev.label}</Badge>
+        </div>
+
+        {/* Row 2: Plain-English summary */}
+        <p className={cn(
+          "leading-relaxed",
+          isPrimary ? "text-sm text-foreground/90" : "text-xs text-muted-foreground"
+        )}>
+          {issue.explanation}
+        </p>
+
+        {/* Row 3: Metadata — section name, actions */}
+        <div className="flex items-center gap-3 flex-wrap">
+          {sectionLabel && (
+            <span className="text-[11px] text-muted-foreground/70 font-medium">
+              {sectionLabel}
+            </span>
           )}
           {issue.excerpt && issue.excerpt.length > 0 && (
             <Button
               variant={isActive ? "secondary" : "ghost"}
               size="sm"
-              className="h-7 px-2.5 text-xs gap-1.5"
+              className="h-6 px-2 text-[11px] gap-1 text-muted-foreground"
               onClick={() => onHighlight(isActive ? "" : issue.excerpt)}
             >
-              <Search className="h-3 w-3" />
-              {isActive ? "Unhighlight" : "Highlight in text"}
+              <Search className="h-2.5 w-2.5" />
+              {isActive ? "Unhighlight" : "Show in text"}
             </Button>
           )}
         </div>
-        <Badge variant={sev.variant} className="text-[10px] shrink-0 px-2">{sev.label}</Badge>
+
+        {/* Excerpt — revealed inline */}
+        {issue.excerpt && (
+          <blockquote className={cn(
+            "border-l-2 pl-3 py-1 italic",
+            isPrimary
+              ? "text-xs text-muted-foreground border-border"
+              : "text-[11px] text-muted-foreground/60 border-border/60"
+          )}>
+            "{issue.excerpt}"
+          </blockquote>
+        )}
       </div>
     </div>
   );
