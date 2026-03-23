@@ -5,7 +5,7 @@ import {
   AlertTriangle, MessageSquare, Scale, CheckSquare, Eye,
   Upload, FileText, X, RefreshCw, CheckCircle2, FileWarning,
   Search, ChevronDown, ChevronRight, Circle, Lock, Unlock,
-  ShieldCheck, Clock,
+  ShieldCheck, Clock, AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -44,9 +44,18 @@ import type {
   ReviewIssue,
   ReviewSeverity,
   ReviewIssueType,
+  ReviewConfidence,
+  NarrativeCoverage,
+  FindingTrack,
   Phase2SchemaField,
   RecoveredField,
 } from "@/lib/tools/reviewer-v2-types";
+import { assignFindingTrack } from "@/lib/tools/reviewer-v2-types";
+import {
+  scanForLanguageTriggers,
+  detectAttributionContext,
+  buildTriggerMetadata,
+} from "@/lib/tools/language-risk-rubric";
 import type {
   TemplateParserArtifact,
   ReconciliationResult,
@@ -105,12 +114,18 @@ const SEVERITY_CONFIG: Record<ReviewSeverity, { variant: "destructive" | "defaul
 const ISSUE_TYPE_META: Record<ReviewIssueType, { label: string; icon: typeof MessageSquare; description: string }> = {
   tone: { label: "Tone & Clarity", icon: MessageSquare, description: "Judgmental, unprofessional, or emotionally charged language" },
   bias: { label: "Bias & Assumptions", icon: Eye, description: "Stigmatizing language, unsupported assumptions, or stereotypes" },
+  unsupported_conclusion: { label: "Unsupported Conclusions", icon: AlertCircle, description: "Conclusions presented with more certainty than the evidence supports" },
   policy_language: { label: "Policy Language", icon: Scale, description: "Prohibited terminology or policy-inconsistent wording" },
   completeness: { label: "Narrative Completeness", icon: CheckSquare, description: "Major narrative sections that appear blank or insufficient" },
   consistency: { label: "Narrative Consistency", icon: Shield, description: "Narrative content that conflicts between notes and form" },
 };
 
-const ISSUE_TYPES: ReviewIssueType[] = ["tone", "bias", "policy_language", "completeness", "consistency"];
+/** Primary issue types shown prominently */
+const PRIMARY_ISSUE_TYPES: ReviewIssueType[] = ["tone", "bias", "unsupported_conclusion", "policy_language"];
+/** Secondary issue types shown in collapsed section */
+const SECONDARY_ISSUE_TYPES: ReviewIssueType[] = ["completeness", "consistency"];
+/** All issue types for iteration */
+const ISSUE_TYPES: ReviewIssueType[] = [...PRIMARY_ISSUE_TYPES, ...SECONDARY_ISSUE_TYPES];
 
 // ─── Helpers ─────────────────────────────────────────────
 function formatFileSize(bytes: number): string {
@@ -245,8 +260,8 @@ function applyLanguageFirstFiltering(
       return false;
     }
 
-    // Tone, bias, policy_language always pass (they're about authored text)
-    if (issue.type === "tone" || issue.type === "bias" || issue.type === "policy_language") {
+    // Tone, bias, policy_language, unsupported_conclusion always pass (they're about authored text)
+    if (issue.type === "tone" || issue.type === "bias" || issue.type === "policy_language" || issue.type === "unsupported_conclusion") {
       return true;
     }
 
@@ -919,6 +934,17 @@ export default function Reviewer() {
         unanswered_fields: adjustedUnanswered,
         human_review_fields,
         reconciliation_context: reconciliationContext,
+        // Trigger pre-scan: metadata only, run on reviewer-eligible narrative text
+        language_trigger_metadata: (() => {
+          const narrativeText = review_worthy_answers
+            .filter(a => !a.missing && a.answer)
+            .map(a => a.answer!)
+            .join("\n");
+          if (narrativeText.length < 20) return undefined;
+          const triggers = scanForLanguageTriggers(narrativeText);
+          const attribution = detectAttributionContext(narrativeText);
+          return buildTriggerMetadata(triggers, attribution);
+        })(),
       };
       setReconContextSent(!!reconciliationContext);
 
@@ -930,6 +956,7 @@ export default function Reviewer() {
           review_worthy_count: payload.review_worthy_answers.length,
           unanswered_count: payload.unanswered_fields.length,
           has_reconciliation_context: !!reconciliationContext,
+          has_trigger_metadata: !!payload.language_trigger_metadata,
         });
       }
       const { data, error } = await supabase.functions.invoke("run-reviewer", { body: payload });
@@ -1491,56 +1518,139 @@ export default function Reviewer() {
                             )}
                           </div>
 
+                          {/* Confidence / Coverage metadata */}
+                          {(output.summary.review_confidence || output.summary.narrative_coverage) && (
+                            <div className="flex items-center gap-4 text-[11px] text-muted-foreground">
+                              {output.summary.review_confidence && (
+                                <span>Confidence: <span className="font-medium text-foreground">{output.summary.review_confidence}</span></span>
+                              )}
+                              {output.summary.narrative_coverage && (
+                                <span>Coverage: <span className="font-medium text-foreground">{output.summary.narrative_coverage}</span></span>
+                              )}
+                            </div>
+                          )}
+
                           <p className="text-xs text-muted-foreground/60 italic">
                             AI-generated language audit — focuses on authored narrative text. Does not verify structured fields.
                           </p>
 
-                          {totalIssues === 0 && (
-                            <div className="text-center py-10">
-                              <CheckCircle2 className="h-10 w-10 mx-auto text-[hsl(var(--status-success))]/30 mb-3" />
-                              <p className="text-base text-foreground font-medium">No issues found</p>
-                              <p className="text-sm text-muted-foreground mt-1">Documentation looks good.</p>
-                            </div>
-                          )}
-
-                          {/* Issue groups */}
-                          {ISSUE_TYPES.map((type) => {
-                            const issues = issuesByType[type];
-                            if (!issues || issues.length === 0) return null;
-                            const meta = ISSUE_TYPE_META[type];
-                            const Icon = meta.icon;
+                          {/* Confidence-aware clean result */}
+                          {totalIssues === 0 && (() => {
+                            const coverage = output.summary.narrative_coverage ?? "sufficient";
+                            const confidence = output.summary.review_confidence ?? "high";
+                            const isInsufficient = coverage === "insufficient";
+                            const isLimited = coverage === "partial" || confidence === "medium" || confidence === "low";
 
                             return (
-                              <Collapsible key={type} defaultOpen>
-                                <div className="space-y-3">
-                                  <div className="flex items-center justify-between">
-                                    <CollapsibleTrigger className="flex items-center gap-2.5 group">
-                                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition-transform group-data-[state=closed]:rotate-[-90deg]" />
-                                      <Icon className="h-4 w-4 text-muted-foreground" />
-                                      <span className="text-sm font-medium text-foreground">{meta.label}</span>
-                                      <Badge variant="secondary" className="text-[10px] px-2 h-5">{issues.length}</Badge>
-                                    </CollapsibleTrigger>
-                                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground gap-1" onClick={() => handleCopyType(type)}>
-                                      {copiedCategory === type ? <><Check className="h-3 w-3" /> Copied</> : <><Copy className="h-3 w-3" /> Copy</>}
-                                    </Button>
+                              <div className="text-center py-10">
+                                <CheckCircle2 className={cn(
+                                  "h-10 w-10 mx-auto mb-3",
+                                  isInsufficient ? "text-[hsl(var(--status-warning))]/30" : "text-[hsl(var(--status-success))]/30"
+                                )} />
+                                <p className="text-base text-foreground font-medium">
+                                  {isInsufficient
+                                    ? "Limited review coverage"
+                                    : isLimited
+                                      ? "No high-confidence language issues detected"
+                                      : "No language issues detected in reviewed narrative"}
+                                </p>
+                                <p className="text-sm text-muted-foreground mt-1">
+                                  {isInsufficient
+                                    ? "Limited authored narrative found — review coverage is insufficient for a confident assessment."
+                                    : isLimited
+                                      ? "Limited review coverage. Consider providing more authored narrative text for a thorough review."
+                                      : "The reviewed narrative text appears professionally written and compliant."}
+                                </p>
+                              </div>
+                            );
+                          })()}
+
+                          {/* ── PRIMARY LANGUAGE FINDINGS ── */}
+                          {(() => {
+                            const primaryIssues = output.issues.filter(i => assignFindingTrack(i.type) === "primary");
+                            if (primaryIssues.length === 0) return null;
+                            return PRIMARY_ISSUE_TYPES.map((type) => {
+                              const issues = primaryIssues.filter(i => i.type === type);
+                              if (issues.length === 0) return null;
+                              const meta = ISSUE_TYPE_META[type];
+                              const Icon = meta.icon;
+                              return (
+                                <Collapsible key={type} defaultOpen>
+                                  <div className="space-y-3">
+                                    <div className="flex items-center justify-between">
+                                      <CollapsibleTrigger className="flex items-center gap-2.5 group">
+                                        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition-transform group-data-[state=closed]:rotate-[-90deg]" />
+                                        <Icon className="h-4 w-4 text-muted-foreground" />
+                                        <span className="text-sm font-medium text-foreground">{meta.label}</span>
+                                        <Badge variant="secondary" className="text-[10px] px-2 h-5">{issues.length}</Badge>
+                                      </CollapsibleTrigger>
+                                      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground gap-1" onClick={() => handleCopyType(type)}>
+                                        {copiedCategory === type ? <><Check className="h-3 w-3" /> Copied</> : <><Copy className="h-3 w-3" /> Copy</>}
+                                      </Button>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground/60 -mt-1 ml-9">{meta.description}</p>
+                                    <CollapsibleContent>
+                                      <div className="space-y-2.5">
+                                        {issues.map((issue, i) => (
+                                          <IssueCard
+                                            key={i}
+                                            issue={issue}
+                                            isActive={activeSnippet === issue.excerpt && !!issue.excerpt && issue.excerpt.length > 0}
+                                            onHighlight={handleHighlight}
+                                          />
+                                        ))}
+                                      </div>
+                                    </CollapsibleContent>
                                   </div>
-                                  <p className="text-xs text-muted-foreground/60 -mt-1 ml-9">{meta.description}</p>
+                                </Collapsible>
+                              );
+                            });
+                          })()}
+
+                          {/* ── SECONDARY COMPARISON FINDINGS ── */}
+                          {(() => {
+                            const secondaryIssues = output.issues.filter(i => assignFindingTrack(i.type) === "secondary");
+                            if (secondaryIssues.length === 0) return null;
+                            return (
+                              <Collapsible defaultOpen={false}>
+                                <div className="space-y-3 pt-2">
+                                  <CollapsibleTrigger className="flex items-center gap-2.5 group w-full">
+                                    <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition-transform group-data-[state=closed]:rotate-[-90deg]" />
+                                    <span className="text-sm font-medium text-muted-foreground">Comparison-based observations</span>
+                                    <Badge variant="outline" className="text-[10px] px-2 h-5 text-muted-foreground">{secondaryIssues.length}</Badge>
+                                  </CollapsibleTrigger>
+                                  <p className="text-xs text-muted-foreground/50 -mt-1 ml-9">Lower-priority notes-to-form observations</p>
                                   <CollapsibleContent>
-                                    <div className="space-y-2.5">
-                                      {issues.map((issue, i) => (
-                                        <IssueCard
-                                          key={i}
-                                          issue={issue}
-                                          isActive={activeSnippet === issue.excerpt && !!issue.excerpt && issue.excerpt.length > 0}
-                                          onHighlight={handleHighlight}
-                                        />
-                                      ))}
+                                    <div className="space-y-4">
+                                      {SECONDARY_ISSUE_TYPES.map((type) => {
+                                        const issues = secondaryIssues.filter(i => i.type === type);
+                                        if (issues.length === 0) return null;
+                                        const meta = ISSUE_TYPE_META[type];
+                                        const Icon = meta.icon;
+                                        return (
+                                          <div key={type} className="space-y-2.5">
+                                            <div className="flex items-center gap-2 ml-2">
+                                              <Icon className="h-3.5 w-3.5 text-muted-foreground/60" />
+                                              <span className="text-xs font-medium text-muted-foreground">{meta.label}</span>
+                                              <Badge variant="outline" className="text-[9px] px-1.5 h-4 text-muted-foreground/60">{issues.length}</Badge>
+                                            </div>
+                                            {issues.map((issue, i) => (
+                                              <IssueCard
+                                                key={i}
+                                                issue={issue}
+                                                isActive={activeSnippet === issue.excerpt && !!issue.excerpt && issue.excerpt.length > 0}
+                                                onHighlight={handleHighlight}
+                                              />
+                                            ))}
+                                          </div>
+                                        );
+                                      })}
                                     </div>
                                   </CollapsibleContent>
                                 </div>
                               </Collapsible>
                             );
-                          })}
+                          })()}
                         </div>
                       )}
                     </>
