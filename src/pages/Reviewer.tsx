@@ -1591,6 +1591,7 @@ export default function Reviewer() {
         const updatedMeta: Record<string, unknown> = {
           ...existingMeta,
           reviewer_completed_at: new Date().toISOString(),
+          reviewer_tier: reviewTier,
         };
 
         // Check if all three tools are complete → mark session as fully completed
