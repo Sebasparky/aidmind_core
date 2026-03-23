@@ -725,7 +725,7 @@ function ResultsMode({
         </div>
 
         {/* ═══ FINDINGS TAB ═══ */}
-        <TabsContent value="findings" className="flex-1 overflow-hidden mt-0">
+        <TabsContent value="findings" className={cn("flex-1 overflow-hidden mt-0", activeTab !== "findings" && "hidden")} forceMount>
           <ScrollArea className="h-full">
             <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
 
@@ -779,7 +779,6 @@ function ResultsMode({
                     )}
                   </div>
                   <div className="flex-1 min-w-0 space-y-3">
-                    {/* Headline: primary findings take priority over coverage */}
                     <h2 className="text-xl font-semibold text-foreground leading-tight">
                       {primaryCount > 0
                         ? `${primaryCount} language ${primaryCount === 1 ? "concern" : "concerns"} found`
@@ -800,7 +799,6 @@ function ResultsMode({
                               ? "No language concerns were detected, but review coverage was limited. Consider providing more narrative text for a thorough review."
                               : "The reviewed narrative text appears professionally written and compliant with language standards."}
                     </p>
-                    {/* Metadata badges */}
                     <div className="flex items-center gap-3 flex-wrap">
                       <Badge
                         variant={output.summary.overall_risk === "high" ? "destructive" : output.summary.overall_risk === "medium" ? "default" : "secondary"}
@@ -878,28 +876,38 @@ function ResultsMode({
                 </section>
               )}
 
-              {/* ── 5. Comparison CTA (replaces inline secondary) ── */}
+              {/* ── 5. Comparison CTA ── */}
               {hasComparison && secondaryTotal > 0 && (
                 <div
-                  className="rounded-xl border border-border bg-card p-5 cursor-pointer hover:bg-muted/30 transition-colors"
+                  className="rounded-xl border-2 border-primary/20 bg-primary/5 p-5 cursor-pointer hover:bg-primary/10 transition-colors group"
                   onClick={() => setActiveTab("comparison")}
                   role="button"
                   tabIndex={0}
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setActiveTab("comparison"); } }}
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-1">
-                      <p className="text-sm font-semibold text-foreground">More notes-to-template observations</p>
-                      <p className="text-xs text-muted-foreground">
-                        See notes-to-form comparison details in the Comparison Details tab
+                  <div className="flex items-center gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2.5 mb-1.5">
+                        <h4 className="text-sm font-semibold text-foreground">
+                          See differences between case notes and final template
+                        </h4>
+                        <Badge variant="default" className="text-[10px] px-2 h-5 shrink-0">
+                          {secondaryTotal}
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        Inspect notes-to-template differences, omissions, and unresolved items
                       </p>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <Badge variant="outline" className="text-[10px] px-2 h-5 text-muted-foreground">
-                        {secondaryTotal}
-                      </Badge>
-                      <ExternalLink className="h-3.5 w-3.5 text-muted-foreground/50" />
-                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0 gap-1.5 text-xs group-hover:bg-background"
+                      tabIndex={-1}
+                    >
+                      Open Comparison Details
+                      <ChevronRight className="h-3 w-3" />
+                    </Button>
                   </div>
                 </div>
               )}
@@ -1017,44 +1025,10 @@ function ResultsMode({
           </TabsContent>
         )}
 
-        {/* ═══ COMPARISON DETAILS TAB ═══ */}
-        {hasComparison && (
-          <TabsContent value="comparison" className="flex-1 overflow-hidden mt-0">
-            <ScrollArea className="h-full">
-              <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
-                <div>
-                  <h3 className="text-lg font-semibold text-foreground">Comparison Details</h3>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Side-by-side notes-to-form observations from reconciliation
-                  </p>
-                </div>
 
-                {reviewTier === "full" && notesSource === "case_notes" && (
-                  <div className="flex items-start gap-2.5 p-4 rounded-xl bg-[hsl(var(--status-success-muted))]/40 border border-[hsl(var(--status-success))]/10">
-                    <ShieldCheck className="h-4 w-4 text-[hsl(var(--status-success))] shrink-0 mt-0.5" />
-                    <div>
-                      <p className="text-xs text-foreground font-medium">Secure notes-to-form comparison</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Narrative comparison uses unlocked case notes as the source of truth.
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {reconciliationResult && (
-                  <ReconciliationPanel
-                    result={reconciliationResult}
-                    notesSource={notesSource ?? "field_recovery"}
-                    artifactStatus={artifactStatus}
-                  />
-                )}
-              </div>
-            </ScrollArea>
-          </TabsContent>
-        )}
 
         {/* ═══ SOURCE DOCUMENT TAB ═══ */}
-        <TabsContent value="source" className="flex-1 overflow-hidden mt-0">
+        <TabsContent value="source" className={cn("flex-1 overflow-hidden mt-0", activeTab !== "source" && "hidden")} forceMount>
           {selectedFile ? (
             <div className="h-full flex flex-col">
               <div className="px-6 py-3 border-b border-border bg-card flex items-center gap-3 shrink-0">
@@ -1074,7 +1048,7 @@ function ResultsMode({
         </TabsContent>
 
         {/* ═══ EXTRACTED TEXT TAB ═══ */}
-        <TabsContent value="text" className="flex-1 overflow-hidden mt-0">
+        <TabsContent value="text" className={cn("flex-1 overflow-hidden mt-0", activeTab !== "text" && "hidden")} forceMount>
           <ScrollArea className="h-full">
             <div className="max-w-3xl mx-auto px-6 py-8">
               <div className="flex items-center justify-between mb-6">
@@ -1586,7 +1560,37 @@ export default function Reviewer() {
     setTimeout(() => setCopiedCategory(null), 2000);
   };
 
-  const handleBack = () => {
+  const handleBack = async () => {
+    // Persist reviewer completion metadata (non-sensitive workflow state only)
+    if (sessionInfo && output) {
+      try {
+        const { data: currentSession } = await supabase
+          .from("sessions")
+          .select("metadata")
+          .eq("session_id", sessionId!)
+          .maybeSingle();
+
+        const existingMeta = (currentSession?.metadata as Record<string, unknown>) ?? {};
+        const updatedMeta: Record<string, unknown> = {
+          ...existingMeta,
+          reviewer_completed_at: new Date().toISOString(),
+        };
+
+        // Check if all three tools are complete → mark session as fully completed
+        const guidanceDone = !!existingMeta.guidance_completed_at;
+        const caseNotesDone = !!existingMeta.case_notes_completed_at;
+        if (guidanceDone && caseNotesDone) {
+          updatedMeta.session_completed_at = new Date().toISOString();
+        }
+
+        await supabase
+          .from("sessions")
+          .update({ metadata: updatedMeta as any })
+          .eq("session_id", sessionId!);
+      } catch (err) {
+        console.warn("[Reviewer] Failed to persist completion metadata:", err);
+      }
+    }
     vault.relock("manual");
     navigate("/dashboard");
   };

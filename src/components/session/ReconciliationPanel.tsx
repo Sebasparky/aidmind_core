@@ -244,10 +244,28 @@ function FieldRow({ field, resolution }: { field: FieldReconciliation; resolutio
   const hasDetail = !!(field.template_value || field.notes_value || field.template_source_excerpt);
   const fieldLabel = field.field_key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 
+  // Build a human-readable title based on resolution
+  const humanTitle = (() => {
+    switch (resolution) {
+      case "possible_discrepancy":
+        return `${fieldLabel} differs between case notes and final template`;
+      case "likely_omission":
+        return `${fieldLabel} is missing from the final template`;
+      case "unresolved":
+        return `${fieldLabel} could not be verified automatically`;
+      case "likely_correction":
+        return `${fieldLabel} was likely intentionally changed`;
+      case "confirmed_match":
+        return `${fieldLabel} matches between case notes and template`;
+      default:
+        return fieldLabel;
+    }
+  })();
+
   return (
     <div
       className={cn(
-        "p-4 rounded-lg border text-sm transition-colors",
+        "p-5 rounded-lg border text-sm transition-colors",
         field.needs_review
           ? "bg-[hsl(var(--status-warning-muted))]/30 border-[hsl(var(--status-warning))]/15"
           : "bg-card/50 border-border/50",
@@ -255,31 +273,57 @@ function FieldRow({ field, resolution }: { field: FieldReconciliation; resolutio
       )}
       onClick={() => hasDetail && setExpanded(!expanded)}
     >
-      <div className="flex items-center gap-2">
-        <span className="text-foreground font-semibold flex-1 min-w-0">
-          {fieldLabel}
-        </span>
-        {field.section && (
-          <span className="text-[10px] text-muted-foreground/60 shrink-0">
-            {field.section}
-          </span>
-        )}
-        <Badge variant="outline" className={cn("text-[9px] px-1.5 h-5 shrink-0", config.badgeClass)}>
+      {/* Title: human-readable issue sentence */}
+      <div className="flex items-start gap-2 mb-2">
+        <h5 className="text-foreground font-semibold flex-1 min-w-0 leading-snug">
+          {humanTitle}
+        </h5>
+        <Badge variant="outline" className={cn("text-[9px] px-1.5 h-5 shrink-0 mt-0.5", config.badgeClass)}>
           {config.singularLabel}
         </Badge>
       </div>
 
+      {/* Subtitle: section + field */}
+      <p className="text-[11px] text-muted-foreground/60 mb-1.5">
+        {field.section ? `Section: ${field.section} · ` : ""}Field: {fieldLabel}
+      </p>
+
       {field.diff_summary && (
-        <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">{field.diff_summary}</p>
+        <p className="text-xs text-muted-foreground leading-relaxed">{field.diff_summary}</p>
       )}
 
       {expanded && hasDetail && (
-        <div className="mt-3 pt-3 border-t border-border/30 space-y-3">
-          {field.notes_value && (
-            <ValueBlock label="Case notes" value={field.notes_value} confidence={field.notes_confidence} />
-          )}
-          {field.template_value && (
-            <ValueBlock label="Final template" value={field.template_value} confidence={field.template_confidence} />
+        <div className="mt-4 pt-4 border-t border-border/30 space-y-4">
+          {resolution === "likely_omission" ? (
+            <>
+              {field.notes_value && (
+                <ValueBlock label="Found in case notes" value={field.notes_value} confidence={field.notes_confidence} />
+              )}
+              <div className="text-xs text-muted-foreground/60 italic px-3 py-2 bg-muted/20 rounded-md">
+                Missing from final template
+              </div>
+            </>
+          ) : resolution === "unresolved" ? (
+            <>
+              <div className="text-xs text-muted-foreground leading-relaxed px-3 py-2 bg-muted/20 rounded-md">
+                This field could not be confidently compared. Manual review is recommended.
+              </div>
+              {field.notes_value && (
+                <ValueBlock label="Case notes" value={field.notes_value} confidence={field.notes_confidence} />
+              )}
+              {field.template_value && (
+                <ValueBlock label="Final template" value={field.template_value} confidence={field.template_confidence} />
+              )}
+            </>
+          ) : (
+            <>
+              {field.notes_value && (
+                <ValueBlock label="Case notes said" value={field.notes_value} confidence={field.notes_confidence} />
+              )}
+              {field.template_value && (
+                <ValueBlock label="Final template says" value={field.template_value} confidence={field.template_confidence} />
+              )}
+            </>
           )}
           {field.template_source_excerpt && (
             <div className="text-[11px] text-muted-foreground/60 italic border-l-2 border-border/30 pl-3 mt-1">

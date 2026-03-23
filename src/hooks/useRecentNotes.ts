@@ -14,6 +14,7 @@ export interface RecentNote {
   guidanceCompleted: boolean;
   caseNotesCompleted: boolean;
   reviewerCompleted: boolean;
+  sessionCompleted: boolean;
 }
 
 type SessionRow = Tables<"sessions">;
@@ -102,7 +103,8 @@ function sessionToNote(session: SessionRow): RecentNote {
   const meta = session.metadata as Record<string, unknown> | null;
   const guidanceCompleted = !!meta?.guidance_completed_at;
   const caseNotesCompleted = !!meta?.case_notes_completed_at;
-  const reviewerCompleted = !!session.review_document_id;
+  const reviewerCompleted = !!meta?.reviewer_completed_at || !!session.review_document_id;
+  const sessionCompleted = !!meta?.session_completed_at;
 
   return {
     id: session.id,
@@ -114,6 +116,7 @@ function sessionToNote(session: SessionRow): RecentNote {
     guidanceCompleted,
     caseNotesCompleted,
     reviewerCompleted,
+    sessionCompleted,
   };
 }
 

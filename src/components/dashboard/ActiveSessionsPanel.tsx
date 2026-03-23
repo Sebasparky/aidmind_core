@@ -34,6 +34,7 @@ interface ActiveSession {
   guidanceCompleted: boolean;
   caseNotesCompleted: boolean;
   reviewerCompleted: boolean;
+  sessionCompleted: boolean;
 }
 
 function formatRelativeTime(date: Date): string {
@@ -89,6 +90,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         guidanceCompleted: note.guidanceCompleted,
         caseNotesCompleted: note.caseNotesCompleted,
         reviewerCompleted: note.reviewerCompleted,
+        sessionCompleted: note.sessionCompleted,
       }));
   }, [notes]);
 
@@ -302,139 +304,157 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                   }}
                   data-session-id={session.sessionId}
                   className={cn(
-                    "p-4 rounded-lg border border-border bg-background hover:bg-accent/30 transition-all duration-300",
+                    "rounded-lg border border-border bg-background hover:bg-accent/30 transition-all duration-300 overflow-hidden",
                     highlightedSessionId === session.sessionId && "ring-2 ring-primary/40 bg-primary/5"
                   )}
                 >
-                  {/* Session info */}
-                  <div className="mb-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-sm font-medium text-foreground">
-                        {session.caseLabel}
-                      </p>
-                      <Badge 
-                        variant="secondary"
-                        className={cn("text-xs shrink-0", getToolsUsedColor(toolCount))}
-                      >
-                        Tools: {toolCount}/{totalTools}
-                      </Badge>
+                  <div className="p-4">
+                    {/* Session info */}
+                    <div className="mb-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-sm font-medium text-foreground">
+                          {session.caseLabel}
+                        </p>
+                        <Badge 
+                          variant="secondary"
+                          className={cn("text-xs shrink-0", getToolsUsedColor(toolCount))}
+                        >
+                          Tools: {toolCount}/{totalTools}
+                        </Badge>
+                      </div>
+                      <div className="flex items-center gap-2 mt-1">
+                        <Badge variant="outline" className="text-xs">
+                          {session.interactionType}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">
+                          Accessed {formatRelativeTime(session.lastAccessed)}
+                        </span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 mt-1">
-                      <Badge variant="outline" className="text-xs">
-                        {session.interactionType}
-                      </Badge>
-                      <span className="text-xs text-muted-foreground">
-                        Accessed {formatRelativeTime(session.lastAccessed)}
-                      </span>
+
+                    {/* Tool actions + session actions */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {session.guidanceCompleted ? (
+                        <Button
+                          variant="default"
+                          size="sm"
+                          className="gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+                          onClick={() => handleGenerateGuidance(session)}
+                          data-tour="guidance-button"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          View Guidance
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-1.5 text-xs"
+                          onClick={() => handleGenerateGuidance(session)}
+                          data-tour="guidance-button"
+                        >
+                          <Sparkles className="h-3.5 w-3.5" />
+                          Guidance
+                        </Button>
+                      )}
+                      {session.caseNotesCompleted ? (
+                        <Button
+                          variant="default"
+                          size="sm"
+                          className="gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+                          onClick={() => navigate(`/sessions/${session.sessionId}/case-notes`)}
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          View Notes
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-1.5 text-xs"
+                          onClick={() => navigate(`/sessions/${session.sessionId}/case-notes`)}
+                        >
+                          <FileText className="h-3.5 w-3.5" />
+                          Case Notes
+                        </Button>
+                      )}
+                      {session.reviewerCompleted ? (
+                        <Button
+                          variant="default"
+                          size="sm"
+                          className="gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+                          onClick={() => handleRunReviewer(session)}
+                          data-tour="reviewer-button"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          View Review
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-1.5 text-xs"
+                          onClick={() => handleRunReviewer(session)}
+                          data-tour="reviewer-button"
+                        >
+                          <Shield className="h-3.5 w-3.5" />
+                          Reviewer
+                        </Button>
+                      )}
+                      
+                      {!session.sessionCompleted && (
+                        <div className="ml-auto">
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                {allToolsUsed ? (
+                                  <Button
+                                    variant="default"
+                                    size="sm"
+                                    className="gap-1.5 text-xs"
+                                    onClick={() => handleMarkDoneClick(session)}
+                                    disabled={closingSessionId === session.sessionId}
+                                    data-tour="close-session"
+                                  >
+                                    <CheckCircle2 className="h-3.5 w-3.5" />
+                                    Done
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                    onClick={() => handleCloseSessionClick(session)}
+                                    disabled={closingSessionId === session.sessionId}
+                                    data-tour="close-session"
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </Button>
+                                )}
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{allToolsUsed ? "Mark session as done" : "Close early"}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {/* Tool actions + session actions */}
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {session.guidanceCompleted ? (
-                      <Button
-                        variant="default"
-                        size="sm"
-                        className="gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-0"
-                        onClick={() => handleGenerateGuidance(session)}
-                        data-tour="guidance-button"
-                      >
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        View Guidance
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="gap-1.5 text-xs"
-                        onClick={() => handleGenerateGuidance(session)}
-                        data-tour="guidance-button"
-                      >
-                        <Sparkles className="h-3.5 w-3.5" />
-                        Guidance
-                      </Button>
-                    )}
-                    {session.caseNotesCompleted ? (
-                      <Button
-                        variant="default"
-                        size="sm"
-                        className="gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-0"
-                        onClick={() => navigate(`/sessions/${session.sessionId}/case-notes`)}
-                      >
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        View Notes
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="gap-1.5 text-xs"
-                        onClick={() => navigate(`/sessions/${session.sessionId}/case-notes`)}
-                      >
-                        <FileText className="h-3.5 w-3.5" />
-                        Case Notes
-                      </Button>
-                    )}
-                    {session.reviewerCompleted ? (
-                      <Button
-                        variant="default"
-                        size="sm"
-                        className="gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-0"
-                        onClick={() => handleRunReviewer(session)}
-                        data-tour="reviewer-button"
-                      >
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        View Review
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="gap-1.5 text-xs"
-                        onClick={() => handleRunReviewer(session)}
-                        data-tour="reviewer-button"
-                      >
-                        <Shield className="h-3.5 w-3.5" />
-                        Reviewer
-                      </Button>
-                    )}
-                    
-                    <div className="ml-auto">
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            {allToolsUsed ? (
-                              <Button
-                                variant="default"
-                                size="sm"
-                                className="gap-1.5 text-xs"
-                                onClick={() => handleMarkDoneClick(session)}
-                                disabled={closingSessionId === session.sessionId}
-                                data-tour="close-session"
-                              >
-                                <CheckCircle2 className="h-3.5 w-3.5" />
-                                Done
-                              </Button>
-                            ) : (
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                                onClick={() => handleCloseSessionClick(session)}
-                                disabled={closingSessionId === session.sessionId}
-                                data-tour="close-session"
-                              >
-                                <X className="h-4 w-4" />
-                              </Button>
-                            )}
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>{allToolsUsed ? "Mark session as done" : "Close early"}</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
+                  {/* Session complete strip */}
+                  {session.sessionCompleted && (
+                    <div
+                      className="px-4 py-3 bg-emerald-600 text-white flex items-center justify-between cursor-pointer hover:bg-emerald-700 transition-colors"
+                      onClick={() => handleMarkDoneClick(session)}
+                    >
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="h-4 w-4" />
+                        <span className="text-sm font-medium">Session complete</span>
+                      </div>
+                      <span className="text-xs opacity-80">Move to history →</span>
                     </div>
-                  </div>
+                  )}
                 </div>
               );
             })}
