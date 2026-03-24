@@ -32,6 +32,7 @@ interface ActiveSession {
   lastAccessed: Date;
   createdAt: Date;
   guidanceCompleted: boolean;
+  guidanceSkipped: boolean;
   caseNotesCompleted: boolean;
   reviewerCompleted: boolean;
   sessionCompleted: boolean;
