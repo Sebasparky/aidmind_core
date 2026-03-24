@@ -95,11 +95,27 @@ export function useGuidanceSession(sessionId: string | undefined) {
         templateName = tpl?.name ?? null;
       }
 
-      // Determine skip readiness: the session itself must already have a linked
-      // phase2_schema_id. A reusable schema existing for the template is NOT enough,
-      // because generate-guidance-phase2 reads session.phase2_schema_id directly.
-      // The schema gets linked during the first Guidance generation for this session.
-      const skipReady = !!data.phase2_schema_id;
+      // Determine skip readiness:
+      // 1. Session already has phase2_schema_id linked → skip is trivial
+      // 2. Template has a reusable active ready schema → skip can link it (cheap DB write, no LLM)
+      // 3. Neither → skip not available; user must generate Guidance once for this template
+      let skipReady = !!data.phase2_schema_id;
+      let reusableSchemaId: string | null = null;
+
+      if (!skipReady && data.template_id) {
+        const { data: existingSchema } = await supabase
+          .from("template_phase2_schemas")
+          .select("id")
+          .eq("template_id", data.template_id)
+          .eq("is_active", true)
+          .eq("status", "ready")
+          .limit(1)
+          .maybeSingle();
+        if (existingSchema) {
+          skipReady = true;
+          reusableSchemaId = existingSchema.id;
+        }
+      }
 
       setSession({
         id: data.id,
