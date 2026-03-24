@@ -19,6 +19,10 @@ interface HistoricalSession {
   interactionType: string;
   outcome: SessionOutcome;
   completedAt: Date;
+  guidanceCompleted: boolean;
+  guidanceSkipped: boolean;
+  caseNotesCompleted: boolean;
+  reviewerCompleted: boolean;
 }
 
 function formatDate(date: Date): string {
