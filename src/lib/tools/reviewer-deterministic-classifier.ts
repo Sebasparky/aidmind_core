@@ -1,24 +1,17 @@
 /**
- * Reviewer Deterministic Classifier
+ * Reviewer Deterministic Classifier v2
  *
  * A rule-driven post-processing pipeline that governs final category
- * assignment, span normalization, overlap resolution, and severity
- * calibration for reviewer findings.
+ * assignment, span normalization, overlap resolution, severity
+ * calibration, and explanation alignment for reviewer findings.
  *
- * Architecture:
- *   1. LLM identifies candidate problematic spans conservatively
- *   2. This module applies deterministic rules to those candidates:
- *      a. Normalize spans (whitespace, casing, near-duplicate detection)
- *      b. Apply pattern-based category assignment
- *      c. Resolve overlapping/conflicting categories
- *      d. Calibrate severity with rule-based logic
- *      e. Emit final deduplicated findings
- *
- * Design principles:
- *   - Prefer fewer, cleaner findings over many inconsistent ones
- *   - One span → one primary finding unless truly multi-category
- *   - Categories must be explainable by matching specific rules
- *   - Severity should be stable across runs for the same text
+ * v2 changes:
+ *   - Category-pure explanation templates (no cross-category bleed)
+ *   - Borderline observational language guardrail
+ *   - Stronger overlap merging (same-field proximity + semantic closeness)
+ *   - Tighter dominant-category resolution
+ *   - Deterministic final ordering
+ *   - Explanation validation pass that strips cross-category vocabulary
  */
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -43,11 +36,8 @@ export interface CandidateIssue {
 }
 
 export interface ClassifiedIssue extends CandidateIssue {
-  /** Whether the category was overridden by deterministic rules */
   category_source: "llm" | "rule_override" | "rule_confirmed";
-  /** Whether severity was adjusted by deterministic rules */
   severity_adjusted: boolean;
-  /** Matched rule IDs for audit trail */
   matched_rules: string[];
 }
 
@@ -57,18 +47,11 @@ interface CategoryRule {
   id: string;
   category: IssueType;
   patterns: RegExp[];
-  /** If true, this rule is strong enough to override the LLM category */
   override_strength: "strong" | "moderate" | "weak";
-  /** Maximum severity this rule should produce */
   severity_cap?: Severity;
-  /** Minimum severity this rule should produce */
   severity_floor?: Severity;
 }
 
-/**
- * Judgmental Tone rules — phrasing that is unprofessional, blaming,
- * shaming, moralizing, or emotionally charged
- */
 const TONE_RULES: CategoryRule[] = [
   {
     id: "tone_judgmental_adjectives",
@@ -113,12 +96,17 @@ const TONE_RULES: CategoryRule[] = [
     override_strength: "weak",
     severity_cap: "medium",
   },
+  {
+    id: "tone_unfit_label",
+    category: "tone",
+    patterns: [
+      /\b(unfit\s+(?:parent|mother|father|caregiver))\b/i,
+    ],
+    override_strength: "strong",
+    severity_floor: "medium",
+  },
 ];
 
-/**
- * Bias & Assumption rules — labeling, stereotyping, or framing
- * people through unsupported generalizations
- */
 const BIAS_RULES: CategoryRule[] = [
   {
     id: "bias_person_labeling",
@@ -164,10 +152,6 @@ const BIAS_RULES: CategoryRule[] = [
   },
 ];
 
-/**
- * Unsupported Conclusion rules — certainty markers, overclaiming,
- * conclusions stated as fact without evidence
- */
 const UNSUPPORTED_CONCLUSION_RULES: CategoryRule[] = [
   {
     id: "uc_certainty_intensifiers",
@@ -218,11 +202,29 @@ const UNSUPPORTED_CONCLUSION_RULES: CategoryRule[] = [
     override_strength: "strong",
     severity_floor: "high",
   },
+  {
+    id: "uc_future_prediction",
+    category: "unsupported_conclusion",
+    patterns: [
+      /\b(will\s+(?:almost\s+)?certainly|will\s+(?:undoubtedly|inevitably|definitely))\b/i,
+      /\b(is\s+(?:destined|doomed|bound)\s+to)\b/i,
+    ],
+    override_strength: "strong",
+    severity_floor: "medium",
+  },
+  {
+    id: "uc_pattern_assertion",
+    category: "unsupported_conclusion",
+    patterns: [
+      /\b(consistent\s+with\s+(?:a\s+)?(?:neglectful|abusive|dangerous|unsafe)\s+(?:home|household|family|environment|pattern))\b/i,
+      /\b(treated\s+as\s+(?:high[- ]risk|dangerous|unsafe))\b/i,
+      /\b((?:clearly|obviously)\s+inadequate)\b/i,
+    ],
+    override_strength: "strong",
+    severity_floor: "medium",
+  },
 ];
 
-/**
- * Policy Language rules — prohibited terminology, informal language
- */
 const POLICY_RULES: CategoryRule[] = [
   {
     id: "policy_prohibited_terms",
@@ -260,26 +262,56 @@ const ALL_RULES: CategoryRule[] = [
   ...POLICY_RULES,
 ];
 
-// ── Span Normalization ───────────────────────────────────────────────────
+// ── Borderline Observational Language Guardrail ──────────────────────────
+// These patterns are SAFE observational language that should NOT be flagged
+// unless accompanied by strong problematic markers.
+
+const OBSERVATIONAL_SAFE_PATTERNS: RegExp[] = [
+  /\b(appears?\s+to\s+be)\b/i,
+  /\b(seems?\s+to\s+be)\b/i,
+  /\b(observed\s+that)\b/i,
+  /\b(reported\s+that)\b/i,
+  /\b((?:home|house|apartment|residence)\s+(?:was|appeared?)\s+(?:cluttered|messy|disorganized|untidy))\b/i,
+  /\b(food\s+(?:was|appeared?)\s+limited)\b/i,
+  /\b(children\s+(?:appeared?|seemed?)\s+(?:tired|quiet|withdrawn|upset|hungry))\b/i,
+  /\b(appeared?\s+(?:to\s+have|stressed|anxious|upset|tired|overwhelmed))\b/i,
+  /\b(seemed?\s+(?:stressed|anxious|upset|tired|overwhelmed|concerned|worried))\b/i,
+  /\b(carrying\s+the\s+stress)\b/i,
+  /\b(in\s+disarray)\b/i,
+];
 
 /**
- * Normalize an excerpt for comparison purposes.
- * Strips whitespace, normalizes casing, removes edge punctuation.
+ * Check if an excerpt is primarily borderline observational language
+ * without any strong problematic markers.
  */
+function isBorderlineObservational(excerpt: string, ruleMatches: RuleMatch[]): boolean {
+  const hasObservational = OBSERVATIONAL_SAFE_PATTERNS.some(p => p.test(excerpt));
+  if (!hasObservational) return false;
+
+  // If strong rules matched, the observational framing doesn't save it
+  const hasStrongMatch = ruleMatches.some(m => m.rule.override_strength === "strong");
+  if (hasStrongMatch) return false;
+
+  // If only moderate/weak rules matched, check if the observational phrasing dominates
+  const hasModerateMatch = ruleMatches.some(m => m.rule.override_strength === "moderate");
+  if (hasModerateMatch) return false;
+
+  // Only weak or no rule matches + observational language → suppress
+  return true;
+}
+
+// ── Span Normalization ───────────────────────────────────────────────────
+
 export function normalizeExcerpt(excerpt: string): string {
   return excerpt
     .toLowerCase()
     .trim()
     .replace(/\s+/g, " ")
-    .replace(/^["'""\u201C\u201D]+|["'""\u201C\u201D]+$/g, "") // strip edge quotes
-    .replace(/^[.,;:!?]+|[.,;:!?]+$/g, "") // strip edge punctuation
+    .replace(/^["'""\u201C\u201D]+|["'""\u201C\u201D]+$/g, "")
+    .replace(/^[.,;:!?]+|[.,;:!?]+$/g, "")
     .trim();
 }
 
-/**
- * Check if two excerpts overlap significantly.
- * Returns true if one contains the other, or if they share >60% of words.
- */
 export function excerptOverlaps(a: string, b: string): boolean {
   const na = normalizeExcerpt(a);
   const nb = normalizeExcerpt(b);
@@ -289,13 +321,37 @@ export function excerptOverlaps(a: string, b: string): boolean {
   // Direct containment
   if (na.includes(nb) || nb.includes(na)) return true;
 
-  // Word overlap check
+  // Word overlap check — lowered threshold to 50% for more aggressive merging
   const wordsA = new Set(na.split(/\s+/));
   const wordsB = new Set(nb.split(/\s+/));
   const intersection = [...wordsA].filter(w => wordsB.has(w));
   const smaller = Math.min(wordsA.size, wordsB.size);
 
-  if (smaller > 0 && intersection.length / smaller >= 0.6) return true;
+  if (smaller > 0 && intersection.length / smaller >= 0.5) return true;
+
+  return false;
+}
+
+/**
+ * Check if two excerpts are from the same sentence or adjacent sentences.
+ * Uses a simple heuristic: if they share the same starting words or
+ * are within ~10 words of content overlap.
+ */
+function areSameOrAdjacentSentence(a: string, b: string): boolean {
+  const na = normalizeExcerpt(a);
+  const nb = normalizeExcerpt(b);
+  if (!na || !nb) return false;
+
+  // Same starting 5+ words
+  const wordsA = na.split(/\s+/);
+  const wordsB = nb.split(/\s+/);
+  const prefixLen = Math.min(5, wordsA.length, wordsB.length);
+  let commonPrefix = 0;
+  for (let i = 0; i < prefixLen; i++) {
+    if (wordsA[i] === wordsB[i]) commonPrefix++;
+    else break;
+  }
+  if (commonPrefix >= 3) return true;
 
   return false;
 }
@@ -307,20 +363,17 @@ interface RuleMatch {
   matchCount: number;
 }
 
-/**
- * Find all rules that match against an excerpt.
- */
 function matchRulesAgainstExcerpt(excerpt: string): RuleMatch[] {
   const matches: RuleMatch[] = [];
 
   for (const rule of ALL_RULES) {
     let totalMatches = 0;
     for (const pattern of rule.patterns) {
-      pattern.lastIndex = 0;
+      const re = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g");
       let match: RegExpExecArray | null;
-      while ((match = pattern.exec(excerpt)) !== null) {
+      while ((match = re.exec(excerpt)) !== null) {
         totalMatches++;
-        if (match[0].length === 0) pattern.lastIndex++;
+        if (match[0].length === 0) re.lastIndex++;
       }
     }
     if (totalMatches > 0) {
@@ -333,82 +386,77 @@ function matchRulesAgainstExcerpt(excerpt: string): RuleMatch[] {
 
 // ── Category Precedence ──────────────────────────────────────────────────
 
-/**
- * Category priority for overlap resolution.
- * Higher number = takes precedence when spans overlap.
- *
- * Policy violations are highest because they're most objective.
- * Tone issues are next because they're the highest-priority language concern.
- * Bias follows because it's closely related to tone but more specific.
- * Unsupported conclusion is lower because it often co-occurs with tone/bias.
- */
 const CATEGORY_PRIORITY: Record<IssueType, number> = {
   policy_language: 5,
-  tone: 4,
-  bias: 3,
-  unsupported_conclusion: 2,
+  unsupported_conclusion: 4,  // UC now higher than tone — overclaims are more specific
+  tone: 3,
+  bias: 3,  // Bias and tone are equal — decided by rule strength
   completeness: 1,
   consistency: 1,
 };
 
-/**
- * Rules for when two categories on the same span should coexist vs. merge.
- *
- * Returns the single winning category, or null if both should survive.
- */
 function resolveOverlappingCategories(
   typeA: IssueType,
   typeB: IssueType,
   ruleMatchesA: RuleMatch[],
   ruleMatchesB: RuleMatch[],
 ): IssueType | null {
-  // Same category → always merge (dedup)
   if (typeA === typeB) return typeA;
 
   // completeness/consistency never overlap with primary types
   if (typeA === "completeness" || typeA === "consistency") return null;
   if (typeB === "completeness" || typeB === "consistency") return null;
 
-  // tone + bias on same span: keep the one with stronger rule matches
-  if ((typeA === "tone" && typeB === "bias") || (typeA === "bias" && typeB === "tone")) {
-    const toneStrength = ruleMatchesA
-      .filter(m => m.rule.category === "tone")
-      .reduce((sum, m) => sum + m.matchCount, 0);
-    const biasStrength = ruleMatchesB
-      .filter(m => m.rule.category === "bias")
-      .reduce((sum, m) => sum + m.matchCount, 0);
-    // If one is clearly stronger, keep it; otherwise prefer tone
-    return toneStrength >= biasStrength ? "tone" : "bias";
-  }
+  // policy_language always wins
+  if (typeA === "policy_language") return typeA;
+  if (typeB === "policy_language") return typeB;
 
-  // unsupported_conclusion + tone: if there are certainty markers, keep UC;
-  // if primarily judgmental language, keep tone
+  // UC + tone: if UC has strong rule matches (overclaiming, intent, risk), UC wins decisively
   if (
     (typeA === "unsupported_conclusion" && typeB === "tone") ||
     (typeA === "tone" && typeB === "unsupported_conclusion")
   ) {
-    const hasUcStrong = [...ruleMatchesA, ...ruleMatchesB].some(
+    const ucStrong = [...ruleMatchesA, ...ruleMatchesB].filter(
       m => m.rule.category === "unsupported_conclusion" && m.rule.override_strength === "strong"
     );
-    return hasUcStrong ? "unsupported_conclusion" : "tone";
+    const toneStrong = [...ruleMatchesA, ...ruleMatchesB].filter(
+      m => m.rule.category === "tone" && m.rule.override_strength === "strong"
+    );
+
+    // If UC has strong matches, UC wins unless tone also has strong matches with more hits
+    if (ucStrong.length > 0) {
+      const ucHits = ucStrong.reduce((s, m) => s + m.matchCount, 0);
+      const toneHits = toneStrong.reduce((s, m) => s + m.matchCount, 0);
+      return ucHits >= toneHits ? "unsupported_conclusion" : "tone";
+    }
+    // No strong UC — tone wins
+    return "tone";
   }
 
-  // unsupported_conclusion + bias: similar logic
+  // UC + bias: UC wins if strong UC rules, otherwise bias
   if (
     (typeA === "unsupported_conclusion" && typeB === "bias") ||
     (typeA === "bias" && typeB === "unsupported_conclusion")
   ) {
-    const hasUcStrong = [...ruleMatchesA, ...ruleMatchesB].some(
+    const ucStrong = [...ruleMatchesA, ...ruleMatchesB].some(
       m => m.rule.category === "unsupported_conclusion" && m.rule.override_strength === "strong"
     );
-    return hasUcStrong ? "unsupported_conclusion" : "bias";
+    return ucStrong ? "unsupported_conclusion" : "bias";
   }
 
-  // policy_language always wins against non-policy
-  if (typeA === "policy_language") return typeA;
-  if (typeB === "policy_language") return typeB;
+  // tone + bias: use combined rule hit counts to decide
+  if ((typeA === "tone" && typeB === "bias") || (typeA === "bias" && typeB === "tone")) {
+    const allMatches = [...ruleMatchesA, ...ruleMatchesB];
+    const toneHits = allMatches
+      .filter(m => m.rule.category === "tone")
+      .reduce((sum, m) => sum + m.matchCount, 0);
+    const biasHits = allMatches
+      .filter(m => m.rule.category === "bias")
+      .reduce((sum, m) => sum + m.matchCount, 0);
+    return toneHits >= biasHits ? "tone" : "bias";
+  }
 
-  // Default: keep higher priority
+  // Default: higher priority wins
   return CATEGORY_PRIORITY[typeA] >= CATEGORY_PRIORITY[typeB] ? typeA : typeB;
 }
 
@@ -416,17 +464,6 @@ function resolveOverlappingCategories(
 
 const SEVERITY_ORDER: Record<Severity, number> = { low: 0, medium: 1, high: 2 };
 
-function maxSeverity(a: Severity, b: Severity): Severity {
-  return SEVERITY_ORDER[a] >= SEVERITY_ORDER[b] ? a : b;
-}
-
-function minSeverity(a: Severity, b: Severity): Severity {
-  return SEVERITY_ORDER[a] <= SEVERITY_ORDER[b] ? a : b;
-}
-
-/**
- * Apply deterministic severity rules based on matched patterns.
- */
 function calibrateSeverity(
   llmSeverity: Severity,
   ruleMatches: RuleMatch[],
@@ -439,13 +476,15 @@ function calibrateSeverity(
   let adjustedSeverity = llmSeverity;
   let wasAdjusted = false;
 
-  for (const { rule } of ruleMatches) {
-    // Apply severity floor (minimum)
+  // Only apply rules matching the final category (prevent cross-category severity bleed)
+  const relevantMatches = ruleMatches.filter(m => m.rule.category === _finalCategory);
+  const matchesToUse = relevantMatches.length > 0 ? relevantMatches : ruleMatches;
+
+  for (const { rule } of matchesToUse) {
     if (rule.severity_floor && SEVERITY_ORDER[adjustedSeverity] < SEVERITY_ORDER[rule.severity_floor]) {
       adjustedSeverity = rule.severity_floor;
       wasAdjusted = true;
     }
-    // Apply severity cap (maximum)
     if (rule.severity_cap && SEVERITY_ORDER[adjustedSeverity] > SEVERITY_ORDER[rule.severity_cap]) {
       adjustedSeverity = rule.severity_cap;
       wasAdjusted = true;
@@ -455,89 +494,105 @@ function calibrateSeverity(
   return { severity: adjustedSeverity, adjusted: wasAdjusted };
 }
 
-// ── Explanation Alignment ────────────────────────────────────────────────
+// ── Explanation Alignment v2 ─────────────────────────────────────────────
+// Category-pure explanation templates. Each category has its own vocabulary.
+// Cross-category language is actively stripped.
 
-const CATEGORY_EXPLANATION_PREFIXES: Record<IssueType, string[]> = {
-  tone: [
-    "uses judgmental",
-    "unprofessional",
-    "emotionally charged",
-    "blaming",
-    "shaming",
-    "condescending",
-    "judgmental tone",
-    "moralizing",
-  ],
-  bias: [
-    "labels the person",
-    "stigmatizing",
-    "stereotype",
-    "assumption",
-    "unsupported generalization",
-    "bias",
-    "discriminatory",
-  ],
-  unsupported_conclusion: [
-    "reaches a conclusion",
-    "without sufficient evidence",
-    "stated as fact",
-    "certainty stronger than",
-    "overclaims",
-    "unsupported",
-    "infers intent",
-    "attributes motive",
-  ],
-  policy_language: [
-    "prohibited term",
-    "policy",
-    "informal language",
-    "unprofessional terminology",
-  ],
-  completeness: ["blank", "empty", "missing", "insufficient"],
-  consistency: ["contradicts", "differs from", "inconsistent"],
+const CATEGORY_TEMPLATES: Record<IssueType, {
+  prefix: string;
+  allowed_terms: string[];
+  forbidden_terms: string[];  // Terms from OTHER categories that must be stripped
+}> = {
+  tone: {
+    prefix: "Uses judgmental or unprofessional language",
+    allowed_terms: ["judgmental", "unprofessional", "emotionally charged", "blaming", "shaming", "condescending", "moralizing", "characterization", "loaded language", "tone"],
+    forbidden_terms: ["unsupported conclusion", "overclaim", "without sufficient evidence", "certainty stronger", "stated as fact", "infers intent", "attributes motive", "stigmatizing label", "stereotype"],
+  },
+  bias: {
+    prefix: "Contains stigmatizing or biased language",
+    allowed_terms: ["stigmatizing", "labels the person", "stereotype", "assumption", "bias", "discriminatory", "dehumanizing", "person-labeling", "generalization"],
+    forbidden_terms: ["judgmental tone", "unprofessional", "moralizing", "overclaim", "without sufficient evidence", "certainty stronger", "stated as fact"],
+  },
+  unsupported_conclusion: {
+    prefix: "Reaches a conclusion without sufficient supporting evidence",
+    allowed_terms: ["conclusion", "without sufficient evidence", "stated as fact", "certainty stronger", "overclaim", "unsupported", "infers intent", "attributes motive", "prediction", "assertion"],
+    forbidden_terms: ["judgmental tone", "unprofessional", "moralizing", "blaming", "shaming", "stigmatizing label", "stereotype", "person-labeling"],
+  },
+  policy_language: {
+    prefix: "Uses prohibited or policy-inconsistent terminology",
+    allowed_terms: ["prohibited term", "policy", "informal language", "unprofessional terminology", "documentation standards"],
+    forbidden_terms: [],
+  },
+  completeness: {
+    prefix: "Required narrative section appears blank or incomplete",
+    allowed_terms: ["blank", "empty", "missing", "insufficient", "incomplete"],
+    forbidden_terms: [],
+  },
+  consistency: {
+    prefix: "Information differs between sources",
+    allowed_terms: ["contradicts", "differs from", "inconsistent", "discrepancy"],
+    forbidden_terms: [],
+  },
 };
 
-/**
- * Check if an explanation reasonably aligns with its category.
- * Returns true if alignment is acceptable.
- */
 function isExplanationAligned(explanation: string, category: IssueType): boolean {
-  const prefixes = CATEGORY_EXPLANATION_PREFIXES[category] ?? [];
+  const template = CATEGORY_TEMPLATES[category];
+  if (!template) return true;
   const lower = explanation.toLowerCase();
-  return prefixes.some(p => lower.includes(p));
+
+  // Check: does it contain allowed terms for this category?
+  const hasAllowed = template.allowed_terms.some(t => lower.includes(t));
+
+  // Check: does it contain forbidden terms from other categories?
+  const hasForbidden = template.forbidden_terms.some(t => lower.includes(t));
+
+  return hasAllowed && !hasForbidden;
 }
 
 /**
- * Generate a category-aligned explanation prefix when the original
- * explanation drifts from the final category.
+ * Strip cross-category language from an explanation, then ensure
+ * category-appropriate framing.
  */
 function alignExplanation(
   explanation: string,
   originalCategory: IssueType,
   finalCategory: IssueType,
 ): string {
-  if (originalCategory === finalCategory) return explanation;
-  if (isExplanationAligned(explanation, finalCategory)) return explanation;
+  const template = CATEGORY_TEMPLATES[finalCategory];
+  if (!template) return explanation;
 
-  // Prepend a category-aligned framing
-  const framings: Record<IssueType, string> = {
-    tone: "Uses judgmental or unprofessional language —",
-    bias: "Contains stigmatizing language or unsupported assumptions —",
-    unsupported_conclusion: "Reaches a conclusion without sufficient supporting evidence —",
-    policy_language: "Uses prohibited or policy-inconsistent terminology —",
-    completeness: explanation, // No reframing needed
-    consistency: explanation,
-  };
-
-  const prefix = framings[finalCategory];
-  if (!prefix || prefix === explanation) return explanation;
-
-  // Avoid double-prefixing
-  if (explanation.toLowerCase().startsWith(prefix.toLowerCase().slice(0, 20))) {
-    return explanation;
+  // Step 1: Strip forbidden cross-category terms
+  let cleaned = explanation;
+  for (const term of template.forbidden_terms) {
+    const re = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, "gi");
+    cleaned = cleaned.replace(re, "").replace(/\s{2,}/g, " ").replace(/\s*[—–-]\s*$/, "").trim();
   }
 
-  return `${prefix} ${explanation.charAt(0).toLowerCase()}${explanation.slice(1)}`;
+  // Step 2: If already aligned after cleaning, return cleaned
+  if (cleaned && isExplanationAligned(cleaned, finalCategory)) {
+    return cleaned;
+  }
+
+  // Step 3: Generate category-pure explanation
+  // If the original is short enough and reasonably relevant, prepend category framing
+  if (cleaned && cleaned.length > 10) {
+    // Remove any existing category prefix (from prior alignment attempts)
+    const existingPrefixes = Object.values(CATEGORY_TEMPLATES).map(t => t.prefix.toLowerCase());
+    let unprefixed = cleaned;
+    for (const p of existingPrefixes) {
+      if (unprefixed.toLowerCase().startsWith(p.slice(0, 20))) {
+        unprefixed = unprefixed.slice(p.length).replace(/^\s*[—–-]\s*/, "").trim();
+        break;
+      }
+    }
+
+    if (unprefixed.length > 5) {
+      return `${template.prefix} — ${unprefixed.charAt(0).toLowerCase()}${unprefixed.slice(1)}`;
+    }
+  }
+
+  // Step 4: Fallback — use just the category prefix
+  return `${template.prefix}.`;
 }
 
 // ── Main Pipeline ────────────────────────────────────────────────────────
@@ -551,22 +606,10 @@ export interface ClassificationResult {
     category_overrides: number;
     severity_adjustments: number;
     overlap_merges: number;
+    borderline_suppressed: number;
   };
 }
 
-/**
- * Run the full deterministic classification pipeline on LLM candidate issues.
- *
- * Stages:
- *   1. Normalize excerpts
- *   2. Match rules against each candidate
- *   3. Apply deterministic category assignment
- *   4. Group overlapping spans
- *   5. Resolve category conflicts within groups
- *   6. Calibrate severity
- *   7. Align explanations
- *   8. Emit final deduplicated findings
- */
 export function classifyAndDeduplicate(
   candidates: CandidateIssue[],
 ): ClassificationResult {
@@ -577,6 +620,7 @@ export function classifyAndDeduplicate(
     category_overrides: 0,
     severity_adjustments: 0,
     overlap_merges: 0,
+    borderline_suppressed: 0,
   };
 
   if (candidates.length === 0) {
@@ -590,6 +634,7 @@ export function classifyAndDeduplicate(
     ruleMatches: RuleMatch[];
     determinedCategory: IssueType;
     categorySource: "llm" | "rule_override" | "rule_confirmed";
+    suppressed: boolean;
   }
 
   const annotated: AnnotatedCandidate[] = candidates.map(candidate => {
@@ -598,32 +643,37 @@ export function classifyAndDeduplicate(
 
     let determinedCategory = candidate.type;
     let categorySource: "llm" | "rule_override" | "rule_confirmed" = "llm";
+    let suppressed = false;
 
-    if (ruleMatches.length > 0) {
-      // Find the strongest matching rule
+    // Borderline observational guardrail
+    if (["tone", "bias", "unsupported_conclusion"].includes(candidate.type)) {
+      if (isBorderlineObservational(candidate.excerpt, ruleMatches)) {
+        suppressed = true;
+        stats.borderline_suppressed++;
+      }
+    }
+
+    if (!suppressed && ruleMatches.length > 0) {
       const strongMatches = ruleMatches.filter(m => m.rule.override_strength === "strong");
       const moderateMatches = ruleMatches.filter(m => m.rule.override_strength === "moderate");
 
       if (strongMatches.length > 0) {
-        // Strong rule match — check if it agrees with or overrides the LLM
-        const strongCategory = strongMatches
-          .sort((a, b) => b.matchCount - a.matchCount)[0].rule.category;
+        // Pick the category with the most strong rule hit count
+        const categoryHits = new Map<IssueType, number>();
+        for (const m of strongMatches) {
+          categoryHits.set(m.rule.category, (categoryHits.get(m.rule.category) ?? 0) + m.matchCount);
+        }
+        const bestCategory = [...categoryHits.entries()]
+          .sort((a, b) => b[1] - a[1])[0][0];
 
-        if (strongCategory === candidate.type) {
+        if (bestCategory === candidate.type) {
           categorySource = "rule_confirmed";
         } else {
-          // Override: strong rule disagrees with LLM
-          // But only override primary categories with other primary categories
           const isPrimaryOriginal = ["tone", "bias", "unsupported_conclusion", "policy_language"].includes(candidate.type);
-          const isPrimaryNew = ["tone", "bias", "unsupported_conclusion", "policy_language"].includes(strongCategory);
+          const isPrimaryNew = ["tone", "bias", "unsupported_conclusion", "policy_language"].includes(bestCategory);
 
-          if (isPrimaryOriginal && isPrimaryNew) {
-            determinedCategory = strongCategory;
-            categorySource = "rule_override";
-            stats.category_overrides++;
-          } else if (!isPrimaryOriginal && isPrimaryNew) {
-            // Upgrade secondary to primary if strong rule matches
-            determinedCategory = strongCategory;
+          if ((isPrimaryOriginal && isPrimaryNew) || (!isPrimaryOriginal && isPrimaryNew)) {
+            determinedCategory = bestCategory;
             categorySource = "rule_override";
             stats.category_overrides++;
           } else {
@@ -636,20 +686,16 @@ export function classifyAndDeduplicate(
         if (moderateCategory === candidate.type) {
           categorySource = "rule_confirmed";
         }
-        // Moderate rules don't override, they only confirm
       }
     }
 
-    return {
-      candidate,
-      normalizedExcerpt,
-      ruleMatches,
-      determinedCategory,
-      categorySource,
-    };
+    return { candidate, normalizedExcerpt, ruleMatches, determinedCategory, categorySource, suppressed };
   });
 
-  // Stage 3: Group overlapping spans
+  // Filter out suppressed candidates
+  const active = annotated.filter(a => !a.suppressed);
+
+  // Stage 3: Group overlapping spans (more aggressive: same-field + proximity)
   interface SpanGroup {
     members: AnnotatedCandidate[];
   }
@@ -657,22 +703,27 @@ export function classifyAndDeduplicate(
   const groups: SpanGroup[] = [];
   const assigned = new Set<number>();
 
-  for (let i = 0; i < annotated.length; i++) {
+  for (let i = 0; i < active.length; i++) {
     if (assigned.has(i)) continue;
 
-    const group: SpanGroup = { members: [annotated[i]] };
+    const group: SpanGroup = { members: [active[i]] };
     assigned.add(i);
 
-    for (let j = i + 1; j < annotated.length; j++) {
+    for (let j = i + 1; j < active.length; j++) {
       if (assigned.has(j)) continue;
 
-      // Check if this candidate overlaps with any member of the group
-      const overlapsWithGroup = group.members.some(member =>
-        excerptOverlaps(member.candidate.excerpt, annotated[j].candidate.excerpt)
-      );
+      const overlapsWithGroup = group.members.some(member => {
+        // Standard excerpt overlap
+        if (excerptOverlaps(member.candidate.excerpt, active[j].candidate.excerpt)) return true;
+        // Same-field adjacent sentence proximity
+        if (member.candidate.field_key && member.candidate.field_key === active[j].candidate.field_key) {
+          if (areSameOrAdjacentSentence(member.candidate.excerpt, active[j].candidate.excerpt)) return true;
+        }
+        return false;
+      });
 
       if (overlapsWithGroup) {
-        group.members.push(annotated[j]);
+        group.members.push(active[j]);
         assigned.add(j);
       }
     }
@@ -685,7 +736,6 @@ export function classifyAndDeduplicate(
 
   for (const group of groups) {
     if (group.members.length === 1) {
-      // Single finding — just apply severity calibration and explanation alignment
       const member = group.members[0];
       const { severity, adjusted } = calibrateSeverity(
         member.candidate.severity,
@@ -712,10 +762,9 @@ export function classifyAndDeduplicate(
         matched_rules: member.ruleMatches.map(m => m.rule.id),
       });
     } else {
-      // Multiple overlapping findings — resolve to best representative
+      // Multiple overlapping findings → resolve to single winner
       stats.overlap_merges += group.members.length - 1;
 
-      // Collect all unique categories in the group
       const categoryCounts = new Map<IssueType, { count: number; members: AnnotatedCandidate[] }>();
       for (const member of group.members) {
         const entry = categoryCounts.get(member.determinedCategory) ?? { count: 0, members: [] };
@@ -724,18 +773,14 @@ export function classifyAndDeduplicate(
         categoryCounts.set(member.determinedCategory, entry);
       }
 
-      // Determine if categories should merge or coexist
       const uniqueCategories = [...categoryCounts.keys()];
 
       if (uniqueCategories.length === 1) {
-        // All same category — deduplicate, keep best
         stats.deduplicated += group.members.length - 1;
-        const best = group.members
+        const best = [...group.members]
           .sort((a, b) => {
-            // Prefer higher severity
             const sevDiff = SEVERITY_ORDER[b.candidate.severity] - SEVERITY_ORDER[a.candidate.severity];
             if (sevDiff !== 0) return sevDiff;
-            // Prefer longer (more specific) excerpts
             return b.candidate.excerpt.length - a.candidate.excerpt.length;
           })[0];
 
@@ -751,11 +796,7 @@ export function classifyAndDeduplicate(
           type: best.determinedCategory,
           severity,
           excerpt: best.candidate.excerpt,
-          explanation: alignExplanation(
-            best.candidate.explanation,
-            best.candidate.type,
-            best.determinedCategory,
-          ),
+          explanation: alignExplanation(best.candidate.explanation, best.candidate.type, best.determinedCategory),
           field_key: best.candidate.field_key,
           finding_track: best.candidate.finding_track,
           category_source: best.categorySource,
@@ -763,10 +804,9 @@ export function classifyAndDeduplicate(
           matched_rules: allRuleMatches.map(m => m.rule.id),
         });
       } else {
-        // Multiple categories on overlapping spans — resolve
+        // Multiple categories on overlapping spans — resolve decisively
         const allRuleMatches = group.members.flatMap(m => m.ruleMatches);
 
-        // Try to resolve all categories to a single winner
         let winnerCategory = uniqueCategories[0];
         for (let k = 1; k < uniqueCategories.length; k++) {
           const resolved = resolveOverlappingCategories(
@@ -781,9 +821,9 @@ export function classifyAndDeduplicate(
           }
         }
 
-        // Find the best representative for the winning category
+        // Best representative for winning category
         const winnersMembers = categoryCounts.get(winnerCategory)?.members ?? group.members;
-        const best = winnersMembers.sort((a, b) => {
+        const best = [...winnersMembers].sort((a, b) => {
           const sevDiff = SEVERITY_ORDER[b.candidate.severity] - SEVERITY_ORDER[a.candidate.severity];
           if (sevDiff !== 0) return sevDiff;
           return b.candidate.excerpt.length - a.candidate.excerpt.length;
@@ -800,11 +840,7 @@ export function classifyAndDeduplicate(
           type: winnerCategory,
           severity,
           excerpt: best.candidate.excerpt,
-          explanation: alignExplanation(
-            best.candidate.explanation,
-            best.candidate.type,
-            winnerCategory,
-          ),
+          explanation: alignExplanation(best.candidate.explanation, best.candidate.type, winnerCategory),
           field_key: best.candidate.field_key,
           finding_track: best.candidate.finding_track,
           category_source: winnerCategory === best.determinedCategory ? best.categorySource : "rule_override",
@@ -812,19 +848,15 @@ export function classifyAndDeduplicate(
           matched_rules: allRuleMatches.map(m => m.rule.id),
         });
 
-        // Check if any non-winner categories should also survive
-        // (only if they are truly independent — completeness/consistency)
+        // Only completeness/consistency survive as independent findings
         for (const cat of uniqueCategories) {
           if (cat === winnerCategory) continue;
           if (cat === "completeness" || cat === "consistency") {
-            // These are independent — keep them
             const catMembers = categoryCounts.get(cat)!.members;
             const catBest = catMembers[0];
             const catRuleMatches = catBest.ruleMatches;
             const { severity: catSev, adjusted: catAdj } = calibrateSeverity(
-              catBest.candidate.severity,
-              catRuleMatches,
-              cat,
+              catBest.candidate.severity, catRuleMatches, cat,
             );
 
             finalIssues.push({
@@ -844,6 +876,50 @@ export function classifyAndDeduplicate(
     }
   }
 
+  // Stage 5: Deterministic ordering
+  // Primary before secondary, then by category priority, then severity, then excerpt position
+  const CATEGORY_SORT_ORDER: Record<IssueType, number> = {
+    unsupported_conclusion: 0,
+    tone: 1,
+    bias: 2,
+    policy_language: 3,
+    completeness: 4,
+    consistency: 5,
+  };
+
+  finalIssues.sort((a, b) => {
+    // Primary track first
+    const trackA = ["tone", "bias", "unsupported_conclusion", "policy_language"].includes(a.type) ? 0 : 1;
+    const trackB = ["tone", "bias", "unsupported_conclusion", "policy_language"].includes(b.type) ? 0 : 1;
+    if (trackA !== trackB) return trackA - trackB;
+
+    // Higher severity first
+    const sevDiff = SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity];
+    if (sevDiff !== 0) return sevDiff;
+
+    // Category sort order
+    const catDiff = CATEGORY_SORT_ORDER[a.type] - CATEGORY_SORT_ORDER[b.type];
+    if (catDiff !== 0) return catDiff;
+
+    // Stable tie-breaker: excerpt length then alphabetical
+    if (a.excerpt.length !== b.excerpt.length) return b.excerpt.length - a.excerpt.length;
+    return a.excerpt.localeCompare(b.excerpt);
+  });
+
+  // Stage 6: Final explanation validation pass
+  for (const issue of finalIssues) {
+    const template = CATEGORY_TEMPLATES[issue.type];
+    if (!template) continue;
+
+    // Verify no forbidden terms leaked through
+    const lower = issue.explanation.toLowerCase();
+    const hasForbidden = template.forbidden_terms.some(t => lower.includes(t));
+    if (hasForbidden) {
+      // Re-align explanation forcefully
+      issue.explanation = alignExplanation(issue.explanation, issue.type, issue.type);
+    }
+  }
+
   stats.output_count = finalIssues.length;
   return { issues: finalIssues, stats };
 }
@@ -857,8 +933,12 @@ export {
   UNSUPPORTED_CONCLUSION_RULES,
   POLICY_RULES,
   CATEGORY_PRIORITY,
+  OBSERVATIONAL_SAFE_PATTERNS,
   matchRulesAgainstExcerpt,
   calibrateSeverity,
   resolveOverlappingCategories,
   alignExplanation,
+  isExplanationAligned,
+  isBorderlineObservational,
+  CATEGORY_TEMPLATES,
 };

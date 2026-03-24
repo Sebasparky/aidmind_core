@@ -1,12 +1,13 @@
 /**
- * run-reviewer v3.2 Edge Function — deterministic classification engine
+ * run-reviewer v3.3 Edge Function — deterministic classification engine
  *
- * v3.2 changes:
- *   - Full deterministic classification pipeline via _shared/deterministic-classifier
- *   - LLM prompt refactored: model is a conservative candidate span detector, not final authority
- *   - Lovable AI gateway instead of direct OpenAI
- *   - Staged pipeline: detect → normalize → classify → resolve → calibrate → align → emit
- *   - DCE stats logged to Eye for observability
+ * v3.3 changes:
+ *   - DCE v2: category-pure explanations, borderline observational guardrail
+ *   - Stronger overlap merging (50% threshold, same-field proximity)
+ *   - UC priority raised above tone for overclaiming spans
+ *   - Deterministic final ordering: primary→secondary, severity, category, excerpt
+ *   - Explanation validation pass strips cross-category vocabulary
+ *   - borderline_suppressed stat tracked
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -571,7 +572,7 @@ serve(async (req) => {
 
     await eye(supabase, v2.session_id, "reviewer_v3.started", {
       tenant_id: session.tenant_id,
-      version: "3.2",
+      version: "3.3",
       doc_text_length: v2.document_text.length,
       structured_answers_count: v2.structured_answers?.length ?? 0,
       review_worthy_count: reviewWorthyCount,
@@ -713,7 +714,7 @@ serve(async (req) => {
 
     await eye(supabase, v2.session_id, "reviewer_v3.completed", {
       tenant_id: session.tenant_id,
-      version: "3.2",
+      version: "3.3",
       issue_count: reportObj.metrics.issue_count,
       high_severity_count: reportObj.metrics.high_severity_count,
       overall_risk: summary.overall_risk,
@@ -731,6 +732,7 @@ serve(async (req) => {
         category_overrides: dceResult.stats.category_overrides,
         severity_adjustments: dceResult.stats.severity_adjustments,
         overlap_merges: dceResult.stats.overlap_merges,
+        borderline_suppressed: dceResult.stats.borderline_suppressed,
       },
       llm_provider: useGateway ? "lovable_gateway" : "openai_direct",
       model,
