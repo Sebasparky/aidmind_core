@@ -1010,7 +1010,7 @@ function ResultsMode({
                                     key={i}
                                     issue={issue}
                                     isActive={activeSnippet === issue.excerpt && !!issue.excerpt && issue.excerpt.length > 0}
-                                    onHighlight={onHighlight}
+                                    onHighlight={handleHighlightAndSwitch}
                                     variant="secondary"
                                   />
                                 ))}
