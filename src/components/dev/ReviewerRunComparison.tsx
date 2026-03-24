@@ -69,6 +69,8 @@ export interface ReviewerRunDiagnostics {
     final_coverage: string;
     final_issues_hash: string;
   };
+  candidate_excerpts?: string[];
+  candidate_types?: string[];
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -275,16 +277,74 @@ export function ReviewerRunComparison() {
                     <p className="text-xs text-muted-foreground leading-relaxed">
                       {firstDivergence === "input_validated" && "Input hashes differ despite same document — check field recovery, reconciliation, or trigger scanner."}
                       {firstDivergence === "prompt_assembled" && "Prompt assembly produced different text — check language trigger metadata, reconciliation context, or field ordering."}
-                      {firstDivergence === "llm_response_parsed" && "LLM returned different candidates for the same prompt. This is the expected nondeterminism source — the model's response varies between calls even at temperature=0.15."}
+                      {firstDivergence === "llm_response_parsed" && "LLM returned different candidates for the same prompt. The model's response varied between calls despite temperature=0. This may indicate provider-side nondeterminism."}
                       {firstDivergence === "prefiltered" && "Pre-filtering produced different results despite same LLM output — check blocked field logic."}
                       {firstDivergence === "dce_completed" && "DCE produced different results from same input candidates — this would be a classifier bug."}
                       {firstDivergence === "final_emission" && "Final emission diverged despite DCE match — check risk/confidence/coverage recalculation."}
                     </p>
                     {firstDivergence === "llm_response_parsed" && (
-                      <p className="text-[10px] text-muted-foreground/70">
-                        Raw candidates: {runA.output_fingerprint.raw_candidate_count} → {runB.output_fingerprint.raw_candidate_count} | 
-                        Final: {runA.output_fingerprint.final_primary_count}P+{runA.output_fingerprint.final_secondary_count}S → {runB.output_fingerprint.final_primary_count}P+{runB.output_fingerprint.final_secondary_count}S
-                      </p>
+                      <div className="space-y-1.5">
+                        <p className="text-[10px] text-muted-foreground/70">
+                          Raw candidates: {runA.output_fingerprint.raw_candidate_count} → {runB.output_fingerprint.raw_candidate_count} | 
+                          Final: {runA.output_fingerprint.final_primary_count}P+{runA.output_fingerprint.final_secondary_count}S → {runB.output_fingerprint.final_primary_count}P+{runB.output_fingerprint.final_secondary_count}S
+                        </p>
+                        {/* Candidate-level diff */}
+                        {runA.candidate_excerpts && runB.candidate_excerpts && (() => {
+                          const setA = new Set(runA.candidate_excerpts);
+                          const setB = new Set(runB.candidate_excerpts);
+                          const added = runB.candidate_excerpts.filter(e => !setA.has(e));
+                          const removed = runA.candidate_excerpts.filter(e => !setB.has(e));
+                          const typesA = runA.candidate_types ?? [];
+                          const typesB = runB.candidate_types ?? [];
+                          const typeCounts = (types: string[]) => {
+                            const c: Record<string, number> = {};
+                            types.forEach(t => { c[t] = (c[t] ?? 0) + 1; });
+                            return c;
+                          };
+                          const tcA = typeCounts(typesA);
+                          const tcB = typeCounts(typesB);
+                          const allTypes = [...new Set([...Object.keys(tcA), ...Object.keys(tcB)])].sort();
+                          const categoryDeltas = allTypes.filter(t => (tcA[t] ?? 0) !== (tcB[t] ?? 0));
+
+                          if (added.length === 0 && removed.length === 0) return null;
+                          return (
+                            <div className="space-y-1 mt-1">
+                              {removed.length > 0 && (
+                                <div>
+                                  <p className="text-[9px] font-semibold text-[hsl(var(--status-danger))]">Removed in B ({removed.length}):</p>
+                                  {removed.map((e, i) => (
+                                    <p key={i} className="text-[9px] text-muted-foreground/70 truncate pl-2">− "{e.slice(0, 80)}"</p>
+                                  ))}
+                                </div>
+                              )}
+                              {added.length > 0 && (
+                                <div>
+                                  <p className="text-[9px] font-semibold text-[hsl(var(--status-success))]">Added in B ({added.length}):</p>
+                                  {added.map((e, i) => (
+                                    <p key={i} className="text-[9px] text-muted-foreground/70 truncate pl-2">+ "{e.slice(0, 80)}"</p>
+                                  ))}
+                                </div>
+                              )}
+                              {/* Merge/split detection */}
+                              {removed.length > 0 && added.length > 0 && (
+                                <p className="text-[9px] text-[hsl(var(--status-warning))] font-medium">
+                                  ⚠ Likely merge/split: {removed.length} removed + {added.length} added
+                                </p>
+                              )}
+                              {categoryDeltas.length > 0 && (
+                                <div>
+                                  <p className="text-[9px] font-semibold text-muted-foreground">Category deltas:</p>
+                                  {categoryDeltas.map(t => (
+                                    <p key={t} className="text-[9px] text-muted-foreground/70 pl-2">
+                                      {t}: {tcA[t] ?? 0} → {tcB[t] ?? 0}
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
                     )}
                   </div>
                 )}
