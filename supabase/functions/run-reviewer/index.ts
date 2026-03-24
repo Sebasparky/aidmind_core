@@ -650,7 +650,7 @@ serve(async (req) => {
       },
       body: JSON.stringify({
         model,
-        temperature: 0.15,
+        temperature: 0,
         messages: [
           { role: "system", content: REVIEWER_V3_SYSTEM_PROMPT },
           { role: "user", content: userMessage },
