@@ -1750,7 +1750,7 @@ export default function Reviewer() {
 
       {/* ─── Main content ────────────────────────────────── */}
       <div className="flex-1 overflow-hidden flex flex-col">
-        {!hasDocument && reviewerPreviouslyCompleted && toolState !== "success" ? (
+        {output && toolState === "success" ? (
           /* ─── Completed Reviewer read-only overview ──────── */
           <div className="flex-1 flex items-center justify-center p-8">
             <div className="w-full max-w-lg space-y-6">
