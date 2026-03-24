@@ -232,7 +232,7 @@ describe("Severity calibration", () => {
     const candidates: CandidateIssue[] = [{
       type: "tone",
       severity: "high",
-      excerpt: "The client seemed reluctant to engage with the plan",
+      excerpt: "The client was not very forthcoming about her employment situation",
       explanation: "Subjective characterization",
     }];
     const result = classifyAndDeduplicate(candidates);
