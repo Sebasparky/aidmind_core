@@ -450,7 +450,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                         onClick={() => handleMarkDoneClick(session)}
                       >
                         <div className="flex items-center gap-2">
-                          <CheckCircle2 className="h-4 w-4 text-[hsl(var(--status-success))]" />
+                          <CheckCircle2 className="h-4 w-4 text-[hsl(var(--status-success))]/70" />
                           <span className="text-sm font-medium text-foreground">Session complete</span>
                         </div>
                         <span className="text-xs text-muted-foreground">Move to history →</span>
