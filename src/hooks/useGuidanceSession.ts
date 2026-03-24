@@ -309,7 +309,7 @@ export function useGuidanceSession(sessionId: string | undefined) {
             const { guidance_skipped_at: _removed, ...cleanMeta } = meta;
             await supabase
               .from("sessions")
-              .update({ metadata: cleanMeta, updated_at: new Date().toISOString() })
+              .update({ metadata: cleanMeta as unknown as Record<string, never>, updated_at: new Date().toISOString() })
               .eq("id", session.id);
           }
         } catch (err) {
