@@ -636,7 +636,7 @@ serve(async (req) => {
       stage: "prompt_assembled",
       hash: reviewPacketHash,
       counts: { prompt_length: userMessage.length },
-      metadata: { model, temperature: 0.15, provider: useGateway ? "lovable_gateway" : "openai_direct" },
+      metadata: { model, temperature: 0, provider: useGateway ? "lovable_gateway" : "openai_direct" },
     });
     timestamps.prompt_assembled = Date.now();
 
