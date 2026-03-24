@@ -324,8 +324,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                           variant="secondary"
                           className={cn("text-xs shrink-0", getToolsUsedColor(toolCount))}
                         >
-                          Tools: {session.guidanceSkipped ? `${toolCount}` : toolCount}/{totalTools}
-                          {session.guidanceSkipped && !session.guidanceCompleted && " ⁺¹"}
+                          Tools: {toolCount}/{totalTools}
                         </Badge>
                       </div>
                       <div className="flex items-center gap-2 mt-1">
