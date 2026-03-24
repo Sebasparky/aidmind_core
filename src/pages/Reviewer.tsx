@@ -641,6 +641,7 @@ function ResultsMode({
   schemaFields,
   parserArtifact,
   toolState,
+  vaultRelocked,
   onHighlight,
   onCopyAll,
   onCopyType,
@@ -665,6 +666,7 @@ function ResultsMode({
   schemaFields: Phase2SchemaField[] | null;
   parserArtifact: TemplateParserArtifact | null;
   toolState: ToolState;
+  vaultRelocked: boolean;
   onHighlight: (snippet: string) => void;
   onCopyAll: () => void;
   onCopyType: (type: ReviewIssueType) => void;
