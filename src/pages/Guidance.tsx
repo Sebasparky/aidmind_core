@@ -140,11 +140,31 @@ export default function Guidance() {
     navigate("/dashboard");
   };
 
-  // Skip Guidance: persist skip marker + template association, no LLM call
+  // Skip Guidance: ensure downstream dependencies (phase2 schema) are set up,
+  // persist skip marker, but do NOT generate guidance questions or call the guidance LLM.
   const handleSkipGuidance = async () => {
-    if (!session) return;
+    if (!session || !session.templateId) return;
     setSkipping(true);
     try {
+      // 1. Ensure phase2 schema is linked to session (required by Case Notes).
+      //    For templates used before, this reuses the existing schema (no LLM call).
+      //    For brand-new templates, it generates one — this is unavoidable since
+      //    Case Notes requires a schema to function.
+      const { data: ensureRes, error: ensureErr } = await supabase.functions.invoke(
+        "ensure-phase2-schema",
+        { body: { session_id: session.id, template_id: session.templateId } }
+      );
+
+      if (ensureErr) {
+        console.error("[Guidance] ensure-phase2-schema invoke error:", ensureErr.message);
+        // Non-blocking: skip can still proceed, Case Notes will use fallback
+      } else if (ensureRes && !ensureRes.success) {
+        console.warn("[Guidance] ensure-phase2-schema returned failure:", ensureRes.error);
+      } else {
+        console.log("[Guidance] Phase 2 schema ensured for skip:", ensureRes?.action);
+      }
+
+      // 2. Persist skip marker in session metadata
       const { data: current } = await supabase
         .from("sessions")
         .select("metadata")
@@ -163,13 +183,15 @@ export default function Guidance() {
         })
         .eq("id", session.id);
 
+      // 3. Log audit event
       await logEvent({
         eventType: "guidance.step.skipped",
         sessionId: session.sessionId,
         result: "success",
+        metadata: { schema_action: ensureRes?.action ?? "unknown" },
       });
     } catch (err) {
-      console.error("[Guidance] Failed to mark skip:", err);
+      console.error("[Guidance] Failed to skip guidance:", err);
     } finally {
       setSkipping(false);
     }
