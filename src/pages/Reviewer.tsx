@@ -1883,33 +1883,12 @@ export default function Reviewer() {
               </div>
             </div>
           </div>
-        ) : toolState === "success" && output ? (
-          /* ─── Results mode (post-run) ────────────────── */
-          <ResultsMode
-            output={output}
-            reconciliationResult={reconciliationResult}
-            reviewTier={reviewTier}
-            notesSource={notesSource}
-            vault={vault}
-            selectedFile={selectedFile}
-            fileName={fileName}
-            pageCount={pageCount}
-            extractedPages={extractedPages}
-            extractedFullText={extractedFullText}
-            activeSnippet={activeSnippet}
-            artifactStatus={artifactStatus}
-            copiedCategory={copiedCategory}
-            schemaFields={schemaFields}
-            parserArtifact={parserArtifact}
-            toolState={toolState}
-            onHighlight={handleHighlight}
-            onCopyAll={handleCopyAll}
-            onCopyType={handleCopyType}
-            onBack={handleBack}
-            onUnlockClick={() => setShowReauthModal(true)}
-            onRelockClick={() => vault.relock("manual")}
-            textPanelRef={textPanelRef}
-          />
+        ) : !hasDocument && reviewerPreviouslyCompleted ? (
+          /* ─── Completed Reviewer read-only overview (re-entry only) ── */
+          <div className="flex-1 flex items-center justify-center p-8">
+            {/* This is the existing completed-summary block, relocated here in render priority */}
+            {/* Content follows in the next else-if branch below */}
+          </div>
         ) : (
           /* ─── Pre-run workspace layout ─────────────────── */
           <div className="flex-1 overflow-hidden flex flex-col lg:flex-row">
