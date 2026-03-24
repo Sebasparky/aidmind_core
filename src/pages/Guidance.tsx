@@ -499,8 +499,26 @@ export default function Guidance() {
                 </Card>
               )}
 
-              {/* Idle (template selected, no output yet) */}
-              {hasTemplate && runState === "idle" && !output && (
+              {/* Skipped state (re-entry) — user previously skipped, can still generate */}
+              {hasTemplate && runState === "idle" && !output && guidanceSkipped && (
+                <Card>
+                  <CardContent className="py-10 text-center space-y-4">
+                    <div className="h-12 w-12 rounded-2xl bg-muted/60 flex items-center justify-center mx-auto">
+                      <SkipForward className="h-6 w-6 text-muted-foreground/50" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-foreground">Guidance skipped</p>
+                      <p className="text-xs text-muted-foreground mt-1.5 max-w-sm mx-auto">
+                        This session is using the selected template without generated interview questions.
+                        You can still generate guidance if needed.
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Idle (template selected, no output yet, not skipped) */}
+              {hasTemplate && runState === "idle" && !output && !guidanceSkipped && (
                 <Card className="border-dashed">
                   <CardContent className="py-16 text-center">
                     <Sparkles className="h-10 w-10 mx-auto text-muted-foreground/30 mb-4" />
