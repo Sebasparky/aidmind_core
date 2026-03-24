@@ -349,6 +349,18 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                           <CheckCircle2 className="h-3.5 w-3.5" />
                           View Guidance
                         </Button>
+                      ) : session.guidanceSkipped ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-1.5 text-xs text-muted-foreground"
+                          onClick={() => handleGenerateGuidance(session)}
+                          data-tour="guidance-button"
+                        >
+                          <SkipForward className="h-3.5 w-3.5" />
+                          Guidance
+                          <Badge variant="secondary" className="text-[9px] px-1 py-0 h-3.5 ml-0.5">skipped</Badge>
+                        </Button>
                       ) : (
                         <Button
                           variant="outline"

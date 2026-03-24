@@ -805,16 +805,42 @@ export default function Guidance() {
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Back to Dashboard
               </Button>
-              <Button
-                onClick={runGuidance}
-                disabled={runState === "running" || runState === "compiling" || runState === "generating" || !hasTemplate}
-              >
-                {runState === "compiling" || runState === "generating" || runState === "running" ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {runState === "compiling" ? "Compiling…" : "Generating…"}</>
-                ) : (
-                  <><Sparkles className="h-4 w-4 mr-2" /> Generate Questions</>
+              <div className="flex items-center gap-2">
+                {/* Skip Guidance — secondary action, only when template selected and not running */}
+                {hasTemplate && runState === "idle" && !output && (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          onClick={handleSkipGuidance}
+                          disabled={skipping}
+                          className="text-muted-foreground"
+                        >
+                          {skipping ? (
+                            <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Skipping…</>
+                          ) : (
+                            <><SkipForward className="h-4 w-4 mr-2" /> Skip Guidance</>
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-[220px]">
+                        <p className="text-xs">Continue with this template without generating interview questions.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 )}
-              </Button>
+                <Button
+                  onClick={runGuidance}
+                  disabled={runState === "running" || runState === "compiling" || runState === "generating" || !hasTemplate}
+                >
+                  {runState === "compiling" || runState === "generating" || runState === "running" ? (
+                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {runState === "compiling" ? "Compiling…" : "Generating…"}</>
+                  ) : (
+                    <><Sparkles className="h-4 w-4 mr-2" /> Generate Questions</>
+                  )}
+                </Button>
+              </div>
             </div>
           )}
         </div>
