@@ -12,6 +12,7 @@ export interface RecentNote {
   status: NoteStatus;
   updatedAt: Date;
   guidanceCompleted: boolean;
+  guidanceSkipped: boolean;
   caseNotesCompleted: boolean;
   reviewerCompleted: boolean;
   sessionCompleted: boolean;
@@ -102,6 +103,7 @@ export function generateTitle(session: SessionRow): string {
 function sessionToNote(session: SessionRow): RecentNote {
   const meta = session.metadata as Record<string, unknown> | null;
   const guidanceCompleted = !!meta?.guidance_completed_at;
+  const guidanceSkipped = !guidanceCompleted && !!meta?.guidance_skipped_at;
   const caseNotesCompleted = !!meta?.case_notes_completed_at;
   const reviewerCompleted = !!meta?.reviewer_completed_at || !!session.review_document_id;
   const sessionCompleted = !!meta?.session_completed_at;
@@ -114,6 +116,7 @@ function sessionToNote(session: SessionRow): RecentNote {
     status: mapStateToStatus(session),
     updatedAt: new Date(session.updated_at),
     guidanceCompleted,
+    guidanceSkipped,
     caseNotesCompleted,
     reviewerCompleted,
     sessionCompleted,

@@ -13,6 +13,7 @@ import {
   ExternalLink,
   ShieldAlert,
   Clock,
+  SkipForward,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -102,6 +103,8 @@ export default function Guidance() {
 
   // Done: write explicit completion signal to session metadata, then navigate
   const [markingDone, setMarkingDone] = useState(false);
+  const [skipping, setSkipping] = useState(false);
+
   const handleDone = async () => {
     if (!session) return;
     setMarkingDone(true);
@@ -114,10 +117,12 @@ export default function Guidance() {
         .maybeSingle();
       
       const existingMeta = (current?.metadata as Record<string, unknown>) ?? {};
+      // Clear any prior skip marker when completing
+      const { guidance_skipped_at: _removed, ...cleanMeta } = existingMeta;
       await supabase
         .from("sessions")
         .update({
-          metadata: { ...existingMeta, guidance_completed_at: new Date().toISOString() },
+          metadata: { ...cleanMeta, guidance_completed_at: new Date().toISOString() },
           updated_at: new Date().toISOString(),
         })
         .eq("id", session.id);
@@ -131,6 +136,42 @@ export default function Guidance() {
       console.error("[Guidance] Failed to mark completion:", err);
     } finally {
       setMarkingDone(false);
+    }
+    navigate("/dashboard");
+  };
+
+  // Skip Guidance: persist skip marker + template association, no LLM call
+  const handleSkipGuidance = async () => {
+    if (!session) return;
+    setSkipping(true);
+    try {
+      const { data: current } = await supabase
+        .from("sessions")
+        .select("metadata")
+        .eq("id", session.id)
+        .maybeSingle();
+
+      const existingMeta = (current?.metadata as Record<string, unknown>) ?? {};
+      await supabase
+        .from("sessions")
+        .update({
+          metadata: {
+            ...existingMeta,
+            guidance_skipped_at: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", session.id);
+
+      await logEvent({
+        eventType: "guidance.step.skipped",
+        sessionId: session.sessionId,
+        result: "success",
+      });
+    } catch (err) {
+      console.error("[Guidance] Failed to mark skip:", err);
+    } finally {
+      setSkipping(false);
     }
     navigate("/dashboard");
   };
@@ -207,6 +248,7 @@ export default function Guidance() {
   const scopeLabel = formatScope(session.guidanceScope, session.guidanceScopeOther);
   const isSuccess = runState === "success" && output && output.questions.length > 0;
   const guidanceAlreadyDone = !!(session.metadata as Record<string, unknown>)?.guidance_completed_at;
+  const guidanceSkipped = !!(session.metadata as Record<string, unknown>)?.guidance_skipped_at;
   const isSuccessForGuard = !!(output && output.questions.length > 0);
 
   // Determine if we should show a specific error banner
@@ -457,8 +499,26 @@ export default function Guidance() {
                 </Card>
               )}
 
-              {/* Idle (template selected, no output yet) */}
-              {hasTemplate && runState === "idle" && !output && (
+              {/* Skipped state (re-entry) — user previously skipped, can still generate */}
+              {hasTemplate && runState === "idle" && !output && guidanceSkipped && (
+                <Card>
+                  <CardContent className="py-10 text-center space-y-4">
+                    <div className="h-12 w-12 rounded-2xl bg-muted/60 flex items-center justify-center mx-auto">
+                      <SkipForward className="h-6 w-6 text-muted-foreground/50" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-foreground">Guidance skipped</p>
+                      <p className="text-xs text-muted-foreground mt-1.5 max-w-sm mx-auto">
+                        This session is using the selected template without generated interview questions.
+                        You can still generate guidance if needed.
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Idle (template selected, no output yet, not skipped) */}
+              {hasTemplate && runState === "idle" && !output && !guidanceSkipped && (
                 <Card className="border-dashed">
                   <CardContent className="py-16 text-center">
                     <Sparkles className="h-10 w-10 mx-auto text-muted-foreground/30 mb-4" />
@@ -745,16 +805,42 @@ export default function Guidance() {
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Back to Dashboard
               </Button>
-              <Button
-                onClick={runGuidance}
-                disabled={runState === "running" || runState === "compiling" || runState === "generating" || !hasTemplate}
-              >
-                {runState === "compiling" || runState === "generating" || runState === "running" ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {runState === "compiling" ? "Compiling…" : "Generating…"}</>
-                ) : (
-                  <><Sparkles className="h-4 w-4 mr-2" /> Generate Questions</>
+              <div className="flex items-center gap-2">
+                {/* Skip Guidance — secondary action, only when template selected and not running */}
+                {hasTemplate && runState === "idle" && !output && (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          onClick={handleSkipGuidance}
+                          disabled={skipping}
+                          className="text-muted-foreground"
+                        >
+                          {skipping ? (
+                            <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Skipping…</>
+                          ) : (
+                            <><SkipForward className="h-4 w-4 mr-2" /> Skip Guidance</>
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-[220px]">
+                        <p className="text-xs">Continue with this template without generating interview questions.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 )}
-              </Button>
+                <Button
+                  onClick={runGuidance}
+                  disabled={runState === "running" || runState === "compiling" || runState === "generating" || !hasTemplate}
+                >
+                  {runState === "compiling" || runState === "generating" || runState === "running" ? (
+                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> {runState === "compiling" ? "Compiling…" : "Generating…"}</>
+                  ) : (
+                    <><Sparkles className="h-4 w-4 mr-2" /> Generate Questions</>
+                  )}
+                </Button>
+              </div>
             </div>
           )}
         </div>

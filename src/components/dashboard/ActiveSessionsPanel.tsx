@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Sparkles, Shield, Clock, RefreshCw, Check, X, CheckCircle2, FileText, Eye } from "lucide-react";
+import { Plus, Sparkles, Shield, Clock, RefreshCw, Check, X, CheckCircle2, FileText, Eye, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -32,6 +32,7 @@ interface ActiveSession {
   lastAccessed: Date;
   createdAt: Date;
   guidanceCompleted: boolean;
+  guidanceSkipped: boolean;
   caseNotesCompleted: boolean;
   reviewerCompleted: boolean;
   sessionCompleted: boolean;
@@ -88,6 +89,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         lastAccessed: note.updatedAt,
         createdAt: note.updatedAt,
         guidanceCompleted: note.guidanceCompleted,
+        guidanceSkipped: note.guidanceSkipped,
         caseNotesCompleted: note.caseNotesCompleted,
         reviewerCompleted: note.reviewerCompleted,
         sessionCompleted: note.sessionCompleted,
@@ -291,8 +293,11 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         ) : (
           <div className="space-y-3">
             {filteredActiveSessions.map((session) => {
+              // Skipped guidance counts as "addressed" for tool progress, but not "completed"
+              const guidanceAddressed = session.guidanceCompleted || session.guidanceSkipped;
               const toolCount = (session.guidanceCompleted ? 1 : 0) + (session.caseNotesCompleted ? 1 : 0) + (session.reviewerCompleted ? 1 : 0);
               const totalTools = 3;
+              const allToolsAddressed = guidanceAddressed && session.caseNotesCompleted && session.reviewerCompleted;
               const allToolsUsed = toolCount >= totalTools;
 
               return (
@@ -319,7 +324,8 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                           variant="secondary"
                           className={cn("text-xs shrink-0", getToolsUsedColor(toolCount))}
                         >
-                          Tools: {toolCount}/{totalTools}
+                          Tools: {session.guidanceSkipped ? `${toolCount}` : toolCount}/{totalTools}
+                          {session.guidanceSkipped && !session.guidanceCompleted && " ⁺¹"}
                         </Badge>
                       </div>
                       <div className="flex items-center gap-2 mt-1">
@@ -344,6 +350,18 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                         >
                           <CheckCircle2 className="h-3.5 w-3.5" />
                           View Guidance
+                        </Button>
+                      ) : session.guidanceSkipped ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-1.5 text-xs text-muted-foreground"
+                          onClick={() => handleGenerateGuidance(session)}
+                          data-tour="guidance-button"
+                        >
+                          <SkipForward className="h-3.5 w-3.5" />
+                          Guidance
+                          <Badge variant="secondary" className="text-[9px] px-1 py-0 h-3.5 ml-0.5">skipped</Badge>
                         </Button>
                       ) : (
                         <Button
@@ -407,7 +425,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                           <TooltipProvider>
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                {allToolsUsed ? (
+                                {allToolsUsed || allToolsAddressed ? (
                                   <Button
                                     variant="default"
                                     size="sm"
