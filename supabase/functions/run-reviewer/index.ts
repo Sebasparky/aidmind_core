@@ -714,7 +714,7 @@ serve(async (req) => {
 
     await eye(supabase, v2.session_id, "reviewer_v3.completed", {
       tenant_id: session.tenant_id,
-      version: "3.2",
+      version: "3.3",
       issue_count: reportObj.metrics.issue_count,
       high_severity_count: reportObj.metrics.high_severity_count,
       overall_risk: summary.overall_risk,
@@ -732,6 +732,7 @@ serve(async (req) => {
         category_overrides: dceResult.stats.category_overrides,
         severity_adjustments: dceResult.stats.severity_adjustments,
         overlap_merges: dceResult.stats.overlap_merges,
+        borderline_suppressed: dceResult.stats.borderline_suppressed,
       },
       llm_provider: useGateway ? "lovable_gateway" : "openai_direct",
       model,
