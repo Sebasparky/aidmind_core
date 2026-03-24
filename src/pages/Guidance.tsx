@@ -103,6 +103,8 @@ export default function Guidance() {
 
   // Done: write explicit completion signal to session metadata, then navigate
   const [markingDone, setMarkingDone] = useState(false);
+  const [skipping, setSkipping] = useState(false);
+
   const handleDone = async () => {
     if (!session) return;
     setMarkingDone(true);
@@ -115,10 +117,12 @@ export default function Guidance() {
         .maybeSingle();
       
       const existingMeta = (current?.metadata as Record<string, unknown>) ?? {};
+      // Clear any prior skip marker when completing
+      const { guidance_skipped_at: _removed, ...cleanMeta } = existingMeta;
       await supabase
         .from("sessions")
         .update({
-          metadata: { ...existingMeta, guidance_completed_at: new Date().toISOString() },
+          metadata: { ...cleanMeta, guidance_completed_at: new Date().toISOString() },
           updated_at: new Date().toISOString(),
         })
         .eq("id", session.id);
@@ -132,6 +136,42 @@ export default function Guidance() {
       console.error("[Guidance] Failed to mark completion:", err);
     } finally {
       setMarkingDone(false);
+    }
+    navigate("/dashboard");
+  };
+
+  // Skip Guidance: persist skip marker + template association, no LLM call
+  const handleSkipGuidance = async () => {
+    if (!session) return;
+    setSkipping(true);
+    try {
+      const { data: current } = await supabase
+        .from("sessions")
+        .select("metadata")
+        .eq("id", session.id)
+        .maybeSingle();
+
+      const existingMeta = (current?.metadata as Record<string, unknown>) ?? {};
+      await supabase
+        .from("sessions")
+        .update({
+          metadata: {
+            ...existingMeta,
+            guidance_skipped_at: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", session.id);
+
+      await logEvent({
+        eventType: "guidance.step.skipped",
+        sessionId: session.sessionId,
+        result: "success",
+      });
+    } catch (err) {
+      console.error("[Guidance] Failed to mark skip:", err);
+    } finally {
+      setSkipping(false);
     }
     navigate("/dashboard");
   };
