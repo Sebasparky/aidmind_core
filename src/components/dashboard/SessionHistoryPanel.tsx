@@ -105,10 +105,6 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
       });
   }, [notes]);
 
-  // Derive tool usage from eye_events
-  const sessionIds = useMemo(() => historicalSessions.map((s) => s.sessionId), [historicalSessions]);
-  const { usageMap } = useSessionToolUsage(sessionIds);
-
   // Register history session IDs into context
   useEffect(() => {
     if (historicalSessions.length > 0) {
