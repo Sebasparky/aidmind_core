@@ -808,15 +808,15 @@ export default function Guidance() {
                 Back to Dashboard
               </Button>
               <div className="flex items-center gap-2">
-                {/* Skip Guidance — secondary action, only when template selected, not running, not already skipped */}
+                {/* Skip Guidance — true no-LLM bypass, gated on downstream readiness */}
                 {hasTemplate && runState === "idle" && !output && !guidanceSkipped && (
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
                           variant="outline"
-                          onClick={handleSkipGuidance}
-                          disabled={skipping}
+                          onClick={session?.skipReady ? handleSkipGuidance : undefined}
+                          disabled={skipping || !session?.skipReady}
                           className="text-muted-foreground"
                         >
                           {skipping ? (
@@ -826,8 +826,12 @@ export default function Guidance() {
                           )}
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-[220px]">
-                        <p className="text-xs">Continue with this template without generating interview questions.</p>
+                      <TooltipContent side="top" className="max-w-[260px]">
+                        <p className="text-xs">
+                          {session?.skipReady
+                            ? "Continue with this template without generating interview questions."
+                            : "This template needs one-time setup before Guidance can be skipped. Generate Guidance once to prepare it for future sessions."}
+                        </p>
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
