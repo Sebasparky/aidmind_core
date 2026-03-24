@@ -123,12 +123,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
           suppressAuthReloadRef.current = false;
 
+          const isSameUser = currentUserIdRef.current === session.user.id;
           setUser(session.user);
           currentUserIdRef.current = session.user.id;
-          // Immediately gate routing while profile resolves
-          setLoading(true);
-          // Defer profile fetch to avoid Supabase client deadlock
-          setTimeout(() => fetchProfile().finally(() => setLoading(false)), 0);
+
+          if (isSameUser) {
+            // Token refresh for same user — update silently without loading gate
+            // to prevent unmounting pages (e.g. Reviewer losing in-memory findings)
+            if (import.meta.env.DEV) {
+              console.info("[AuthContext] Silent profile refresh for same-user token event");
+            }
+            fetchProfile();
+          } else {
+            // New user sign-in — gate routing while profile resolves
+            setLoading(true);
+            setTimeout(() => fetchProfile().finally(() => setLoading(false)), 0);
+          }
         } else {
           suppressAuthReloadRef.current = false;
           setUser(null);
