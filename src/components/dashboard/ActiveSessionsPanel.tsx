@@ -89,6 +89,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
         lastAccessed: note.updatedAt,
         createdAt: note.updatedAt,
         guidanceCompleted: note.guidanceCompleted,
+        guidanceSkipped: note.guidanceSkipped,
         caseNotesCompleted: note.caseNotesCompleted,
         reviewerCompleted: note.reviewerCompleted,
         sessionCompleted: note.sessionCompleted,
