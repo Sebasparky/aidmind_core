@@ -336,9 +336,9 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                     <div className="flex flex-wrap items-center gap-1.5">
                       {session.guidanceCompleted ? (
                         <Button
-                          variant="default"
+                          variant="outline"
                           size="sm"
-                          className="gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+                          className="gap-1.5 text-xs text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30 hover:bg-[hsl(var(--status-success-muted))]/40"
                           onClick={() => handleGenerateGuidance(session)}
                           data-tour="guidance-button"
                         >
@@ -359,9 +359,9 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                       )}
                       {session.caseNotesCompleted ? (
                         <Button
-                          variant="default"
+                          variant="outline"
                           size="sm"
-                          className="gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+                          className="gap-1.5 text-xs text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30 hover:bg-[hsl(var(--status-success-muted))]/40"
                           onClick={() => navigate(`/sessions/${session.sessionId}/case-notes`)}
                         >
                           <CheckCircle2 className="h-3.5 w-3.5" />
@@ -380,9 +380,9 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                       )}
                       {session.reviewerCompleted ? (
                         <Button
-                          variant="default"
+                          variant="outline"
                           size="sm"
-                          className="gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+                          className="gap-1.5 text-xs text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30 hover:bg-[hsl(var(--status-success-muted))]/40"
                           onClick={() => handleRunReviewer(session)}
                           data-tour="reviewer-button"
                         >
@@ -446,11 +446,11 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                   {session.sessionCompleted && (
                     <div className="px-4 pb-3 pt-1">
                       <div
-                        className="rounded-lg border border-[hsl(var(--status-success))]/20 bg-[hsl(var(--status-success-muted))]/30 px-4 py-2.5 flex items-center justify-between cursor-pointer hover:bg-[hsl(var(--status-success-muted))]/50 transition-colors"
+                        className="rounded-lg border border-border bg-muted/30 px-4 py-2.5 flex items-center justify-between cursor-pointer hover:bg-muted/50 transition-colors"
                         onClick={() => handleMarkDoneClick(session)}
                       >
                         <div className="flex items-center gap-2">
-                          <CheckCircle2 className="h-4 w-4 text-[hsl(var(--status-success))]" />
+                          <CheckCircle2 className="h-4 w-4 text-[hsl(var(--status-success))]/70" />
                           <span className="text-sm font-medium text-foreground">Session complete</span>
                         </div>
                         <span className="text-xs text-muted-foreground">Move to history →</span>

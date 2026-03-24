@@ -55,17 +55,24 @@ export function CitationsModal({ open, onOpenChange, citations, questionText, se
         { body: { session_id: sessionDbId, citation_ids: citations } },
       );
 
-      if (fnError) throw fnError;
+      if (fnError) {
+        console.error("[CitationsModal] Edge function error:", fnError);
+        // Don't show scary error — this often means policy pack not compiled yet
+        setError(null);
+        return;
+      }
 
       if (!data || (!data.snippets?.length && !data.unresolved?.length)) {
-        setError("Citation details could not be resolved");
+        // No error — citations just couldn't be resolved. Show graceful empty state.
+        setError(null);
         return;
       }
 
       setSnippets(data.snippets ?? []);
     } catch (err) {
       console.error("[CitationsModal] fetch error:", err);
-      setError("Failed to load citation details");
+      // Only show error for genuine network/system failures
+      setError("Could not connect to citation service. Try again in a moment.");
     } finally {
       setLoading(false);
     }
@@ -134,11 +141,26 @@ export function CitationsModal({ open, onOpenChange, citations, questionText, se
             </div>
           )}
 
-          {/* Error state */}
+          {/* Error state — only for genuine system failures */}
           {!loading && error && (
-            <div className="flex items-center gap-2 p-3.5 rounded-md border border-destructive/20 bg-destructive/5">
-              <AlertTriangle className="h-4 w-4 text-destructive shrink-0" />
-              <p className="text-sm text-destructive">{error}</p>
+            <div className="flex items-center gap-2 p-3.5 rounded-md border border-border bg-muted/30">
+              <AlertTriangle className="h-4 w-4 text-muted-foreground shrink-0" />
+              <p className="text-sm text-muted-foreground">{error}</p>
+            </div>
+          )}
+
+          {/* No sources resolved — graceful empty state */}
+          {!loading && !error && snippets.length === 0 && unresolvedCitations.length === 0 && (
+            <div className="py-8 text-center space-y-3">
+              <div className="h-10 w-10 rounded-xl bg-muted/50 flex items-center justify-center mx-auto">
+                <BookOpen className="h-5 w-5 text-muted-foreground/40" />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-foreground">Source details not available</p>
+                <p className="text-xs text-muted-foreground mt-1.5 max-w-sm mx-auto leading-relaxed">
+                  The policy sources for this question could not be retrieved. This can happen if the policy pack has not been compiled yet, or if the source documents have been updated since this guidance was generated.
+                </p>
+              </div>
             </div>
           )}
 

@@ -673,6 +673,17 @@ function ResultsMode({
   textPanelRef: React.RefObject<HTMLDivElement>;
 }) {
   const [activeTab, setActiveTab] = useState("findings");
+  const handleHighlightAndSwitch = useCallback((snippet: string) => {
+    onHighlight(snippet);
+    if (snippet) {
+      setActiveTab("text");
+      // Scroll to highlight after tab switch renders
+      setTimeout(() => {
+        const mark = textPanelRef.current?.querySelector("mark");
+        if (mark) mark.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 150);
+    }
+  }, [onHighlight, textPanelRef]);
   const primaryIssues = output.issues.filter(i => assignFindingTrack(i.type) === "primary");
   const secondaryIssues = output.issues.filter(i => assignFindingTrack(i.type) === "secondary");
   const primaryCount = primaryIssues.length;
@@ -863,7 +874,7 @@ function ResultsMode({
                                   key={i}
                                   issue={issue}
                                   isActive={activeSnippet === issue.excerpt && !!issue.excerpt && issue.excerpt.length > 0}
-                                  onHighlight={onHighlight}
+                                   onHighlight={handleHighlightAndSwitch}
                                   variant="primary"
                                 />
                               ))}
@@ -999,7 +1010,7 @@ function ResultsMode({
                                     key={i}
                                     issue={issue}
                                     isActive={activeSnippet === issue.excerpt && !!issue.excerpt && issue.excerpt.length > 0}
-                                    onHighlight={onHighlight}
+                                    onHighlight={handleHighlightAndSwitch}
                                     variant="secondary"
                                   />
                                 ))}
