@@ -641,6 +641,7 @@ function ResultsMode({
   schemaFields,
   parserArtifact,
   toolState,
+  vaultRelocked,
   onHighlight,
   onCopyAll,
   onCopyType,
@@ -665,6 +666,7 @@ function ResultsMode({
   schemaFields: Phase2SchemaField[] | null;
   parserArtifact: TemplateParserArtifact | null;
   toolState: ToolState;
+  vaultRelocked: boolean;
   onHighlight: (snippet: string) => void;
   onCopyAll: () => void;
   onCopyType: (type: ReviewIssueType) => void;
@@ -752,7 +754,18 @@ function ResultsMode({
               />
 
               {/* ── 2. Vault / Case Notes status ───────── */}
-              {vault.vaultState !== "empty" && (
+              {vaultRelocked && (
+                <div className="flex items-start gap-2.5 p-4 rounded-xl bg-muted/50 border border-border">
+                  <Lock className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs text-foreground font-medium">Case notes relocked</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Vault timed out during review. Language findings remain visible. Comparison data from notes may be stale.
+                    </p>
+                  </div>
+                </div>
+              )}
+              {vault.vaultState !== "empty" && !vaultRelocked && (
                 <VaultSection
                   vaultState={vault.vaultState}
                   metadata={vault.vaultMetadata}
@@ -1239,6 +1252,18 @@ export default function Reviewer() {
   useEffect(() => {
     return () => { vault.relock("unmount"); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // SECURITY: Purge all in-memory findings on unmount (route exit / refresh)
+  useEffect(() => {
+    return () => {
+      setOutput(null);
+      setReconciliationResult(null);
+      setTemplateParseResult(null);
+      setActiveSnippet(null);
+      setToolState("idle");
+      if (import.meta.env.DEV) console.info("[Reviewer] In-memory findings purged on unmount");
+    };
+  }, []);
 
   useEffect(() => {
     if (vault.vaultState !== "unlocked") return;
@@ -1748,8 +1773,36 @@ export default function Reviewer() {
 
       {/* ─── Main content ────────────────────────────────── */}
       <div className="flex-1 overflow-hidden flex flex-col">
-        {!hasDocument && reviewerPreviouslyCompleted && toolState !== "success" ? (
-          /* ─── Completed Reviewer read-only overview ──────── */
+        {output && toolState === "success" ? (
+          /* ─── Results mode (post-run) — ALWAYS takes priority ─── */
+          <ResultsMode
+            output={output}
+            reconciliationResult={reconciliationResult}
+            reviewTier={reviewTier}
+            notesSource={notesSource}
+            vault={vault}
+            selectedFile={selectedFile}
+            fileName={fileName}
+            pageCount={pageCount}
+            extractedPages={extractedPages}
+            extractedFullText={extractedFullText}
+            activeSnippet={activeSnippet}
+            artifactStatus={artifactStatus}
+            copiedCategory={copiedCategory}
+            schemaFields={schemaFields}
+            parserArtifact={parserArtifact}
+            toolState={toolState}
+            vaultRelocked={vault.vaultState === "sealed" && !!vault.lastRelockReason && vault.lastRelockReason !== "manual"}
+            onHighlight={handleHighlight}
+            onCopyAll={handleCopyAll}
+            onCopyType={handleCopyType}
+            onBack={handleBack}
+            onUnlockClick={() => setShowReauthModal(true)}
+            onRelockClick={() => vault.relock("manual")}
+            textPanelRef={textPanelRef}
+          />
+        ) : !hasDocument && reviewerPreviouslyCompleted ? (
+          /* ─── Completed Reviewer read-only overview (re-entry only) ──────── */
           <div className="flex-1 flex items-center justify-center p-8">
             <div className="w-full max-w-lg space-y-6">
               <div className="text-center">
@@ -1881,33 +1934,6 @@ export default function Reviewer() {
               </div>
             </div>
           </div>
-        ) : toolState === "success" && output ? (
-          /* ─── Results mode (post-run) ────────────────── */
-          <ResultsMode
-            output={output}
-            reconciliationResult={reconciliationResult}
-            reviewTier={reviewTier}
-            notesSource={notesSource}
-            vault={vault}
-            selectedFile={selectedFile}
-            fileName={fileName}
-            pageCount={pageCount}
-            extractedPages={extractedPages}
-            extractedFullText={extractedFullText}
-            activeSnippet={activeSnippet}
-            artifactStatus={artifactStatus}
-            copiedCategory={copiedCategory}
-            schemaFields={schemaFields}
-            parserArtifact={parserArtifact}
-            toolState={toolState}
-            onHighlight={handleHighlight}
-            onCopyAll={handleCopyAll}
-            onCopyType={handleCopyType}
-            onBack={handleBack}
-            onUnlockClick={() => setShowReauthModal(true)}
-            onRelockClick={() => vault.relock("manual")}
-            textPanelRef={textPanelRef}
-          />
         ) : (
           /* ─── Pre-run workspace layout ─────────────────── */
           <div className="flex-1 overflow-hidden flex flex-col lg:flex-row">
