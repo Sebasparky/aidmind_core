@@ -419,38 +419,24 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                         </Button>
                       )}
                       
-                      {!session.sessionCompleted && (
+                    {!allToolsAddressed && !session.sessionCompleted && (
                         <div className="ml-auto">
                           <TooltipProvider>
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                {allToolsUsed || allToolsAddressed ? (
-                                  <Button
-                                    variant="default"
-                                    size="sm"
-                                    className="gap-1.5 text-xs"
-                                    onClick={() => handleMarkDoneClick(session)}
-                                    disabled={closingSessionId === session.sessionId}
-                                    data-tour="close-session"
-                                  >
-                                    <CheckCircle2 className="h-3.5 w-3.5" />
-                                    Done
-                                  </Button>
-                                ) : (
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                                    onClick={() => handleCloseSessionClick(session)}
-                                    disabled={closingSessionId === session.sessionId}
-                                    data-tour="close-session"
-                                  >
-                                    <X className="h-4 w-4" />
-                                  </Button>
-                                )}
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                  onClick={() => handleCloseSessionClick(session)}
+                                  disabled={closingSessionId === session.sessionId}
+                                  data-tour="close-session"
+                                >
+                                  <X className="h-4 w-4" />
+                                </Button>
                               </TooltipTrigger>
                               <TooltipContent>
-                                <p>{allToolsUsed ? "Mark session as done" : "Close early"}</p>
+                                <p>Close early</p>
                               </TooltipContent>
                             </Tooltip>
                           </TooltipProvider>
@@ -459,8 +445,8 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                     </div>
                   </div>
 
-                  {/* Session complete — refined, calm */}
-                  {session.sessionCompleted && (
+                  {/* Session complete — unified for both completed and addressed-via-skip */}
+                  {(session.sessionCompleted || allToolsAddressed) && (
                     <div className="px-4 pb-3 pt-1">
                       <div
                         className="rounded-lg border border-border bg-muted/30 px-4 py-2.5 flex items-center justify-between cursor-pointer hover:bg-muted/50 transition-colors"
