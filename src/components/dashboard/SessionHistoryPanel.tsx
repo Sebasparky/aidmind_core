@@ -300,7 +300,7 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
       <SessionDetailDrawer
         open={drawerOpen}
         onOpenChange={setDrawerOpen}
-        session={selectedSession ? { ...selectedSession, ...getToolUsage(usageMap, selectedSession.sessionId) } : null}
+        session={selectedSession}
       />
     </>
   );
