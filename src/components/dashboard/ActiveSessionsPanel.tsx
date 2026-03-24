@@ -446,7 +446,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                   {session.sessionCompleted && (
                     <div className="px-4 pb-3 pt-1">
                       <div
-                        className="rounded-lg border border-[hsl(var(--status-success))]/20 bg-[hsl(var(--status-success-muted))]/30 px-4 py-2.5 flex items-center justify-between cursor-pointer hover:bg-[hsl(var(--status-success-muted))]/50 transition-colors"
+                        className="rounded-lg border border-border bg-muted/30 px-4 py-2.5 flex items-center justify-between cursor-pointer hover:bg-muted/50 transition-colors"
                         onClick={() => handleMarkDoneClick(session)}
                       >
                         <div className="flex items-center gap-2">
