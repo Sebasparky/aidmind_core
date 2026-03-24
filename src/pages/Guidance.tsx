@@ -140,13 +140,29 @@ export default function Guidance() {
     navigate("/dashboard");
   };
 
-  // Skip Guidance: true no-LLM bypass. Only available when downstream
-  // readiness (phase2 schema) already exists. No hidden setup work.
+  // Skip Guidance: true no-LLM bypass.
+  // If session already has phase2_schema_id, just write skip metadata.
+  // If not but a reusable ready schema exists for the template, link it
+  // to the session (a single DB write) then write skip metadata.
+  // No guidance-question LLM call. No schema generation.
   const handleSkipGuidance = async () => {
     if (!session || !session.templateId || !session.skipReady) return;
     setSkipping(true);
     try {
-      // Persist skip marker in session metadata — no LLM calls, no schema generation
+      // Link reusable schema to session if not already linked
+      if (session.reusableSchemaId) {
+        const { error: linkErr } = await supabase
+          .from("sessions")
+          .update({ phase2_schema_id: session.reusableSchemaId })
+          .eq("id", session.id);
+        if (linkErr) {
+          console.error("[Guidance] Failed to link reusable schema:", linkErr.message);
+        } else {
+          console.log("[Guidance] Linked reusable schema to session:", session.reusableSchemaId);
+        }
+      }
+
+      // Persist skip marker in session metadata
       const { data: current } = await supabase
         .from("sessions")
         .select("metadata")
