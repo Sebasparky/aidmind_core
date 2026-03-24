@@ -359,9 +359,9 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                       )}
                       {session.caseNotesCompleted ? (
                         <Button
-                          variant="default"
+                          variant="outline"
                           size="sm"
-                          className="gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+                          className="gap-1.5 text-xs text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30 hover:bg-[hsl(var(--status-success-muted))]/40"
                           onClick={() => navigate(`/sessions/${session.sessionId}/case-notes`)}
                         >
                           <CheckCircle2 className="h-3.5 w-3.5" />
