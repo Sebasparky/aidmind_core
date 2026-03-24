@@ -354,13 +354,13 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                         <Button
                           variant="outline"
                           size="sm"
-                          className="gap-1.5 text-xs text-muted-foreground"
+                          className="gap-1.5 text-xs text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30 hover:bg-[hsl(var(--status-success-muted))]/40"
                           onClick={() => handleGenerateGuidance(session)}
                           data-tour="guidance-button"
                         >
                           <SkipForward className="h-3.5 w-3.5" />
                           Guidance
-                          <Badge variant="secondary" className="text-[9px] px-1 py-0 h-3.5 ml-0.5">skipped</Badge>
+                          <Badge variant="secondary" className="text-[9px] px-1 py-0 h-3.5 ml-0.5 bg-muted text-muted-foreground">skipped</Badge>
                         </Button>
                       ) : (
                         <Button
