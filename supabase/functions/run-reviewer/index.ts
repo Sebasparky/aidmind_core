@@ -84,6 +84,17 @@ YOUR PRIMARY JOB:
 - Anchor each finding to a specific, short excerpt (≤ 30 words)
 - Provide a clear explanation of why the span is potentially problematic
 
+SPAN BOUNDARY RULES — CRITICAL FOR STABILITY:
+These rules are mandatory. Violating them degrades trust and reproducibility.
+
+1. EXACT QUOTING: Every excerpt must be an exact, verbatim substring of the document text. Do not paraphrase, shorten, or rephrase.
+2. MINIMAL SPANS: Each excerpt must contain ONLY the specific problematic phrase or sentence. Do not include surrounding context, preamble, or adjacent text that is not itself problematic.
+3. ONE ISSUE = ONE SPAN: If a single sentence contains one problematic element, report that sentence as one finding. Do not split it into multiple overlapping findings targeting different words within the same clause.
+4. INDEPENDENT ISSUES ONLY: Only report two separate findings from nearby text if they are genuinely independent problems that could each stand alone. If they are aspects of the same concern, report them as one finding anchored to the most problematic clause.
+5. NO MERGING DISTANT SPANS: Do not combine two sentences from different parts of the document into a single excerpt. Each finding must be anchored to one contiguous span.
+6. SENTENCE-LEVEL ANCHORING: Prefer anchoring to the exact sentence or clause that contains the problematic language. Do not anchor to a paragraph or multi-sentence block.
+7. DETERMINISTIC BOUNDARIES: Given the same input text, always select the same span boundaries. Do not vary span selection based on surrounding context that does not change the meaning of the span itself.
+
 You receive a STRUCTURED REVIEW PACKET containing:
 1. "review_worthy_answers" — AUTHORED TEXT FIELDS (narratives, comments, summaries). PRIMARY targets.
 2. "structured_answers" — narrative-eligible recovered field values. Context only.
@@ -120,6 +131,8 @@ WHAT YOU MUST NOT DO:
 5. Do NOT flag quoted speech unless the caseworker adopts it.
 6. Do NOT produce vague findings without a clear anchored excerpt.
 7. Do NOT report the same problematic span multiple times — report it ONCE with your best category guess.
+8. Do NOT merge two distinct problematic phrases from different sentences into one excerpt.
+9. Do NOT split one sentence into multiple findings unless the issues are clearly independent.
 
 SELF-ASSESSMENT:
 Report your own assessment of review quality:
@@ -154,7 +167,7 @@ OUTPUT SCHEMA (return ONLY this JSON):
     {
       "type": "completeness | policy_language | tone | bias | unsupported_conclusion | consistency",
       "severity": "low | medium | high",
-      "excerpt": "short excerpt from the document (≤ 30 words)",
+      "excerpt": "exact verbatim substring from the document (≤ 30 words)",
       "explanation": "why this is problematic",
       "field_key": "optional — the field this relates to"
     }
@@ -169,7 +182,7 @@ STRICT RULES:
 1. Produce ONLY a JSON report. No markdown, no commentary.
 2. Do NOT rewrite or suggest replacement text.
 3. Do NOT act like an editor — you are a detection layer.
-4. Keep excerpts short (≤ 30 words).
+4. Keep excerpts short (≤ 30 words), exact, and verbatim.
 5. Focus on concrete, identifiable issues.
 6. If the document is well-written and compliant, return zero issues.
 7. ONE finding per problematic span — do not duplicate.

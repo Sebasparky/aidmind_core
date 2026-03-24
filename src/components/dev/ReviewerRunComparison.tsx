@@ -275,7 +275,7 @@ export function ReviewerRunComparison() {
                     <p className="text-xs text-muted-foreground leading-relaxed">
                       {firstDivergence === "input_validated" && "Input hashes differ despite same document — check field recovery, reconciliation, or trigger scanner."}
                       {firstDivergence === "prompt_assembled" && "Prompt assembly produced different text — check language trigger metadata, reconciliation context, or field ordering."}
-                      {firstDivergence === "llm_response_parsed" && "LLM returned different candidates for the same prompt. This is the expected nondeterminism source — the model's response varies between calls even at temperature=0.15."}
+                      {firstDivergence === "llm_response_parsed" && "LLM returned different candidates for the same prompt. The model's response varied between calls despite temperature=0. This may indicate provider-side nondeterminism."}
                       {firstDivergence === "prefiltered" && "Pre-filtering produced different results despite same LLM output — check blocked field logic."}
                       {firstDivergence === "dce_completed" && "DCE produced different results from same input candidates — this would be a classifier bug."}
                       {firstDivergence === "final_emission" && "Final emission diverged despite DCE match — check risk/confidence/coverage recalculation."}
