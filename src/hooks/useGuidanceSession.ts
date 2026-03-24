@@ -295,6 +295,27 @@ export function useGuidanceSession(sessionId: string | undefined) {
         setSession((prev) => prev ? { ...prev, guidanceOutput: output } : prev);
         setRunState("success");
 
+        // Clear any prior skip marker now that real guidance has been generated
+        // This keeps state honest: a session should never have both
+        // guidance_skipped_at and guidance_phase1 simultaneously.
+        try {
+          const { data: currentMeta } = await supabase
+            .from("sessions")
+            .select("metadata")
+            .eq("id", session.id)
+            .maybeSingle();
+          const meta = (currentMeta?.metadata as Record<string, unknown>) ?? {};
+          if (meta.guidance_skipped_at) {
+            const { guidance_skipped_at: _removed, ...cleanMeta } = meta;
+            await supabase
+              .from("sessions")
+              .update({ metadata: cleanMeta as unknown as Record<string, never>, updated_at: new Date().toISOString() })
+              .eq("id", session.id);
+          }
+        } catch (err) {
+          console.warn("[useGuidanceSession] Failed to clear skip marker after generation:", err);
+        }
+
         await logEvent({
           eventType: "tool.run.completed",
           sessionId: session.sessionId,
