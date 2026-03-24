@@ -1,4 +1,4 @@
-import { History, CheckCircle2, XCircle, LogOut, X } from "lucide-react";
+import { History, CheckCircle2, XCircle, LogOut } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,7 +12,7 @@ import type { SessionOutcome } from "./SessionHistoryPanel";
 
 /**
  * Session Detail Drawer: Read-only summary of a closed session.
- * Shows accurate outcome status and tool usage derived from eye_events.
+ * Shows accurate outcome status and tool usage derived from session metadata.
  */
 
 interface SessionDetailDrawerProps {
@@ -25,9 +25,10 @@ interface SessionDetailDrawerProps {
     interactionType: string;
     outcome: SessionOutcome;
     completedAt: Date;
-    guidanceUsed: boolean;
-    reviewerUsed: boolean;
-    toolCount: number;
+    guidanceCompleted: boolean;
+    guidanceSkipped: boolean;
+    caseNotesCompleted: boolean;
+    reviewerCompleted: boolean;
   } | null;
 }
 
@@ -67,6 +68,19 @@ function formatFullDate(date: Date): string {
   });
 }
 
+type ToolStatus = "completed" | "skipped" | "not_used";
+
+function getToolStatusBadge(status: ToolStatus) {
+  switch (status) {
+    case "completed":
+      return <Badge variant="default">Completed</Badge>;
+    case "skipped":
+      return <Badge variant="secondary">Skipped</Badge>;
+    case "not_used":
+      return <Badge variant="outline">Not used</Badge>;
+  }
+}
+
 export function SessionDetailDrawer({
   open,
   onOpenChange,
@@ -75,6 +89,20 @@ export function SessionDetailDrawer({
   if (!session) return null;
 
   const OutcomeIcon = getOutcomeIcon(session.outcome);
+
+  // Derive tool statuses from metadata
+  const guidanceStatus: ToolStatus = session.guidanceCompleted
+    ? "completed"
+    : session.guidanceSkipped
+      ? "skipped"
+      : "not_used";
+
+  const caseNotesStatus: ToolStatus = session.caseNotesCompleted ? "completed" : "not_used";
+  const reviewerStatus: ToolStatus = session.reviewerCompleted ? "completed" : "not_used";
+
+  // Skipped counts as addressed for the total
+  const guidanceAddressed = guidanceStatus !== "not_used";
+  const toolCount = (guidanceAddressed ? 1 : 0) + (session.caseNotesCompleted ? 1 : 0) + (session.reviewerCompleted ? 1 : 0);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -130,28 +158,28 @@ export function SessionDetailDrawer({
             </div>
           </div>
 
-          {/* Tool Usage Summary */}
+          {/* Tool Usage Summary — 3-tool model */}
           <div className="border-t border-border pt-6">
             <div className="flex items-center justify-between mb-3">
               <p className="text-sm font-medium text-foreground">
                 Tools Used
               </p>
               <span className="text-xs text-muted-foreground">
-                {session.toolCount}/2
+                {toolCount}/3
               </span>
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-muted/50">
                 <span className="text-sm text-foreground">Guidance</span>
-                <Badge variant={session.guidanceUsed ? "default" : "outline"}>
-                  {session.guidanceUsed ? "Used" : "Not used"}
-                </Badge>
+                {getToolStatusBadge(guidanceStatus)}
+              </div>
+              <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-muted/50">
+                <span className="text-sm text-foreground">Case Notes</span>
+                {getToolStatusBadge(caseNotesStatus)}
               </div>
               <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-muted/50">
                 <span className="text-sm text-foreground">Reviewer</span>
-                <Badge variant={session.reviewerUsed ? "default" : "outline"}>
-                  {session.reviewerUsed ? "Used" : "Not used"}
-                </Badge>
+                {getToolStatusBadge(reviewerStatus)}
               </div>
             </div>
           </div>

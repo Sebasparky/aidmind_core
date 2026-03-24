@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SessionDetailDrawer } from "./SessionDetailDrawer";
 import { useRecentNotes } from "@/hooks/useRecentNotes";
-import { useSessionToolUsage, getToolUsage } from "@/hooks/useSessionToolUsage";
+
 import { cn } from "@/lib/utils";
 import { useDashboard } from "@/contexts/DashboardContext";
 
@@ -19,6 +19,10 @@ interface HistoricalSession {
   interactionType: string;
   outcome: SessionOutcome;
   completedAt: Date;
+  guidanceCompleted: boolean;
+  guidanceSkipped: boolean;
+  caseNotesCompleted: boolean;
+  reviewerCompleted: boolean;
 }
 
 function formatDate(date: Date): string {
@@ -93,13 +97,13 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
           interactionType: note.interactionType || "Documentation",
           outcome,
           completedAt: note.updatedAt,
+          guidanceCompleted: note.guidanceCompleted,
+          guidanceSkipped: note.guidanceSkipped,
+          caseNotesCompleted: note.caseNotesCompleted,
+          reviewerCompleted: note.reviewerCompleted,
         };
       });
   }, [notes]);
-
-  // Derive tool usage from eye_events
-  const sessionIds = useMemo(() => historicalSessions.map((s) => s.sessionId), [historicalSessions]);
-  const { usageMap } = useSessionToolUsage(sessionIds);
 
   // Register history session IDs into context
   useEffect(() => {
@@ -242,7 +246,8 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
             <div className="space-y-1">
               {filteredSessions.map((session) => {
                 const OutcomeIcon = getOutcomeIcon(session.outcome);
-                const usage = getToolUsage(usageMap, session.sessionId);
+                const guidanceAddressed = session.guidanceCompleted || session.guidanceSkipped;
+                const toolCount = (guidanceAddressed ? 1 : 0) + (session.caseNotesCompleted ? 1 : 0) + (session.reviewerCompleted ? 1 : 0);
                 return (
                   <button
                     key={session.id}
@@ -275,7 +280,7 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
                             {getOutcomeLabel(session.outcome)}
                           </Badge>
                           <span className="text-xs text-muted-foreground">
-                            Tools: {usage.toolCount}/2
+                            Tools: {toolCount}/3
                           </span>
                           <span className="text-xs text-muted-foreground">
                             {formatDate(session.completedAt)}
@@ -295,7 +300,7 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
       <SessionDetailDrawer
         open={drawerOpen}
         onOpenChange={setDrawerOpen}
-        session={selectedSession ? { ...selectedSession, ...getToolUsage(usageMap, selectedSession.sessionId) } : null}
+        session={selectedSession}
       />
     </>
   );
