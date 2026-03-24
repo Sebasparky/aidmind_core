@@ -1,12 +1,13 @@
 /**
- * run-reviewer v3.2 Edge Function — deterministic classification engine
+ * run-reviewer v3.3 Edge Function — deterministic classification engine
  *
- * v3.2 changes:
- *   - Full deterministic classification pipeline via _shared/deterministic-classifier
- *   - LLM prompt refactored: model is a conservative candidate span detector, not final authority
- *   - Lovable AI gateway instead of direct OpenAI
- *   - Staged pipeline: detect → normalize → classify → resolve → calibrate → align → emit
- *   - DCE stats logged to Eye for observability
+ * v3.3 changes:
+ *   - DCE v2: category-pure explanations, borderline observational guardrail
+ *   - Stronger overlap merging (50% threshold, same-field proximity)
+ *   - UC priority raised above tone for overclaiming spans
+ *   - Deterministic final ordering: primary→secondary, severity, category, excerpt
+ *   - Explanation validation pass strips cross-category vocabulary
+ *   - borderline_suppressed stat tracked
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";

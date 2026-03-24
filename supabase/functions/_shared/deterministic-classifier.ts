@@ -1,18 +1,16 @@
 /**
- * Deterministic Classifier for Reviewer — Edge-function-safe version
+ * Deterministic Classifier v2 for Reviewer — Edge-function-safe version
  *
  * Mirrors src/lib/tools/reviewer-deterministic-classifier.ts for use
  * inside Supabase Edge Functions (Deno runtime, no src/ imports).
  *
- * Pipeline stages:
- *   1. Normalize excerpts
- *   2. Match rules against each candidate
- *   3. Apply deterministic category assignment
- *   4. Group overlapping spans
- *   5. Resolve category conflicts within groups
- *   6. Calibrate severity
- *   7. Align explanations
- *   8. Emit final deduplicated findings
+ * v2 changes:
+ *   - Category-pure explanation templates (no cross-category bleed)
+ *   - Borderline observational language guardrail
+ *   - Stronger overlap merging (50% threshold, same-field proximity)
+ *   - Tighter dominant-category resolution (UC > tone when overclaiming)
+ *   - Deterministic final ordering
+ *   - Explanation validation pass
  */
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -96,6 +94,15 @@ const TONE_RULES: CategoryRule[] = [
     ],
     override_strength: "weak",
     severity_cap: "medium",
+  },
+  {
+    id: "tone_unfit_label",
+    category: "tone",
+    patterns: [
+      /\b(unfit\s+(?:parent|mother|father|caregiver))\b/i,
+    ],
+    override_strength: "strong",
+    severity_floor: "medium",
   },
 ];
 
@@ -194,6 +201,27 @@ const UNSUPPORTED_CONCLUSION_RULES: CategoryRule[] = [
     override_strength: "strong",
     severity_floor: "high",
   },
+  {
+    id: "uc_future_prediction",
+    category: "unsupported_conclusion",
+    patterns: [
+      /\b(will\s+(?:almost\s+)?certainly|will\s+(?:undoubtedly|inevitably|definitely))\b/i,
+      /\b(is\s+(?:destined|doomed|bound)\s+to)\b/i,
+    ],
+    override_strength: "strong",
+    severity_floor: "medium",
+  },
+  {
+    id: "uc_pattern_assertion",
+    category: "unsupported_conclusion",
+    patterns: [
+      /\b(consistent\s+with\s+(?:a\s+)?(?:neglectful|abusive|dangerous|unsafe)\s+(?:home|household|family|environment|pattern))\b/i,
+      /\b(treated\s+as\s+(?:high[- ]risk|dangerous|unsafe))\b/i,
+      /\b((?:clearly|obviously)\s+inadequate)\b/i,
+    ],
+    override_strength: "strong",
+    severity_floor: "medium",
+  },
 ];
 
 const POLICY_RULES: CategoryRule[] = [
@@ -233,6 +261,32 @@ const ALL_RULES: CategoryRule[] = [
   ...POLICY_RULES,
 ];
 
+// ── Borderline Observational Language Guardrail ──────────────────────────
+
+const OBSERVATIONAL_SAFE_PATTERNS: RegExp[] = [
+  /\b(appears?\s+to\s+be)\b/i,
+  /\b(seems?\s+to\s+be)\b/i,
+  /\b(observed\s+that)\b/i,
+  /\b(reported\s+that)\b/i,
+  /\b((?:home|house|apartment|residence)\s+(?:was|appeared?)\s+(?:cluttered|messy|disorganized|untidy))\b/i,
+  /\b(food\s+(?:was|appeared?)\s+limited)\b/i,
+  /\b(children\s+(?:appeared?|seemed?)\s+(?:tired|quiet|withdrawn|upset|hungry))\b/i,
+  /\b(appeared?\s+(?:to\s+have|stressed|anxious|upset|tired|overwhelmed))\b/i,
+  /\b(seemed?\s+(?:stressed|anxious|upset|tired|overwhelmed|concerned|worried))\b/i,
+  /\b(carrying\s+the\s+stress)\b/i,
+  /\b(in\s+disarray)\b/i,
+];
+
+function isBorderlineObservational(excerpt: string, ruleMatches: RuleMatch[]): boolean {
+  const hasObservational = OBSERVATIONAL_SAFE_PATTERNS.some(p => p.test(excerpt));
+  if (!hasObservational) return false;
+  const hasStrongMatch = ruleMatches.some(m => m.rule.override_strength === "strong");
+  if (hasStrongMatch) return false;
+  const hasModerateMatch = ruleMatches.some(m => m.rule.override_strength === "moderate");
+  if (hasModerateMatch) return false;
+  return true;
+}
+
 // ── Span Normalization ───────────────────────────────────────────────────
 
 function normalizeExcerpt(excerpt: string): string {
@@ -254,7 +308,23 @@ function excerptOverlaps(a: string, b: string): boolean {
   const wordsB = new Set(nb.split(/\s+/));
   const intersection = [...wordsA].filter(w => wordsB.has(w));
   const smaller = Math.min(wordsA.size, wordsB.size);
-  if (smaller > 0 && intersection.length / smaller >= 0.6) return true;
+  if (smaller > 0 && intersection.length / smaller >= 0.5) return true;
+  return false;
+}
+
+function areSameOrAdjacentSentence(a: string, b: string): boolean {
+  const na = normalizeExcerpt(a);
+  const nb = normalizeExcerpt(b);
+  if (!na || !nb) return false;
+  const wordsA = na.split(/\s+/);
+  const wordsB = nb.split(/\s+/);
+  const prefixLen = Math.min(5, wordsA.length, wordsB.length);
+  let commonPrefix = 0;
+  for (let i = 0; i < prefixLen; i++) {
+    if (wordsA[i] === wordsB[i]) commonPrefix++;
+    else break;
+  }
+  if (commonPrefix >= 3) return true;
   return false;
 }
 
@@ -288,9 +358,9 @@ function matchRulesAgainstExcerpt(excerpt: string): RuleMatch[] {
 
 const CATEGORY_PRIORITY: Record<IssueType, number> = {
   policy_language: 5,
-  tone: 4,
+  unsupported_conclusion: 4,
+  tone: 3,
   bias: 3,
-  unsupported_conclusion: 2,
   completeness: 1,
   consistency: 1,
 };
@@ -305,38 +375,47 @@ function resolveOverlappingCategories(
   if (typeA === "completeness" || typeA === "consistency") return null;
   if (typeB === "completeness" || typeB === "consistency") return null;
 
-  if ((typeA === "tone" && typeB === "bias") || (typeA === "bias" && typeB === "tone")) {
-    const toneStrength = ruleMatchesA
-      .filter(m => m.rule.category === "tone")
-      .reduce((sum, m) => sum + m.matchCount, 0);
-    const biasStrength = ruleMatchesB
-      .filter(m => m.rule.category === "bias")
-      .reduce((sum, m) => sum + m.matchCount, 0);
-    return toneStrength >= biasStrength ? "tone" : "bias";
-  }
+  if (typeA === "policy_language") return typeA;
+  if (typeB === "policy_language") return typeB;
 
   if (
     (typeA === "unsupported_conclusion" && typeB === "tone") ||
     (typeA === "tone" && typeB === "unsupported_conclusion")
   ) {
-    const hasUcStrong = [...ruleMatchesA, ...ruleMatchesB].some(
+    const ucStrong = [...ruleMatchesA, ...ruleMatchesB].filter(
       m => m.rule.category === "unsupported_conclusion" && m.rule.override_strength === "strong"
     );
-    return hasUcStrong ? "unsupported_conclusion" : "tone";
+    const toneStrong = [...ruleMatchesA, ...ruleMatchesB].filter(
+      m => m.rule.category === "tone" && m.rule.override_strength === "strong"
+    );
+    if (ucStrong.length > 0) {
+      const ucHits = ucStrong.reduce((s, m) => s + m.matchCount, 0);
+      const toneHits = toneStrong.reduce((s, m) => s + m.matchCount, 0);
+      return ucHits >= toneHits ? "unsupported_conclusion" : "tone";
+    }
+    return "tone";
   }
 
   if (
     (typeA === "unsupported_conclusion" && typeB === "bias") ||
     (typeA === "bias" && typeB === "unsupported_conclusion")
   ) {
-    const hasUcStrong = [...ruleMatchesA, ...ruleMatchesB].some(
+    const ucStrong = [...ruleMatchesA, ...ruleMatchesB].some(
       m => m.rule.category === "unsupported_conclusion" && m.rule.override_strength === "strong"
     );
-    return hasUcStrong ? "unsupported_conclusion" : "bias";
+    return ucStrong ? "unsupported_conclusion" : "bias";
   }
 
-  if (typeA === "policy_language") return typeA;
-  if (typeB === "policy_language") return typeB;
+  if ((typeA === "tone" && typeB === "bias") || (typeA === "bias" && typeB === "tone")) {
+    const allMatches = [...ruleMatchesA, ...ruleMatchesB];
+    const toneHits = allMatches
+      .filter(m => m.rule.category === "tone")
+      .reduce((sum, m) => sum + m.matchCount, 0);
+    const biasHits = allMatches
+      .filter(m => m.rule.category === "bias")
+      .reduce((sum, m) => sum + m.matchCount, 0);
+    return toneHits >= biasHits ? "tone" : "bias";
+  }
 
   return CATEGORY_PRIORITY[typeA] >= CATEGORY_PRIORITY[typeB] ? typeA : typeB;
 }
@@ -355,7 +434,11 @@ function calibrateSeverity(
   }
   let adjustedSeverity = llmSeverity;
   let wasAdjusted = false;
-  for (const { rule } of ruleMatches) {
+
+  const relevantMatches = ruleMatches.filter(m => m.rule.category === _finalCategory);
+  const matchesToUse = relevantMatches.length > 0 ? relevantMatches : ruleMatches;
+
+  for (const { rule } of matchesToUse) {
     if (rule.severity_floor && SEVERITY_ORDER[adjustedSeverity] < SEVERITY_ORDER[rule.severity_floor]) {
       adjustedSeverity = rule.severity_floor;
       wasAdjusted = true;
@@ -368,21 +451,52 @@ function calibrateSeverity(
   return { severity: adjustedSeverity, adjusted: wasAdjusted };
 }
 
-// ── Explanation Alignment ────────────────────────────────────────────────
+// ── Explanation Alignment v2 ─────────────────────────────────────────────
 
-const CATEGORY_EXPLANATION_PREFIXES: Record<IssueType, string[]> = {
-  tone: ["uses judgmental", "unprofessional", "emotionally charged", "blaming", "shaming", "condescending", "judgmental tone", "moralizing"],
-  bias: ["labels the person", "stigmatizing", "stereotype", "assumption", "unsupported generalization", "bias", "discriminatory"],
-  unsupported_conclusion: ["reaches a conclusion", "without sufficient evidence", "stated as fact", "certainty stronger than", "overclaims", "unsupported", "infers intent", "attributes motive"],
-  policy_language: ["prohibited term", "policy", "informal language", "unprofessional terminology"],
-  completeness: ["blank", "empty", "missing", "insufficient"],
-  consistency: ["contradicts", "differs from", "inconsistent"],
+const CATEGORY_TEMPLATES: Record<IssueType, {
+  prefix: string;
+  allowed_terms: string[];
+  forbidden_terms: string[];
+}> = {
+  tone: {
+    prefix: "Uses judgmental or unprofessional language",
+    allowed_terms: ["judgmental", "unprofessional", "emotionally charged", "blaming", "shaming", "condescending", "moralizing", "characterization", "loaded language", "tone"],
+    forbidden_terms: ["unsupported conclusion", "overclaim", "without sufficient evidence", "certainty stronger", "stated as fact", "infers intent", "attributes motive", "stigmatizing label", "stereotype"],
+  },
+  bias: {
+    prefix: "Contains stigmatizing or biased language",
+    allowed_terms: ["stigmatizing", "labels the person", "stereotype", "assumption", "bias", "discriminatory", "dehumanizing", "person-labeling", "generalization"],
+    forbidden_terms: ["judgmental tone", "unprofessional", "moralizing", "overclaim", "without sufficient evidence", "certainty stronger", "stated as fact"],
+  },
+  unsupported_conclusion: {
+    prefix: "Reaches a conclusion without sufficient supporting evidence",
+    allowed_terms: ["conclusion", "without sufficient evidence", "stated as fact", "certainty stronger", "overclaim", "unsupported", "infers intent", "attributes motive", "prediction", "assertion"],
+    forbidden_terms: ["judgmental tone", "unprofessional", "moralizing", "blaming", "shaming", "stigmatizing label", "stereotype", "person-labeling"],
+  },
+  policy_language: {
+    prefix: "Uses prohibited or policy-inconsistent terminology",
+    allowed_terms: ["prohibited term", "policy", "informal language", "unprofessional terminology", "documentation standards"],
+    forbidden_terms: [],
+  },
+  completeness: {
+    prefix: "Required narrative section appears blank or incomplete",
+    allowed_terms: ["blank", "empty", "missing", "insufficient", "incomplete"],
+    forbidden_terms: [],
+  },
+  consistency: {
+    prefix: "Information differs between sources",
+    allowed_terms: ["contradicts", "differs from", "inconsistent", "discrepancy"],
+    forbidden_terms: [],
+  },
 };
 
 function isExplanationAligned(explanation: string, category: IssueType): boolean {
-  const prefixes = CATEGORY_EXPLANATION_PREFIXES[category] ?? [];
+  const template = CATEGORY_TEMPLATES[category];
+  if (!template) return true;
   const lower = explanation.toLowerCase();
-  return prefixes.some(p => lower.includes(p));
+  const hasAllowed = template.allowed_terms.some(t => lower.includes(t));
+  const hasForbidden = template.forbidden_terms.some(t => lower.includes(t));
+  return hasAllowed && !hasForbidden;
 }
 
 function alignExplanation(
@@ -390,22 +504,34 @@ function alignExplanation(
   originalCategory: IssueType,
   finalCategory: IssueType,
 ): string {
-  if (originalCategory === finalCategory) return explanation;
-  if (isExplanationAligned(explanation, finalCategory)) return explanation;
+  const template = CATEGORY_TEMPLATES[finalCategory];
+  if (!template) return explanation;
 
-  const framings: Record<IssueType, string> = {
-    tone: "Uses judgmental or unprofessional language —",
-    bias: "Contains stigmatizing language or unsupported assumptions —",
-    unsupported_conclusion: "Reaches a conclusion without sufficient supporting evidence —",
-    policy_language: "Uses prohibited or policy-inconsistent terminology —",
-    completeness: explanation,
-    consistency: explanation,
-  };
+  let cleaned = explanation;
+  for (const term of template.forbidden_terms) {
+    const re = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, "gi");
+    cleaned = cleaned.replace(re, "").replace(/\s{2,}/g, " ").replace(/\s*[—–-]\s*$/, "").trim();
+  }
 
-  const prefix = framings[finalCategory];
-  if (!prefix || prefix === explanation) return explanation;
-  if (explanation.toLowerCase().startsWith(prefix.toLowerCase().slice(0, 20))) return explanation;
-  return `${prefix} ${explanation.charAt(0).toLowerCase()}${explanation.slice(1)}`;
+  if (cleaned && isExplanationAligned(cleaned, finalCategory)) {
+    return cleaned;
+  }
+
+  if (cleaned && cleaned.length > 10) {
+    const existingPrefixes = Object.values(CATEGORY_TEMPLATES).map(t => t.prefix.toLowerCase());
+    let unprefixed = cleaned;
+    for (const p of existingPrefixes) {
+      if (unprefixed.toLowerCase().startsWith(p.slice(0, 20))) {
+        unprefixed = unprefixed.slice(p.length).replace(/^\s*[—–-]\s*/, "").trim();
+        break;
+      }
+    }
+    if (unprefixed.length > 5) {
+      return `${template.prefix} — ${unprefixed.charAt(0).toLowerCase()}${unprefixed.slice(1)}`;
+    }
+  }
+
+  return `${template.prefix}.`;
 }
 
 // ── Main Pipeline ────────────────────────────────────────────────────────
@@ -419,6 +545,7 @@ export interface ClassificationResult {
     category_overrides: number;
     severity_adjustments: number;
     overlap_merges: number;
+    borderline_suppressed: number;
   };
 }
 
@@ -432,44 +559,57 @@ export function classifyAndDeduplicate(
     category_overrides: 0,
     severity_adjustments: 0,
     overlap_merges: 0,
+    borderline_suppressed: 0,
   };
 
   if (candidates.length === 0) {
     return { issues: [], stats };
   }
 
-  // Stage 1+2: Analyze each candidate
   interface AnnotatedCandidate {
     candidate: CandidateIssue;
     normalizedExcerpt: string;
     ruleMatches: RuleMatch[];
     determinedCategory: IssueType;
     categorySource: "llm" | "rule_override" | "rule_confirmed";
+    suppressed: boolean;
   }
 
   const annotated: AnnotatedCandidate[] = candidates.map(candidate => {
-    const norm = normalizeExcerpt(candidate.excerpt);
+    const normalizedExcerpt = normalizeExcerpt(candidate.excerpt);
     const ruleMatches = matchRulesAgainstExcerpt(candidate.excerpt);
 
     let determinedCategory = candidate.type;
     let categorySource: "llm" | "rule_override" | "rule_confirmed" = "llm";
+    let suppressed = false;
 
-    if (ruleMatches.length > 0) {
+    if (["tone", "bias", "unsupported_conclusion"].includes(candidate.type)) {
+      if (isBorderlineObservational(candidate.excerpt, ruleMatches)) {
+        suppressed = true;
+        stats.borderline_suppressed++;
+      }
+    }
+
+    if (!suppressed && ruleMatches.length > 0) {
       const strongMatches = ruleMatches.filter(m => m.rule.override_strength === "strong");
       const moderateMatches = ruleMatches.filter(m => m.rule.override_strength === "moderate");
 
       if (strongMatches.length > 0) {
-        const strongCategory = strongMatches
-          .sort((a, b) => b.matchCount - a.matchCount)[0].rule.category;
+        const categoryHits = new Map<IssueType, number>();
+        for (const m of strongMatches) {
+          categoryHits.set(m.rule.category, (categoryHits.get(m.rule.category) ?? 0) + m.matchCount);
+        }
+        const bestCategory = [...categoryHits.entries()]
+          .sort((a, b) => b[1] - a[1])[0][0];
 
-        if (strongCategory === candidate.type) {
+        if (bestCategory === candidate.type) {
           categorySource = "rule_confirmed";
         } else {
           const isPrimaryOriginal = ["tone", "bias", "unsupported_conclusion", "policy_language"].includes(candidate.type);
-          const isPrimaryNew = ["tone", "bias", "unsupported_conclusion", "policy_language"].includes(strongCategory);
+          const isPrimaryNew = ["tone", "bias", "unsupported_conclusion", "policy_language"].includes(bestCategory);
 
           if ((isPrimaryOriginal && isPrimaryNew) || (!isPrimaryOriginal && isPrimaryNew)) {
-            determinedCategory = strongCategory;
+            determinedCategory = bestCategory;
             categorySource = "rule_override";
             stats.category_overrides++;
           } else {
@@ -485,32 +625,37 @@ export function classifyAndDeduplicate(
       }
     }
 
-    return { candidate, normalizedExcerpt: norm, ruleMatches, determinedCategory, categorySource };
+    return { candidate, normalizedExcerpt, ruleMatches, determinedCategory, categorySource, suppressed };
   });
 
-  // Stage 3: Group overlapping spans
+  const active = annotated.filter(a => !a.suppressed);
+
   interface SpanGroup { members: AnnotatedCandidate[] }
   const groups: SpanGroup[] = [];
   const assigned = new Set<number>();
 
-  for (let i = 0; i < annotated.length; i++) {
+  for (let i = 0; i < active.length; i++) {
     if (assigned.has(i)) continue;
-    const group: SpanGroup = { members: [annotated[i]] };
+    const group: SpanGroup = { members: [active[i]] };
     assigned.add(i);
-    for (let j = i + 1; j < annotated.length; j++) {
+
+    for (let j = i + 1; j < active.length; j++) {
       if (assigned.has(j)) continue;
-      const overlapsWithGroup = group.members.some(member =>
-        excerptOverlaps(member.candidate.excerpt, annotated[j].candidate.excerpt)
-      );
+      const overlapsWithGroup = group.members.some(member => {
+        if (excerptOverlaps(member.candidate.excerpt, active[j].candidate.excerpt)) return true;
+        if (member.candidate.field_key && member.candidate.field_key === active[j].candidate.field_key) {
+          if (areSameOrAdjacentSentence(member.candidate.excerpt, active[j].candidate.excerpt)) return true;
+        }
+        return false;
+      });
       if (overlapsWithGroup) {
-        group.members.push(annotated[j]);
+        group.members.push(active[j]);
         assigned.add(j);
       }
     }
     groups.push(group);
   }
 
-  // Stage 4: Resolve each group into final findings
   const finalIssues: ClassifiedIssue[] = [];
 
   for (const group of groups) {
@@ -545,7 +690,7 @@ export function classifyAndDeduplicate(
 
       if (uniqueCategories.length === 1) {
         stats.deduplicated += group.members.length - 1;
-        const best = group.members.sort((a, b) => {
+        const best = [...group.members].sort((a, b) => {
           const sevDiff = SEVERITY_ORDER[b.candidate.severity] - SEVERITY_ORDER[a.candidate.severity];
           if (sevDiff !== 0) return sevDiff;
           return b.candidate.excerpt.length - a.candidate.excerpt.length;
@@ -579,7 +724,7 @@ export function classifyAndDeduplicate(
         }
 
         const winnersMembers = categoryCounts.get(winnerCategory)?.members ?? group.members;
-        const best = winnersMembers.sort((a, b) => {
+        const best = [...winnersMembers].sort((a, b) => {
           const sevDiff = SEVERITY_ORDER[b.candidate.severity] - SEVERITY_ORDER[a.candidate.severity];
           if (sevDiff !== 0) return sevDiff;
           return b.candidate.excerpt.length - a.candidate.excerpt.length;
@@ -622,6 +767,42 @@ export function classifyAndDeduplicate(
           }
         }
       }
+    }
+  }
+
+  // Deterministic ordering
+  const CATEGORY_SORT_ORDER: Record<IssueType, number> = {
+    unsupported_conclusion: 0,
+    tone: 1,
+    bias: 2,
+    policy_language: 3,
+    completeness: 4,
+    consistency: 5,
+  };
+
+  finalIssues.sort((a, b) => {
+    const trackA = ["tone", "bias", "unsupported_conclusion", "policy_language"].includes(a.type) ? 0 : 1;
+    const trackB = ["tone", "bias", "unsupported_conclusion", "policy_language"].includes(b.type) ? 0 : 1;
+    if (trackA !== trackB) return trackA - trackB;
+
+    const sevDiff = SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity];
+    if (sevDiff !== 0) return sevDiff;
+
+    const catDiff = CATEGORY_SORT_ORDER[a.type] - CATEGORY_SORT_ORDER[b.type];
+    if (catDiff !== 0) return catDiff;
+
+    if (a.excerpt.length !== b.excerpt.length) return b.excerpt.length - a.excerpt.length;
+    return a.excerpt.localeCompare(b.excerpt);
+  });
+
+  // Final explanation validation pass
+  for (const issue of finalIssues) {
+    const template = CATEGORY_TEMPLATES[issue.type];
+    if (!template) continue;
+    const lower = issue.explanation.toLowerCase();
+    const hasForbidden = template.forbidden_terms.some(t => lower.includes(t));
+    if (hasForbidden) {
+      issue.explanation = alignExplanation(issue.explanation, issue.type, issue.type);
     }
   }
 
