@@ -280,7 +280,7 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
                             {getOutcomeLabel(session.outcome)}
                           </Badge>
                           <span className="text-xs text-muted-foreground">
-                            Tools: {usage.toolCount}/2
+                            Tools: {toolCount}/3
                           </span>
                           <span className="text-xs text-muted-foreground">
                             {formatDate(session.completedAt)}
