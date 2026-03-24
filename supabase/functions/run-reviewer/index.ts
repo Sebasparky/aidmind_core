@@ -572,7 +572,7 @@ serve(async (req) => {
 
     await eye(supabase, v2.session_id, "reviewer_v3.started", {
       tenant_id: session.tenant_id,
-      version: "3.2",
+      version: "3.3",
       doc_text_length: v2.document_text.length,
       structured_answers_count: v2.structured_answers?.length ?? 0,
       review_worthy_count: reviewWorthyCount,
