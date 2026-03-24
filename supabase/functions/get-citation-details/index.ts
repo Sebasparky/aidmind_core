@@ -26,6 +26,23 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
 
+    // Separate real UUIDs from virtual citations (e.g. "TEMPLATE")
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const realCitationIds = citation_ids.filter((id: string) => UUID_RE.test(id));
+    const virtualCitations = citation_ids.filter((id: string) => !UUID_RE.test(id));
+
+    // If no real citation IDs, return early with virtual-only info
+    if (realCitationIds.length === 0) {
+      return new Response(
+        JSON.stringify({
+          snippets: [],
+          unresolved: [],
+          virtual_citations: virtualCitations,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
     // 1. Get session's policy_pack_id
     const { data: session, error: sessErr } = await supabase
       .from("sessions")
@@ -36,7 +53,12 @@ Deno.serve(async (req) => {
     if (sessErr) throw sessErr;
     if (!session?.policy_pack_id) {
       return new Response(
-        JSON.stringify({ snippets: [], unresolved: citation_ids }),
+        JSON.stringify({
+          snippets: [],
+          unresolved: realCitationIds,
+          virtual_citations: virtualCitations,
+          resolution_note: "no_policy_pack",
+        }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
@@ -46,17 +68,17 @@ Deno.serve(async (req) => {
       .from("compiled_policy_pack_chunks")
       .select("chunk_id, chunk_index, document_id, similarity, rank")
       .eq("compiled_policy_pack_id", session.policy_pack_id)
-      .in("chunk_id", citation_ids);
+      .in("chunk_id", realCitationIds);
 
     if (pcErr) throw pcErr;
 
     const foundChunkIds = (packChunks ?? []).map((c: any) => c.chunk_id);
 
-    // 3. Fetch document_chunks content
+    // 3. Fetch document_chunks content + heading_path
     const { data: docChunks, error: dcErr } = foundChunkIds.length > 0
       ? await supabase
           .from("document_chunks")
-          .select("id, content, chunk_index")
+          .select("id, content, chunk_index, heading_path")
           .in("id", foundChunkIds)
       : { data: [], error: null };
 
@@ -67,35 +89,42 @@ Deno.serve(async (req) => {
     const { data: docs, error: dErr } = docIds.length > 0
       ? await supabase
           .from("kb_documents")
-          .select("id, title")
+          .select("id, title, source")
           .in("id", docIds)
       : { data: [], error: null };
 
     if (dErr) throw dErr;
 
     const chunkMap = new Map((docChunks ?? []).map((c: any) => [c.id, c]));
-    const docMap = new Map((docs ?? []).map((d: any) => [d.id, d.title]));
+    const docMap = new Map((docs ?? []).map((d: any) => [d.id, { title: d.title, source: d.source }]));
 
     const snippets = (packChunks ?? [])
       .sort((a: any, b: any) => (a.rank ?? 999) - (b.rank ?? 999))
       .map((pc: any) => {
         const chunk = chunkMap.get(pc.chunk_id);
+        const doc = docMap.get(pc.document_id);
         return {
           snippetId: pc.chunk_id,
           chunkText: chunk?.content ?? "",
           chunkIndex: chunk?.chunk_index ?? pc.chunk_index,
+          headingPath: chunk?.heading_path ?? null,
           documentId: pc.document_id,
-          documentTitle: docMap.get(pc.document_id) ?? "Unknown document",
+          documentTitle: doc?.title ?? "Unknown document",
+          documentSource: doc?.source ?? null,
           similarity: pc.similarity,
           rank: pc.rank,
         };
       });
 
     const resolvedSet = new Set(foundChunkIds);
-    const unresolved = citation_ids.filter((id: string) => !resolvedSet.has(id));
+    const unresolved = realCitationIds.filter((id: string) => !resolvedSet.has(id));
 
     return new Response(
-      JSON.stringify({ snippets, unresolved }),
+      JSON.stringify({
+        snippets,
+        unresolved,
+        virtual_citations: virtualCitations,
+      }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (err) {
