@@ -754,7 +754,18 @@ function ResultsMode({
               />
 
               {/* ── 2. Vault / Case Notes status ───────── */}
-              {vault.vaultState !== "empty" && (
+              {vaultRelocked && (
+                <div className="flex items-start gap-2.5 p-4 rounded-xl bg-muted/50 border border-border">
+                  <Lock className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs text-foreground font-medium">Case notes relocked</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Vault timed out during review. Language findings remain visible. Comparison data from notes may be stale.
+                    </p>
+                  </div>
+                </div>
+              )}
+              {vault.vaultState !== "empty" && !vaultRelocked && (
                 <VaultSection
                   vaultState={vault.vaultState}
                   metadata={vault.vaultMetadata}
