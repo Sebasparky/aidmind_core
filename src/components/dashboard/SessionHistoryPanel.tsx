@@ -97,6 +97,10 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
           interactionType: note.interactionType || "Documentation",
           outcome,
           completedAt: note.updatedAt,
+          guidanceCompleted: note.guidanceCompleted,
+          guidanceSkipped: note.guidanceSkipped,
+          caseNotesCompleted: note.caseNotesCompleted,
+          reviewerCompleted: note.reviewerCompleted,
         };
       });
   }, [notes]);
