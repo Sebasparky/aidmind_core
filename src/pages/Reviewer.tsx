@@ -40,6 +40,7 @@ import {
   computeEligibilityDiagnostics,
 } from "@/lib/tools/reviewer-eligibility";
 import { ReviewerVerificationPanel, type ReviewerDiagnostics, type NotesSourceType } from "@/components/dev/ReviewerVerificationPanel";
+import { ReviewerRunComparison } from "@/components/dev/ReviewerRunComparison";
 import type {
   ReviewerV2Report,
   ReviewIssue,
@@ -1507,6 +1508,18 @@ export default function Reviewer() {
         return;
       }
       if (!data?.review_report) throw new Error("Invalid response from reviewer");
+
+      // Push diagnostics to dev comparison panel
+      if (import.meta.env.DEV && data?._diagnostics) {
+        try {
+          const pusher = (window as any).__aidmind_push_reviewer_diagnostics;
+          if (typeof pusher === "function") {
+            pusher(data._diagnostics);
+            console.info("[Reviewer][Diag] Run diagnostics captured:", data._diagnostics.run_id);
+          }
+        } catch {}
+      }
+
       let report = data.review_report as ReviewerV2Report;
 
       const issuesBefore = report.issues.length;
@@ -2068,6 +2081,11 @@ export default function Reviewer() {
         )}
       </div>
       {import.meta.env.DEV && <ReviewerVerificationPanel diagnostics={devDiagnostics} />}
+      {import.meta.env.DEV && toolState === "success" && (
+        <div className="fixed bottom-4 right-4 z-50 w-[480px] max-h-[60vh] overflow-y-auto">
+          <ReviewerRunComparison />
+        </div>
+      )}
     </div>
   );
 }

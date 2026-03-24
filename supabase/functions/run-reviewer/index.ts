@@ -19,6 +19,15 @@ import {
   type CandidateIssue,
   type ClassifiedIssue,
 } from "../_shared/deterministic-classifier.ts";
+import {
+  hashDocumentText,
+  hashReviewPacket,
+  hashIssuesArray,
+  hashCandidates,
+  createRunId,
+  type ReviewerRunDiagnostics,
+  type ReviewerStageSnapshot,
+} from "../_shared/reviewer-diagnostics.ts";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -567,13 +576,48 @@ serve(async (req) => {
     if (!session) return errJson(404, "SESSION_NOT_FOUND", "Session not found");
     if (!session.tenant_id) return errJson(409, "NO_TENANT", "Session has no tenant_id");
 
+    // ── Diagnostics: Initialize ──────────────────────────────────────
+    const runId = createRunId();
+    const stages: ReviewerStageSnapshot[] = [];
+    const timestamps: Record<string, number> = { start: Date.now() };
+
     const hasReconciliation = !!v2.reconciliation_context;
     const reviewWorthyCount = v2.review_worthy_answers?.length ?? 0;
+
+    // ── Diagnostics: Input fingerprint ───────────────────────────────
+    const docTextHash = await hashDocumentText(v2.document_text);
+    const reviewWorthyKeys = (v2.review_worthy_answers ?? [])
+      .map(a => a.field_key).sort();
+    const unansweredKeys = (v2.unanswered_fields ?? [])
+      .map(f => f.field_key).sort();
+    const triggerCategories = v2.language_trigger_metadata
+      ? Object.keys(v2.language_trigger_metadata).filter(k => !k.startsWith("_")).sort()
+      : [];
+
+    stages.push({
+      stage: "input_validated",
+      hash: docTextHash,
+      counts: {
+        doc_text_length: v2.document_text.length,
+        review_worthy: reviewWorthyCount,
+        structured_answers: v2.structured_answers?.length ?? 0,
+        unanswered: v2.unanswered_fields?.length ?? 0,
+        human_review: v2.human_review_fields?.length ?? 0,
+      },
+      metadata: {
+        has_reconciliation: hasReconciliation,
+        has_triggers: !!v2.language_trigger_metadata,
+        template_id: v2.template_id ?? null,
+      },
+    });
+    timestamps.input_validated = Date.now();
 
     await eye(supabase, v2.session_id, "reviewer_v3.started", {
       tenant_id: session.tenant_id,
       version: "3.3",
+      run_id: runId,
       doc_text_length: v2.document_text.length,
+      doc_text_hash: docTextHash,
       structured_answers_count: v2.structured_answers?.length ?? 0,
       review_worthy_count: reviewWorthyCount,
       unanswered_count: v2.unanswered_fields?.length ?? 0,
@@ -586,6 +630,15 @@ serve(async (req) => {
     });
 
     const userMessage = buildUserMessage(v2);
+    const reviewPacketHash = await hashReviewPacket(userMessage);
+
+    stages.push({
+      stage: "prompt_assembled",
+      hash: reviewPacketHash,
+      counts: { prompt_length: userMessage.length },
+      metadata: { model, temperature: 0.15, provider: useGateway ? "lovable_gateway" : "openai_direct" },
+    });
+    timestamps.prompt_assembled = Date.now();
 
     // ── Stage 1: LLM candidate span detection ─────────────────────────
 
@@ -597,7 +650,7 @@ serve(async (req) => {
       },
       body: JSON.stringify({
         model,
-        temperature: 0.15, // Lower temperature for more deterministic span detection
+        temperature: 0.15,
         messages: [
           { role: "system", content: REVIEWER_V3_SYSTEM_PROMPT },
           { role: "user", content: userMessage },
@@ -605,6 +658,8 @@ serve(async (req) => {
         ...(useGateway ? {} : { response_format: { type: "json_object" } }),
       }),
     });
+
+    timestamps.llm_response_received = Date.now();
 
     if (!llmResponse.ok) {
       const errText = await llmResponse.text();
@@ -643,13 +698,41 @@ serve(async (req) => {
     }
 
     const reportObj = report as Record<string, any>;
+    const rawIssues = [...reportObj.issues];
+    const rawCandidateHash = await hashCandidates(rawIssues);
+
+    stages.push({
+      stage: "llm_response_parsed",
+      hash: rawCandidateHash,
+      counts: {
+        raw_candidate_count: rawIssues.length,
+        response_length: rawContent.length,
+      },
+      metadata: {
+        finish_reason: llmData?.choices?.[0]?.finish_reason ?? "unknown",
+        llm_confidence: reportObj.summary?.review_confidence ?? "unknown",
+        llm_coverage: reportObj.summary?.narrative_coverage ?? "unknown",
+        llm_risk: reportObj.summary?.overall_risk ?? "unknown",
+      },
+    });
+    timestamps.llm_parsed = Date.now();
 
     // ── Stage 2: Filter blocked fields (pre-DCE safety net) ──────────
 
     const { filtered: prefilteredIssues, suppressed: serverSuppressed } = dedupeAndFilterIssues(reportObj.issues);
+    const prefilteredHash = await hashCandidates(prefilteredIssues);
+
+    stages.push({
+      stage: "prefiltered",
+      hash: prefilteredHash,
+      counts: {
+        prefiltered_count: prefilteredIssues.length,
+        server_suppressed: serverSuppressed,
+      },
+    });
+    timestamps.prefiltered = Date.now();
 
     // ── Stage 3-7: Deterministic Classification Engine ───────────────
-    // normalize → rule-match → category-assign → overlap-resolve → severity-calibrate → explain-align → deduplicate
 
     const candidateIssues: CandidateIssue[] = prefilteredIssues.map((i: any) => ({
       type: i.type,
@@ -660,6 +743,22 @@ serve(async (req) => {
     }));
 
     const dceResult = classifyAndDeduplicate(candidateIssues);
+    const dceOutputHash = await hashIssuesArray(dceResult.issues);
+
+    stages.push({
+      stage: "dce_completed",
+      hash: dceOutputHash,
+      counts: {
+        dce_input: dceResult.stats.input_count,
+        dce_output: dceResult.stats.output_count,
+        deduplicated: dceResult.stats.deduplicated,
+        category_overrides: dceResult.stats.category_overrides,
+        severity_adjustments: dceResult.stats.severity_adjustments,
+        overlap_merges: dceResult.stats.overlap_merges,
+        borderline_suppressed: dceResult.stats.borderline_suppressed,
+      },
+    });
+    timestamps.dce_completed = Date.now();
 
     // ── Stage 8: Final issue emission ────────────────────────────────
 
@@ -697,7 +796,6 @@ serve(async (req) => {
       high_severity_count: reportObj.issues.filter((i: any) => i.severity === "high").length,
     };
 
-    // overall_risk must not be driven to high by secondary findings alone
     const primaryHighCount = primaryIssues.filter((i: any) => i.severity === "high").length;
     const primaryMedCount = primaryIssues.filter((i: any) => i.severity === "medium").length;
 
@@ -710,11 +808,75 @@ serve(async (req) => {
       summary.overall_risk = anySecondaryHigh ? "medium" : "low";
     }
 
-    // ── Eye completion event with DCE stats ──────────────────────────
+    const finalIssuesHash = await hashIssuesArray(reportObj.issues);
+
+    stages.push({
+      stage: "final_emission",
+      hash: finalIssuesHash,
+      counts: {
+        final_total: reportObj.issues.length,
+        final_primary: primaryIssues.length,
+        final_secondary: secondaryIssues.length,
+        high_severity: reportObj.metrics.high_severity_count,
+      },
+      metadata: {
+        overall_risk: summary.overall_risk,
+        confidence: summary.review_confidence,
+        coverage: summary.narrative_coverage,
+      },
+    });
+    timestamps.final_emission = Date.now();
+
+    // ── Build full diagnostics object ────────────────────────────────
+
+    const diagnostics: ReviewerRunDiagnostics = {
+      run_id: runId,
+      pipeline_version: "3.3",
+      timestamps,
+      stages,
+      input_fingerprint: {
+        document_text_length: v2.document_text.length,
+        document_text_hash: docTextHash,
+        review_worthy_count: reviewWorthyCount,
+        review_worthy_field_keys: reviewWorthyKeys,
+        structured_answer_count: v2.structured_answers?.length ?? 0,
+        unanswered_field_count: v2.unanswered_fields?.length ?? 0,
+        unanswered_field_keys: unansweredKeys,
+        has_reconciliation: hasReconciliation,
+        reconciliation_match_count: v2.reconciliation_context?.reconciliation_summary?.matches ?? null,
+        reconciliation_discrepancy_count: v2.reconciliation_context?.reconciliation_summary?.possible_discrepancies ?? null,
+        has_trigger_metadata: !!v2.language_trigger_metadata,
+        trigger_categories: triggerCategories,
+        template_id: v2.template_id ?? null,
+        session_id: v2.session_id,
+      },
+      llm_config: {
+        provider: useGateway ? "lovable_gateway" : "openai_direct",
+        model,
+        temperature: 0.15,
+        uses_json_mode: !useGateway,
+        gateway: useGateway,
+      },
+      output_fingerprint: {
+        raw_candidate_count: rawIssues.length,
+        prefiltered_count: prefilteredIssues.length,
+        dce_input_count: dceResult.stats.input_count,
+        dce_output_count: dceResult.stats.output_count,
+        final_primary_count: primaryIssues.length,
+        final_secondary_count: secondaryIssues.length,
+        final_risk: summary.overall_risk,
+        final_confidence: summary.review_confidence,
+        final_coverage: summary.narrative_coverage,
+        final_issues_hash: finalIssuesHash,
+      },
+    };
+
+    // ── Eye completion event with diagnostics ────────────────────────
 
     await eye(supabase, v2.session_id, "reviewer_v3.completed", {
       tenant_id: session.tenant_id,
       version: "3.3",
+      run_id: runId,
       issue_count: reportObj.metrics.issue_count,
       high_severity_count: reportObj.metrics.high_severity_count,
       overall_risk: summary.overall_risk,
@@ -725,6 +887,10 @@ serve(async (req) => {
       server_suppressed: serverSuppressed,
       has_reconciliation: hasReconciliation,
       has_trigger_metadata: !!v2.language_trigger_metadata,
+      doc_text_hash: docTextHash,
+      review_packet_hash: reviewPacketHash,
+      raw_candidate_hash: rawCandidateHash,
+      final_issues_hash: finalIssuesHash,
       dce_stats: {
         input_count: dceResult.stats.input_count,
         output_count: dceResult.stats.output_count,
@@ -741,6 +907,8 @@ serve(async (req) => {
     return json(200, {
       success: true,
       review_report: reportObj,
+      // Diagnostics returned to frontend for dev comparison tooling
+      _diagnostics: diagnostics,
     });
 
   } catch (err) {
