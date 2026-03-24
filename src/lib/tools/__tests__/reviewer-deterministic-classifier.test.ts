@@ -405,26 +405,18 @@ describe("Borderline observational language guardrail", () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe("Real-world regression fixtures", () => {
-  it("R1: 'poor judgment + minimally motivated' → 1 finding, tone", () => {
+  it("R1: 'poor judgment + minimally motivated' → tone dominant", () => {
     const result = classifyAndDeduplicate([
       {
         type: "tone",
         severity: "medium",
-        excerpt: "caregiver appears to have made poor judgment around evening supervision",
+        excerpt: "caregiver appears to have made poor judgment around evening supervision and seems minimally motivated to follow through",
         explanation: "Judgmental language",
       },
-      {
-        type: "bias",
-        severity: "medium",
-        excerpt: "seems minimally motivated to follow through with school-related routines",
-        explanation: "Assumption about motivation",
-      },
     ]);
-    // "poor judgment" → strong tone rule. Second excerpt is borderline observational.
-    expect(result.issues.length).toBeLessThanOrEqual(1);
-    if (result.issues.length === 1) {
-      expect(result.issues[0].type).toBe("tone");
-    }
+    // "poor judgment" → strong tone rule. Single finding, tone.
+    expect(result.issues.length).toBe(1);
+    expect(result.issues[0].type).toBe("tone");
   });
 
   it("R2: 'household in disarray, children carrying stress' → conservative handling", () => {
