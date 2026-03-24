@@ -26,6 +26,8 @@ export interface GuidanceSessionData {
   hasPolicyPack: boolean;
   guidanceOutput: GuidanceOutput | null;
   metadata: Record<string, unknown> | null;
+  /** Whether the session already has a linked phase2 schema (or one exists for the template). */
+  skipReady: boolean;
 }
 
 export type GuidanceRunState = "idle" | "running" | "compiling" | "generating" | "success" | "error";
@@ -60,7 +62,7 @@ export function useGuidanceSession(sessionId: string | undefined) {
       // Fetch session by session_id (the text field used in routes)
       const { data, error } = await supabase
         .from("sessions")
-        .select("id, session_id, case_label, interaction_type, template_id, guidance_scope, guidance_scope_other, policy_pack_id, metadata")
+        .select("id, session_id, case_label, interaction_type, template_id, guidance_scope, guidance_scope_other, policy_pack_id, metadata, phase2_schema_id")
         .eq("session_id", sessionId)
         .maybeSingle();
 
@@ -91,6 +93,21 @@ export function useGuidanceSession(sessionId: string | undefined) {
         templateName = tpl?.name ?? null;
       }
 
+      // Determine skip readiness: does a ready phase2 schema already exist?
+      // Either the session already has one linked, or the template has a reusable one.
+      let skipReady = !!data.phase2_schema_id;
+      if (!skipReady && data.template_id) {
+        const { data: existingSchema } = await supabase
+          .from("template_phase2_schemas")
+          .select("id")
+          .eq("template_id", data.template_id)
+          .eq("is_active", true)
+          .eq("status", "ready")
+          .limit(1)
+          .maybeSingle();
+        skipReady = !!existingSchema;
+      }
+
       setSession({
         id: data.id,
         sessionId: data.session_id,
@@ -103,6 +120,7 @@ export function useGuidanceSession(sessionId: string | undefined) {
         hasPolicyPack: !!data.policy_pack_id,
         guidanceOutput,
         metadata: meta,
+        skipReady,
       });
 
       // If guidance already exists, mark as success

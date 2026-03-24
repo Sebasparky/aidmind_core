@@ -140,31 +140,13 @@ export default function Guidance() {
     navigate("/dashboard");
   };
 
-  // Skip Guidance: ensure downstream dependencies (phase2 schema) are set up,
-  // persist skip marker, but do NOT generate guidance questions or call the guidance LLM.
+  // Skip Guidance: true no-LLM bypass. Only available when downstream
+  // readiness (phase2 schema) already exists. No hidden setup work.
   const handleSkipGuidance = async () => {
-    if (!session || !session.templateId) return;
+    if (!session || !session.templateId || !session.skipReady) return;
     setSkipping(true);
     try {
-      // 1. Ensure phase2 schema is linked to session (required by Case Notes).
-      //    For templates used before, this reuses the existing schema (no LLM call).
-      //    For brand-new templates, it generates one — this is unavoidable since
-      //    Case Notes requires a schema to function.
-      const { data: ensureRes, error: ensureErr } = await supabase.functions.invoke(
-        "ensure-phase2-schema",
-        { body: { session_id: session.id, template_id: session.templateId } }
-      );
-
-      if (ensureErr) {
-        console.error("[Guidance] ensure-phase2-schema invoke error:", ensureErr.message);
-        // Non-blocking: skip can still proceed, Case Notes will use fallback
-      } else if (ensureRes && !ensureRes.success) {
-        console.warn("[Guidance] ensure-phase2-schema returned failure:", ensureRes.error);
-      } else {
-        console.log("[Guidance] Phase 2 schema ensured for skip:", ensureRes?.action);
-      }
-
-      // 2. Persist skip marker in session metadata
+      // Persist skip marker in session metadata — no LLM calls, no schema generation
       const { data: current } = await supabase
         .from("sessions")
         .select("metadata")
@@ -183,12 +165,10 @@ export default function Guidance() {
         })
         .eq("id", session.id);
 
-      // 3. Log audit event
       await logEvent({
         eventType: "guidance.step.skipped",
         sessionId: session.sessionId,
         result: "success",
-        metadata: { schema_action: ensureRes?.action ?? "unknown" },
       });
     } catch (err) {
       console.error("[Guidance] Failed to skip guidance:", err);
@@ -828,15 +808,15 @@ export default function Guidance() {
                 Back to Dashboard
               </Button>
               <div className="flex items-center gap-2">
-                {/* Skip Guidance — secondary action, only when template selected, not running, not already skipped */}
+                {/* Skip Guidance — true no-LLM bypass, gated on downstream readiness */}
                 {hasTemplate && runState === "idle" && !output && !guidanceSkipped && (
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
                           variant="outline"
-                          onClick={handleSkipGuidance}
-                          disabled={skipping}
+                          onClick={session?.skipReady ? handleSkipGuidance : undefined}
+                          disabled={skipping || !session?.skipReady}
                           className="text-muted-foreground"
                         >
                           {skipping ? (
@@ -846,8 +826,12 @@ export default function Guidance() {
                           )}
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-[220px]">
-                        <p className="text-xs">Continue with this template without generating interview questions.</p>
+                      <TooltipContent side="top" className="max-w-[260px]">
+                        <p className="text-xs">
+                          {session?.skipReady
+                            ? "Continue with this template without generating interview questions."
+                            : "This template needs one-time setup before Guidance can be skipped. Generate Guidance once to prepare it for future sessions."}
+                        </p>
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
