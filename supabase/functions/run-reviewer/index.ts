@@ -866,7 +866,7 @@ serve(async (req) => {
       llm_config: {
         provider: useGateway ? "lovable_gateway" : "openai_direct",
         model,
-        temperature: 0.15,
+        temperature: 0,
         uses_json_mode: !useGateway,
         gateway: useGateway,
       },
@@ -882,6 +882,9 @@ serve(async (req) => {
         final_coverage: summary.narrative_coverage,
         final_issues_hash: finalIssuesHash,
       },
+      // Candidate-level data for merge/split drift detection (dev only)
+      candidate_excerpts: rawIssues.map((i: any) => (i.excerpt || "").slice(0, 100)),
+      candidate_types: rawIssues.map((i: any) => i.type || "unknown"),
     };
 
     // ── Eye completion event with diagnostics ────────────────────────
