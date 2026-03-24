@@ -336,9 +336,9 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                     <div className="flex flex-wrap items-center gap-1.5">
                       {session.guidanceCompleted ? (
                         <Button
-                          variant="default"
+                          variant="outline"
                           size="sm"
-                          className="gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white border-0"
+                          className="gap-1.5 text-xs text-[hsl(var(--status-success))] border-[hsl(var(--status-success))]/30 hover:bg-[hsl(var(--status-success-muted))]/40"
                           onClick={() => handleGenerateGuidance(session)}
                           data-tour="guidance-button"
                         >
