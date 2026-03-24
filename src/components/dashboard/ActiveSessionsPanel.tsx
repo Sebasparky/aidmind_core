@@ -425,7 +425,7 @@ export function ActiveSessionsPanel({ className, searchQuery = "" }: ActiveSessi
                           <TooltipProvider>
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                {allToolsUsed ? (
+                                {allToolsUsed || allToolsAddressed ? (
                                   <Button
                                     variant="default"
                                     size="sm"
