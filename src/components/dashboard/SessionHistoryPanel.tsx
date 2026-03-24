@@ -246,7 +246,8 @@ export function SessionHistoryPanel({ className, searchQuery: globalSearchQuery 
             <div className="space-y-1">
               {filteredSessions.map((session) => {
                 const OutcomeIcon = getOutcomeIcon(session.outcome);
-                const usage = getToolUsage(usageMap, session.sessionId);
+                const guidanceAddressed = session.guidanceCompleted || session.guidanceSkipped;
+                const toolCount = (guidanceAddressed ? 1 : 0) + (session.caseNotesCompleted ? 1 : 0) + (session.reviewerCompleted ? 1 : 0);
                 return (
                   <button
                     key={session.id}
