@@ -130,6 +130,7 @@ export function useGuidanceSession(sessionId: string | undefined) {
         guidanceOutput,
         metadata: meta,
         skipReady,
+        reusableSchemaId,
       });
 
       // If guidance already exists, mark as success
