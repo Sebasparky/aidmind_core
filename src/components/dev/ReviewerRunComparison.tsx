@@ -69,6 +69,8 @@ export interface ReviewerRunDiagnostics {
     final_coverage: string;
     final_issues_hash: string;
   };
+  candidate_excerpts?: string[];
+  candidate_types?: string[];
 }
 
 const STAGE_LABELS: Record<string, string> = {
