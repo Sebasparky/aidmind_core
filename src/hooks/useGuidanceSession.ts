@@ -26,8 +26,10 @@ export interface GuidanceSessionData {
   hasPolicyPack: boolean;
   guidanceOutput: GuidanceOutput | null;
   metadata: Record<string, unknown> | null;
-  /** Whether the session already has a linked phase2 schema (or one exists for the template). */
+  /** Whether skip can proceed: a reusable ready schema exists for this template. */
   skipReady: boolean;
+  /** If skipReady and session doesn't have phase2_schema_id yet, this is the reusable schema ID to link. */
+  reusableSchemaId: string | null;
 }
 
 export type GuidanceRunState = "idle" | "running" | "compiling" | "generating" | "success" | "error";
