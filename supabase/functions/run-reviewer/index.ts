@@ -19,6 +19,15 @@ import {
   type CandidateIssue,
   type ClassifiedIssue,
 } from "../_shared/deterministic-classifier.ts";
+import {
+  hashDocumentText,
+  hashReviewPacket,
+  hashIssuesArray,
+  hashCandidates,
+  createRunId,
+  type ReviewerRunDiagnostics,
+  type ReviewerStageSnapshot,
+} from "../_shared/reviewer-diagnostics.ts";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
