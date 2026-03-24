@@ -828,8 +828,8 @@ export default function Guidance() {
                 Back to Dashboard
               </Button>
               <div className="flex items-center gap-2">
-                {/* Skip Guidance — secondary action, only when template selected and not running */}
-                {hasTemplate && runState === "idle" && !output && (
+                {/* Skip Guidance — secondary action, only when template selected, not running, not already skipped */}
+                {hasTemplate && runState === "idle" && !output && !guidanceSkipped && (
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
