@@ -1,129 +1,87 @@
-# Reviewer Post-Run UX Fixes
 
-## 6 Changes
 
-### 1. Remove duplicate Comparison Details tab
+# Root Cause Analysis: Reviewer Findings Lost on Tab Switch
 
-Lines 1020-1054 in `Reviewer.tsx` are a second `TabsContent value="comparison"` block — an exact duplicate of lines 940-1017. Delete lines 1020-1054.
+## The Bug
 
-### 2. Redesign comparison FieldRow cards (ReconciliationPanel.tsx)
+The root cause is **not** in the Reviewer component or its internal tab logic. The internal tabs use `forceMount` and local state correctly — they cannot lose `output`.
 
-Currently the `FieldRow` title is the field name (e.g. "Behavioral Concerns Child Issues"). Flip the hierarchy:
+## Root Cause: AuthContext loading flicker unmounts the entire page
 
-- **card title:** a human-readable issue sentence tied to the item
-Example: “Child issues differ between case notes and final template”
-- **subtitle:** section + field
-Example: “Behavioral Concerns and Family Issues · Child Issues”
-- **badge:** “Differs” / “Missing” / “Could not verify”
-- Increase card padding
-- Make the stacked "Case notes said:" / "Final template says:" labels more prominent with clear visual separation
+**File**: `src/contexts/AuthContext.tsx`, lines 106-131
 
-### 3. Strengthen the comparison CTA on Findings tab
-
-Replace the current subtle card (lines 881-905) with a more prominent design:
-
-- Tinted background (`bg-primary/5` or `bg-muted`)
-- Stronger border
-- Larger text and clear "Open Comparison Details →" button
-- Count badge more prominent
-- Full-width click target preserved
-
-### 4. Persist reviewer completion on Done
-
-In handleBack:
+When Supabase fires `onAuthStateChange` (which happens on **token refresh**, **visibility change**, or **any auth event**), the handler does this for the **same already-authenticated user**:
 
 ```
-•	Before navigating, update session metadata with:
-
-•	reviewer_completed_at: new Date().toISOString()
-
-•	session_completed_at: new Date().toISOString() when Reviewer is the final completed step
-
-•	This should follow the same metadata update pattern already used by Guidance / Case Notes.
+setLoading(true);                                    // ← line 129
+setTimeout(() => fetchProfile().finally(() =>
+  setLoading(false)                                   // ← line 131
+), 0);
 ```
 
-In useRecentNotes.ts:
+This causes the following cascade:
+1. `AuthContext.loading` becomes `true`
+2. `RouteGuard` renders `<AuthLoadingScreen />` instead of `<Reviewer />`
+3. **Reviewer unmounts** — cleanup effect (line 1256) fires, setting `output = null`
+4. Profile resolves → `loading = false` → RouteGuard re-renders `<Reviewer />`
+5. Fresh Reviewer mount reads `reviewer_completed_at` from metadata → `reviewerPreviouslyCompleted = true`
+6. User sees the "Review completed" summary instead of their findings
 
+The existing `suppressNextAuthReload` mechanism only covers vault reauth (manually armed). It does **not** cover routine Supabase token refreshes, which happen automatically every ~55 minutes and on browser tab visibility changes.
+
+## Why forceMount didn't fix it
+
+`forceMount` keeps tab content alive across **internal** tab switches within ResultsMode. But the unmount happens at the **RouteGuard level** — the entire `<Reviewer />` component tree is replaced by `<AuthLoadingScreen />`. No amount of internal tab persistence can survive that.
+
+## Why it correlates with tab switching
+
+Supabase's GoTrue client can trigger token refresh on browser visibility change (`visibilitychange` event). When a user switches browser tabs or focuses another window and returns, this fires `onAuthStateChange` → `loading=true` → unmount.
+
+## The Fix
+
+**File**: `src/contexts/AuthContext.tsx`
+
+In the `onAuthStateChange` handler, when the incoming `session.user.id` matches the already-known `currentUserIdRef.current`, **do not set `loading=true`**. The user is already authenticated, the profile is already resolved. Just update the user object silently. Optionally refresh the profile in the background without gating routing.
+
+```typescript
+// BEFORE (current):
+if (session?.user) {
+  if (suppressAuthReloadRef.current && ...) { ... return; }
+  setUser(session.user);
+  currentUserIdRef.current = session.user.id;
+  setLoading(true);  // PROBLEM: gates routing, unmounts pages
+  setTimeout(() => fetchProfile().finally(() => setLoading(false)), 0);
+}
+
+// AFTER (fix):
+if (session?.user) {
+  if (suppressAuthReloadRef.current && ...) { ... return; }
+
+  const isSameUser = currentUserIdRef.current === session.user.id;
+  setUser(session.user);
+  currentUserIdRef.current = session.user.id;
+
+  if (isSameUser) {
+    // Token refresh or re-auth for same user — update silently
+    // Background profile refresh without loading gate
+    fetchProfile();
+  } else {
+    // New user sign-in — gate routing while profile resolves
+    setLoading(true);
+    setTimeout(() => fetchProfile().finally(() => setLoading(false)), 0);
+  }
+}
 ```
-•	Change reviewerCompleted from:
-
-•	!![session.review](http://session.review)_document_id
-
-•	To:
-
-•	!!meta?.reviewer_completed_at || !![session.review](http://session.review)_document_id
-
-•	Also add:
-
-•	sessionCompleted = !!meta?.session_completed_at
-
-•	Keep this backward-compatible with any older sessions.
-```
-
-Dashboard session card UI changes:
-
-```
-•	Do not stop at just marking Reviewer complete.
-
-•	When sessionCompleted === true, update the session card into a more obvious final-complete state:
-
-•	Make the card slightly taller than the in-progress version
-
-•	Keep all prior completed steps visible
-
-•	Show a full-width green completion bar/button at the bottom of the card
-
-•	Label it something like:
-
-•	Session complete
-
-•	or Completed — move to history
-
-•	This final state should visually communicate:
-
-•	all required steps are done
-
-•	the user can still review prior steps from the card
-
-•	pressing the final completion action moves the session to history
-
-•	Since Reviewer data is ephemeral, the card should still allow returning to Guidance, but not imply that full Reviewer results remain stored.
-```
-
-Important behavior note:
-
-```
-•	Reviewer completion should persist as workflow progress
-
-•	Reviewer findings themselves should still remain ephemeral and cleared on exit / relock / unmount
-
-•	The dashboard should reflect completion state without implying long-term storage of sensitive reviewer output5. Preserve tab state across switches (prevent remount)
-```
-
-**5. Preserve tab state across switches (prevent remount)**  
-  
-The current `<TabsContent>` uses Radix default behavior which unmounts inactive tabs. Fix by:
-
-- Adding `forceMount` to all `TabsContent` components
-- Using `hidden` class to hide inactive tabs instead of unmounting
-- This preserves scroll position, iframe state, highlights, and vault timer across tab switches
-- Ephemeral data still clears on Done/unmount/relock as before
-
-### 6. Comparison CTA wording
-
-Use "See differences between case notes and final template" as title with subtitle "Inspect notes-to-template differences, omissions, and unresolved items"
 
 ## Files Changed
 
-- `src/pages/Reviewer.tsx` — remove duplicate tab, strengthen CTA, add `forceMount` to tabs, persist completion in `handleBack`
-- `src/components/session/ReconciliationPanel.tsx` — flip FieldRow title to resolution label, field name as subtitle
-- `src/hooks/useRecentNotes.ts` — add `reviewer_completed_at` metadata check
+1. **`src/contexts/AuthContext.tsx`** — Single change in `onAuthStateChange` handler to skip loading gate for same-user auth events
 
-## What stays the same
+## Confirmation
 
-- All backend logic, edge functions, security model
-- No new database columns (uses existing metadata JSON)
-- Vault relock/unmount/timeout behavior
-- Pre-run workspace layout
-- IssueCard component
-- Dev diagnostics panel
+- Internal Reviewer tab switching no longer causes findings loss (the unmount no longer happens)
+- Completed summary still appears correctly on explicit re-entry (navigate away → come back)
+- No reviewer findings are persisted beyond page lifecycle (cleanup effect still fires on real unmount)
+- Security posture unchanged — vault relock, idle timeout, and unmount scrubbing all remain intact
+- The `suppressNextAuthReload` mechanism remains as an additional safety layer for vault reauth
+
