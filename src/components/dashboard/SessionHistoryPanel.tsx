@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SessionDetailDrawer } from "./SessionDetailDrawer";
 import { useRecentNotes } from "@/hooks/useRecentNotes";
-import { useSessionToolUsage, getToolUsage } from "@/hooks/useSessionToolUsage";
+
 import { cn } from "@/lib/utils";
 import { useDashboard } from "@/contexts/DashboardContext";
 
