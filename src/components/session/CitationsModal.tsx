@@ -55,17 +55,24 @@ export function CitationsModal({ open, onOpenChange, citations, questionText, se
         { body: { session_id: sessionDbId, citation_ids: citations } },
       );
 
-      if (fnError) throw fnError;
+      if (fnError) {
+        console.error("[CitationsModal] Edge function error:", fnError);
+        // Don't show scary error — this often means policy pack not compiled yet
+        setError(null);
+        return;
+      }
 
       if (!data || (!data.snippets?.length && !data.unresolved?.length)) {
-        setError("Citation details could not be resolved");
+        // No error — citations just couldn't be resolved. Show graceful empty state.
+        setError(null);
         return;
       }
 
       setSnippets(data.snippets ?? []);
     } catch (err) {
       console.error("[CitationsModal] fetch error:", err);
-      setError("Failed to load citation details");
+      // Only show error for genuine network/system failures
+      setError("Could not connect to citation service. Try again in a moment.");
     } finally {
       setLoading(false);
     }
