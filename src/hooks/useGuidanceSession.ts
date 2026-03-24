@@ -26,6 +26,8 @@ export interface GuidanceSessionData {
   hasPolicyPack: boolean;
   guidanceOutput: GuidanceOutput | null;
   metadata: Record<string, unknown> | null;
+  /** Whether the session already has a linked phase2 schema (or one exists for the template). */
+  skipReady: boolean;
 }
 
 export type GuidanceRunState = "idle" | "running" | "compiling" | "generating" | "success" | "error";
