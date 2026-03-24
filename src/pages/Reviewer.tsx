@@ -1253,6 +1253,18 @@ export default function Reviewer() {
     return () => { vault.relock("unmount"); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // SECURITY: Purge all in-memory findings on unmount (route exit / refresh)
+  useEffect(() => {
+    return () => {
+      setOutput(null);
+      setReconciliationResult(null);
+      setTemplateParseResult(null);
+      setActiveSnippet(null);
+      setToolState("idle");
+      if (import.meta.env.DEV) console.info("[Reviewer] In-memory findings purged on unmount");
+    };
+  }, []);
+
   useEffect(() => {
     if (vault.vaultState !== "unlocked") return;
     const resetIdle = () => vault.resetIdleTimer();
