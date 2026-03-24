@@ -512,13 +512,13 @@ describe("Real-world regression fixtures", () => {
       {
         type: "unsupported_conclusion",
         severity: "medium",
-        excerpt: "The client is clearly unable to manage her finances",
-        explanation: "Overclaims financial capability",
+        excerpt: "It is obvious that she will obviously continue to misuse program benefits",
+        explanation: "Overclaims financial behavior",
       },
       {
         type: "unsupported_conclusion",
         severity: "medium",
-        excerpt: "clearly unable to manage her finances and will obviously continue to misuse",
+        excerpt: "obviously continue to misuse program benefits without any support",
         explanation: "States conclusion as fact",
       },
     ]);
