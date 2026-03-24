@@ -2081,6 +2081,11 @@ export default function Reviewer() {
         )}
       </div>
       {import.meta.env.DEV && <ReviewerVerificationPanel diagnostics={devDiagnostics} />}
+      {import.meta.env.DEV && toolState === "success" && (
+        <div className="fixed bottom-4 right-4 z-50 w-[480px] max-h-[60vh] overflow-y-auto">
+          <ReviewerRunComparison />
+        </div>
+      )}
     </div>
   );
 }
