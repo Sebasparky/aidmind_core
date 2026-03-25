@@ -66,6 +66,7 @@ import type {
   ParsedFieldResult,
 } from "@/lib/tools/parser-artifact-types";
 import type { CaseNotesComparisonPacket } from "@/lib/security/vault-types";
+import { runLocalReviewer } from "@/services/localReviewer";
 
 /**
  * SECURITY NOTES — Reviewer Pipeline
@@ -1522,17 +1523,11 @@ export default function Reviewer() {
           has_trigger_metadata: !!payload.language_trigger_metadata,
         });
       }
-      const { data, error } = await supabase.functions.invoke("run-reviewer", { body: payload });
-      if (error) throw new Error(error.message || "Edge function invocation failed");
-      if (data?.error) {
-        const code = data.error.code || "UNKNOWN";
-        const msg = data.error.message || "Review failed";
-        logEvent({ eventType: "tool.run.failed", sessionId, requestId, toolName: "run_reviewer_v2", result: "failure", metadata: { error_code: code } });
-        setErrorMessage(`${msg} (${code})`);
-        setToolState("error");
-        return;
-      }
-      if (!data?.review_report) throw new Error("Invalid response from reviewer");
+      const localResult = await runLocalReviewer(payload);
+      if (!localResult.success) throw new Error("Local reviewer failed");
+      if (!localResult.review_report) throw new Error("Invalid response from reviewer");
+
+      const data = localResult;
 
       // Push diagnostics to dev comparison panel
       if (import.meta.env.DEV && data?._diagnostics) {

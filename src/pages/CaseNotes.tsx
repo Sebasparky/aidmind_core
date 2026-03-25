@@ -56,6 +56,7 @@ import { useCaseNotesVault } from "@/hooks/useCaseNotesVault";
 import { VaultStatusIndicator } from "@/components/security/VaultStatusIndicator";
 import type { CaseNotesComparisonPacket } from "@/lib/security/vault-types";
 import mammoth from "mammoth";
+import { runLocalCaseNotesExtraction } from "@/services/localCaseNotes";
 
 // ─── Types ───────────────────────────────────────────────
 type GenerationStatus = "idle" | "generating" | "success" | "error";
@@ -589,12 +590,11 @@ export default function CaseNotes() {
     setGenerationSummary(null);
 
     try {
-      const { data: genResponse, error: genError } = await supabase.functions.invoke(
-        "generate-guidance-phase2",
-        { body: { session_id: session.id, interview_notes: form.rawNotes.trim() } }
+      const genResponse = await runLocalCaseNotesExtraction(
+        session.id,
+        form.rawNotes.trim(),
       );
-      if (genError) throw new Error(genError.message || "Fact extraction failed");
-      if (genResponse && !genResponse.success) throw new Error(genResponse.error || "Fact extraction failed");
+      if (!genResponse.success) throw new Error(genResponse.error || "Fact extraction failed");
 
       setResult({
         generated_at: genResponse.generated_at,
@@ -602,9 +602,9 @@ export default function CaseNotes() {
         answers: genResponse.answers,
       });
       setGenerationSummary({
-        factFieldCount: genResponse?.fact_field_count ?? 0,
-        answeredFieldCount: genResponse?.answered_field_count ?? 0,
-        model: genResponse?.model ?? "unknown",
+        factFieldCount: genResponse.fact_field_count ?? 0,
+        answeredFieldCount: genResponse.answered_field_count ?? 0,
+        model: genResponse.model ?? "unknown",
       });
 
       setGenerationStatus("success");
