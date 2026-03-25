@@ -1,12 +1,12 @@
 /**
- * localModel.ts — Local Phase 2 extraction via Ollama.
+ * localModel.ts — Local LLM inference via Ollama.
  *
- * Sends case notes + a reduced Phase 2 schema to a local LLM
- * and returns structured extraction results. Fully browser-side,
+ * Provides a generic callLocalModel function and a Phase 2-specific
+ * runLocalPhase2Extraction wrapper. Fully browser-side,
  * no backend or Supabase calls.
  */
 
-// ── Types ──────────────────────────────────────────────────────
+// ── Types ──────────────────────────────────────────────────
 
 export interface LocalExtractionAnswer {
   field_key: string;
@@ -25,7 +25,7 @@ interface ReducedField {
   requires_direct_statement?: boolean;
 }
 
-// ── Constants ──────────────────────────────────────────────────
+// ── Constants ──────────────────────────────────────────────
 
 const OLLAMA_URL = "http://localhost:11434/api/chat";
 const DEFAULT_MODEL = "llama3";
@@ -79,7 +79,7 @@ Return JSON only:
   ]
 }`;
 
-// ── Schema reduction ───────────────────────────────────────────
+// ── Schema reduction ───────────────────────────────────────
 
 /**
  * Strips the full Phase 2 schema down to only the fields and
@@ -113,7 +113,7 @@ export function reduceSchema(schemaJson: any): ReducedField[] {
   return reduced;
 }
 
-// ── Prompt building ────────────────────────────────────────────
+// ── Prompt building ────────────────────────────────────────
 
 function buildUserPrompt(
   reducedFields: ReducedField[],
@@ -122,13 +122,13 @@ function buildUserPrompt(
   return `schema_json:\n${JSON.stringify(reducedFields, null, 2)}\n\nCase notes:\n${notesText}`;
 }
 
-// ── Response parsing ───────────────────────────────────────────
+// ── Response parsing ───────────────────────────────────────
 
 /**
  * Extracts JSON from a model response that may be wrapped in
  * markdown code fences or contain leading/trailing prose.
  */
-function parseModelResponse(raw: string): LocalExtractionResult {
+export function parseModelResponse(raw: string): any {
   let cleaned = raw.trim();
 
   // Strip ```json ... ``` or ``` ... ``` fences
@@ -155,16 +155,77 @@ function parseModelResponse(raw: string): LocalExtractionResult {
     );
   }
 
-  if (!parsed || !Array.isArray(parsed.answers)) {
+  return parsed;
+}
+
+// ── Generic local model call ───────────────────────────────
+
+/**
+ * Calls a local Ollama model with the given system and user prompts.
+ * Returns the raw string content from the model response.
+ *
+ * @param systemPrompt - The system prompt for the model.
+ * @param userPrompt   - The user prompt for the model.
+ * @param model        - Ollama model name (default: "llama3").
+ * @returns Raw string response from the model.
+ */
+export async function callLocalModel(
+  systemPrompt: string,
+  userPrompt: string,
+  model: string = DEFAULT_MODEL,
+): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch(OLLAMA_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        stream: false,
+        options: { temperature: 0 },
+      }),
+    });
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      throw new Error(
+        `[localModel] Request timed out after ${REQUEST_TIMEOUT_MS / 1000}s. Is Ollama running and is the model loaded?`,
+      );
+    }
     throw new Error(
-      "[localModel] Model response JSON is missing the 'answers' array.",
+      `[localModel] Local model unavailable. Ensure Ollama is running. Detail: ${err?.message ?? err}`,
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "(unreadable)");
+    throw new Error(
+      `[localModel] Ollama returned HTTP ${response.status}: ${body.slice(0, 500)}`,
     );
   }
 
-  return { answers: parsed.answers };
+  const data = await response.json();
+  const content: string | undefined = data?.message?.content;
+
+  if (!content?.trim()) {
+    throw new Error(
+      "[localModel] Ollama returned an empty message content.",
+    );
+  }
+
+  return content;
 }
 
-// ── Main function ──────────────────────────────────────────────
+// ── Phase 2 extraction ─────────────────────────────────────
 
 /**
  * Runs Phase 2 factual extraction locally via Ollama.
@@ -195,55 +256,16 @@ export async function runLocalPhase2Extraction(
   const userPrompt = buildUserPrompt(reducedFields, notesText);
 
   // 3. Call Ollama
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  let response: Response;
-  try {
-    response = await fetch(OLLAMA_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: userPrompt },
-        ],
-        stream: false,
-        options: { temperature: 0 },
-      }),
-    });
-  } catch (err: any) {
-    if (err?.name === "AbortError") {
-      throw new Error(
-        `[localModel] Request timed out after ${REQUEST_TIMEOUT_MS / 1000}s. Is Ollama running and is the model loaded?`,
-      );
-    }
-    throw new Error(
-      `[localModel] Network error connecting to Ollama at ${OLLAMA_URL}. ` +
-        `Make sure Ollama is running locally. Detail: ${err?.message ?? err}`,
-    );
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => "(unreadable)");
-    throw new Error(
-      `[localModel] Ollama returned HTTP ${response.status}: ${body.slice(0, 500)}`,
-    );
-  }
+  const content = await callLocalModel(SYSTEM_PROMPT, userPrompt, model);
 
   // 4. Parse response
-  const data = await response.json();
-  const content: string | undefined = data?.message?.content;
+  const parsed = parseModelResponse(content);
 
-  if (!content?.trim()) {
+  if (!parsed || !Array.isArray(parsed.answers)) {
     throw new Error(
-      "[localModel] Ollama returned an empty message content.",
+      "[localModel] Model response JSON is missing the 'answers' array.",
     );
   }
 
-  return parseModelResponse(content);
+  return { answers: parsed.answers };
 }
