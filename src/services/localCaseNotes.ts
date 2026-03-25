@@ -264,7 +264,9 @@ For each field, use the matching_mode to determine how to extract. Fields are gr
   }));
 
   // 7. Merge: extractable fields get LLM answers, human-review fields get skipped
-  const extractedLookup = new Map(extractedAnswers.map((a: any) => [a.field_key, a]));
+  const extractedLookup = new Map<string, { field_key: string; answer: string | null; supporting_excerpt: string | null }>(
+    extractedAnswers.map((a: any) => [a.field_key, a])
+  );
 
   const allAnswers: FieldAnswer[] = allSchemaFields.map((f) => {
     const isExtractable = f.fact_based && f.matching_mode !== "human_review_only";
