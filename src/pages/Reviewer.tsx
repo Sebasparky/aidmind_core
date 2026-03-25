@@ -66,6 +66,7 @@ import type {
   ParsedFieldResult,
 } from "@/lib/tools/parser-artifact-types";
 import type { CaseNotesComparisonPacket } from "@/lib/security/vault-types";
+import { runLocalReviewer } from "@/services/localReviewer";
 
 /**
  * SECURITY NOTES — Reviewer Pipeline
