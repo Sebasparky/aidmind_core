@@ -56,6 +56,7 @@ import { useCaseNotesVault } from "@/hooks/useCaseNotesVault";
 import { VaultStatusIndicator } from "@/components/security/VaultStatusIndicator";
 import type { CaseNotesComparisonPacket } from "@/lib/security/vault-types";
 import mammoth from "mammoth";
+import { runLocalCaseNotesExtraction } from "@/services/localCaseNotes";
 
 // ─── Types ───────────────────────────────────────────────
 type GenerationStatus = "idle" | "generating" | "success" | "error";
