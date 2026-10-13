@@ -332,6 +332,14 @@ export function EventDetailDrawer({ event, onClose }: EventDetailDrawerProps) {
                 value={event.resource_id}
                 mono
               />
+              {event.tool_name && (
+                <DetailRow
+                  icon={Tag}
+                  label="Tool"
+                  value={event.tool_name}
+                  mono
+                />
+              )}
             </div>
 
             <Separator />

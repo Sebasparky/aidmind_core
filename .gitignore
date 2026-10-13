@@ -30,3 +30,16 @@ supabase/.temp/
 .venv/
 workers/kb_extractor/.venv/
 workers_local_backup/
+
+# Environment files (keep only the example template in git)
+.env
+.env.*
+!.env.example
+
+# Isolated demo Supabase stack workdir + demo credentials (scripts/demo-stack -> .cache/demo-stack)
+.cache/
+
+# Local-only outputs: demo recordings (npm run demo:record), Claude Code settings, private release notes
+docs/recruiter/recordings/
+.claude/
+dev-artifacts/

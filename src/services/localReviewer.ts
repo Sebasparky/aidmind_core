@@ -332,7 +332,7 @@ function buildUserMessage(body: ReviewerPayload): string {
 const VALID_ISSUE_TYPES = new Set(["completeness", "policy_language", "tone", "bias", "consistency", "unsupported_conclusion"]);
 const VALID_SEVERITIES = new Set(["low", "medium", "high"]);
 
-function validateReviewReport(parsed: unknown): boolean {
+export function validateReviewReport(parsed: unknown): boolean {
   if (typeof parsed !== "object" || parsed === null) return false;
   const obj = parsed as Record<string, unknown>;
 
@@ -510,9 +510,6 @@ export async function runLocalReviewer(
     throw new Error("Document text must be at least 50 characters.");
   }
 
-  const hasReconciliation = !!payload.reconciliation_context;
-  const reviewWorthyCount = payload.review_worthy_answers?.length ?? 0;
-
   // 1. Build user message (identical to edge function)
   const userMessage = buildUserMessage(payload);
 
@@ -525,8 +522,24 @@ export async function runLocalReviewer(
     throw new Error("Local model output does not match expected review report schema. Raw: " + rawContent.slice(0, 300));
   }
 
-  const reportObj = report as Record<string, any>;
-  const rawIssues = [...reportObj.issues];
+  // 4-8. Deterministic post-processing (shared with the fixture replay path)
+  return finalizeReviewReport(report as Record<string, any>, payload);
+}
+
+// ── Deterministic post-processing ──────────────────────────
+
+/**
+ * Applies the deterministic post-processing to a validated raw report:
+ * blocked-field prefilter, deterministic classification engine (DCE),
+ * finding tracks, confidence/coverage caps, metrics and overall_risk.
+ * Mutates and returns `reportObj`. Contains no model call.
+ */
+export function finalizeReviewReport(
+  reportObj: Record<string, any>,
+  payload: ReviewerPayload,
+): LocalReviewerResponse {
+  const hasReconciliation = !!payload.reconciliation_context;
+  const reviewWorthyCount = payload.review_worthy_answers?.length ?? 0;
 
   // 4. Pre-filter blocked fields
   const { filtered: prefilteredIssues } = dedupeAndFilterIssues(reportObj.issues);

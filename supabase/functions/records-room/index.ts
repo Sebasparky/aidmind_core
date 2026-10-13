@@ -19,6 +19,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { buildCorsSecurityHeaders } from "../_shared/security-headers.ts";
+import { requireUser, assertSessionAccess, requireTenantFor } from "../_shared/require-user.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1598,10 +1599,17 @@ Deno.serve(async (req) => {
 
   const {
     query: rawQuery,
-    tenant_id,
+    tenant_id: requested_tenant_id,
     min_similarity = DEFAULT_MIN_SIMILARITY,
     refinement_mode: rawRefinementMode,
   } = payload;
+
+  // ── Authenticate caller; tenant must be one of the caller's memberships ──
+  const auth = await requireUser(req, supabase);
+  if (!auth.ok) return jsonResponse(auth.status, { error: auth.error });
+  const tenantRes = requireTenantFor(auth.caller, requested_tenant_id);
+  if (!tenantRes.ok) return jsonResponse(tenantRes.status, { error: tenantRes.error });
+  const tenant_id = tenantRes.tenantId;
 
   const refinementMode: RefinementMode =
     rawRefinementMode && typeof rawRefinementMode === "string" && rawRefinementMode in REFINEMENT_PROFILES
@@ -1611,9 +1619,6 @@ Deno.serve(async (req) => {
 
   if (!rawQuery || typeof rawQuery !== "string" || rawQuery.trim().length === 0) {
     return jsonResponse(400, { error: "query is required" });
-  }
-  if (!tenant_id || typeof tenant_id !== "string") {
-    return jsonResponse(400, { error: "tenant_id is required" });
   }
   if (rawQuery.length > LIMITS.MAX_QUERY_INPUT_CHARS) {
     return jsonResponse(400, { error: `Query too long (max ${LIMITS.MAX_QUERY_INPUT_CHARS} characters)` });

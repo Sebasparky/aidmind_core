@@ -25,6 +25,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { logEyeEvent, SESSION_INACTIVITY_TIMEOUT_MINUTES } from "../_shared/eye.ts";
 import { buildCorsSecurityHeaders, enforceTransportSecurity, createSecureJsonHeaders } from "../_shared/security-headers.ts";
+import { requireUser } from "../_shared/require-user.ts";
 import {
   validatePlainText,
   validationErrorResponse,
@@ -151,6 +152,18 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
+    // ── Authenticate caller; supervisors only; scan limited to their tenants ──
+    const auth = await requireUser(req, supabase);
+    if (!auth.ok) {
+      return new Response(JSON.stringify({ error: auth.error }),
+        { status: auth.status, headers: createSecureJsonHeaders(req) });
+    }
+    if (!auth.caller.roles.includes("supervisor")) {
+      return new Response(JSON.stringify({ error: "Supervisor role required" }),
+        { status: 403, headers: createSecureJsonHeaders(req) });
+    }
+    const callerTenantIds = auth.caller.tenantIds;
+
     // Parse and validate request body
     let rawBody: unknown = {};
     try {
@@ -199,6 +212,7 @@ Deno.serve(async (req) => {
     const { data: openSessions, error: sessionsError } = await supabase
       .from("sessions")
       .select("session_id, created_at, state")
+      .in("tenant_id", callerTenantIds)
       .is("closed_at", null)
       .is("cancelled_at", null)
       .gte("created_at", cutoffDate.toISOString())

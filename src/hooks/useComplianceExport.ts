@@ -8,6 +8,8 @@ import { useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { ComplianceExport } from "@/lib/governance/types";
 import { EyeEvent } from "@/lib/eye/types";
+import { isServerVerifiedEvent } from "@/lib/eye/clientEventContract";
+import { useTenant } from "./useTenant";
 
 interface UseComplianceExportOptions {
   tenantId?: string;
@@ -29,7 +31,9 @@ async function generateHash(content: string): Promise<string> {
 }
 
 export function useComplianceExport(options: UseComplianceExportOptions = {}) {
-  const { tenantId = "default" } = options;
+  // Tenant comes from the caller's membership (never a literal default).
+  const { tenant } = useTenant();
+  const tenantId = options.tenantId ?? tenant?.tenantId ?? "unresolved";
 
   const [state, setState] = useState<ComplianceExportState>({
     generating: false,
@@ -75,11 +79,14 @@ export function useComplianceExport(options: UseComplianceExportOptions = {}) {
     })) as EyeEvent[];
 
     // Compute summary statistics
+    // Only server-verified supervisor events count as authorization evidence.
+    const verifiedEvents = (events || []).filter((e: any) => isServerVerifiedEvent(e.event_data));
+    const verifiedIds = new Set(verifiedEvents.map((e: any) => e.id));
     const aiApprovalEvents = transformedEvents.filter(
-      e => e.event_type === "AI_USAGE_APPROVED_BY_SUPERVISOR"
+      e => e.event_type === "AI_USAGE_APPROVED_BY_SUPERVISOR" && verifiedIds.has(e.event_id)
     );
     const aiRevokeEvents = transformedEvents.filter(
-      e => e.event_type === "AI_USAGE_APPROVAL_REVOKED"
+      e => e.event_type === "AI_USAGE_APPROVAL_REVOKED" && verifiedIds.has(e.event_id)
     );
     
     let aiAuthorizationStatus: "approved" | "missing" | "revoked" = "missing";
@@ -198,28 +205,18 @@ export function useComplianceExport(options: UseComplianceExportOptions = {}) {
         export_hash: exportHash,
       };
 
-      // Emit COMPLIANCE_EXPORT_GENERATED event
-      const { error: insertError } = await supabase.from("eye_events").insert({
-        event_type: "COMPLIANCE_EXPORT_GENERATED",
-        session_id: null,
-        event_data: {
-          event_version: 1,
-          tenant_id: tenantId,
-          time_range_start: startDate.toISOString(),
-          time_range_end: endDate.toISOString(),
-          generated_by_role: operatorRole,
-          operator_id: operatorId,
-          actor_type: "user",
-          actor_id: operatorId,
-          actor_role: operatorRole,
+      // Emit COMPLIANCE_EXPORT_GENERATED — server-verified (supervisor or auditor
+      // role checked in the database; actor/tenant derived from auth.uid()).
+      // Fails closed: no export record without an audit row.
+      const { error: insertError } = await supabase.rpc("record_governance_event", {
+        p_event_type: "COMPLIANCE_EXPORT_GENERATED",
+        p_subject_id: exportRecord.id,
+        p_metadata: {
+          export_id: exportRecord.id,
           export_hash: exportHash,
           event_count: events.length,
-          confidence: "explicit_user_action",
-          request_id: crypto.randomUUID(),
-          result: "success",
-          severity: "NOTICE",
-          resource_type: "export",
-          resource_id: exportRecord.id,
+          time_range_start: startDate.toISOString(),
+          time_range_end: endDate.toISOString(),
         },
       });
 
@@ -332,26 +329,14 @@ NO PHI IS INCLUDED IN THIS REPORT.
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      // Emit COMPLIANCE_EXPORT_DOWNLOADED event
-      await supabase.from("eye_events").insert({
-        event_type: "COMPLIANCE_EXPORT_DOWNLOADED",
-        session_id: null,
-        event_data: {
-          event_version: 1,
-          tenant_id: tenantId,
-          export_id: exportId,
-          export_hash: exportHash,
-          operator_id: operatorId,
-          actor_type: "user",
-          actor_id: operatorId,
-          confidence: "explicit_user_action",
-          request_id: crypto.randomUUID(),
-          result: "success",
-          severity: "INFO",
-          resource_type: "export",
-          resource_id: exportId,
-        },
+      // Emit COMPLIANCE_EXPORT_DOWNLOADED — server-verified; error is surfaced.
+      void operatorId; // actor derived server-side
+      const { error: downloadedError } = await supabase.rpc("record_governance_event", {
+        p_event_type: "COMPLIANCE_EXPORT_DOWNLOADED",
+        p_subject_id: exportId,
+        p_metadata: { export_id: exportId, export_hash: exportHash },
       });
+      if (downloadedError) throw downloadedError;
     } catch (err) {
       throw err;
     }

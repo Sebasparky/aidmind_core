@@ -3,6 +3,7 @@ import OpenAI from "https://esm.sh/openai@4.28.0";
 import { logEyeEvent } from "../_shared/eye.ts";
 import { buildCorsSecurityHeaders } from "../_shared/security-headers.ts";
 import { validateUuid } from "../_shared/input-validation.ts";
+import { requireUser, assertSessionAccess, requireTenantFor } from "../_shared/require-user.ts";
 
 const openai = new OpenAI({
   apiKey: Deno.env.get("OPENAI_API_KEY")!,
@@ -549,6 +550,12 @@ Deno.serve(async (req) => {
   if (!sessionIdResult.ok) return json(400, { error: "Invalid session_id format", code: "INVALID_SESSION_ID" });
 
   const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+  // ── Authenticate caller and authorize the session before any privileged access ──
+  const auth = await requireUser(req, supabase);
+  if (!auth.ok) return json(auth.status, { error: auth.error, code: "UNAUTHORIZED" });
+  const access = await assertSessionAccess(supabase, auth.caller, sessionIdResult.value, { allowSupervisor: true });
+  if (!access.ok) return json(access.status, { error: access.error, code: "SESSION_ACCESS_DENIED" });
 
   await logEyeEvent(supabase, {
     session_id: sessionIdResult.value,

@@ -46,6 +46,8 @@ export async function kickExtractor(): Promise<{ ok: boolean; detail?: string }>
  * - NFKD normalize + strip diacritics
  * - Replace any char not in [A-Za-z0-9._-] with _
  * - Collapse consecutive underscores
+ * - Strip leading dots/underscores and trailing underscores, so the key never
+ *   starts with "." (`.pdf`, `..pdf`, `.hidden.pdf` are rejected server-side)
  * - Trim to 200 chars (before extension)
  * - Guarantee .pdf extension
  */
@@ -62,8 +64,10 @@ export function sanitizeForStorageKey(name: string): string {
   // Collapse consecutive underscores
   s = s.replace(/_+/g, "_");
 
-  // Trim leading/trailing underscores
-  s = s.replace(/^_+|_+$/g, "");
+  // Trim leading dots/underscores and trailing underscores. A leading dot
+  // would yield a dot-prefixed key that the storage policy and
+  // parseKbDocumentPath reject.
+  s = s.replace(/^[._]+|_+$/g, "");
 
   // Limit length
   if (s.length > 200) s = s.slice(0, 200);

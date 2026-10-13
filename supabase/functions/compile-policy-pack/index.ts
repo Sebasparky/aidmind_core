@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { buildCorsSecurityHeaders } from "../_shared/security-headers.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
+import { requireUser, assertSessionAccess, requireTenantFor } from "../_shared/require-user.ts";
 
 /* ── Types ── */
 
@@ -1088,6 +1089,12 @@ Deno.serve(async (req) => {
 
   if (!session_id) return json(400, { success: false, error: "session_id is required" });
   if (!template_id) return json(400, { success: false, error: "template_id is required" });
+
+  // ── Authenticate caller and authorize the session before any privileged access ──
+  const auth = await requireUser(req, supabase);
+  if (!auth.ok) return json(auth.status, { success: false, error: auth.error });
+  const access = await assertSessionAccess(supabase, auth.caller, session_id, { allowSupervisor: true });
+  if (!access.ok) return json(access.status, { success: false, error: access.error });
 
   let retrieval_run_id: string | null = null;
 

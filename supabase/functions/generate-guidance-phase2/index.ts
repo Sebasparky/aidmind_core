@@ -14,6 +14,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
+import { requireUser, assertSessionAccess, requireTenantFor } from "../_shared/require-user.ts";
 
 const SERVICE_NAME = "generate-guidance-phase2";
 const MIN_NOTES_LENGTH = 20;
@@ -363,6 +364,12 @@ Deno.serve(async (req) => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabase = createClient(supabaseUrl, supabaseKey);
+
+  // ── Authenticate caller and authorize the session before any privileged access ──
+  const auth = await requireUser(req, supabase);
+  if (!auth.ok) return json(auth.status, { success: false, error: auth.error });
+  const access = await assertSessionAccess(supabase, auth.caller, sessionId, { allowSupervisor: true });
+  if (!access.ok) return json(access.status, { success: false, error: access.error });
 
   // ── Fetch session ──
   const { data: session, error: sessionErr } = await supabase

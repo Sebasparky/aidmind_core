@@ -11,6 +11,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
+import { requireUser, assertSessionAccess, requireTenantFor } from "../_shared/require-user.ts";
 
 const SERVICE_NAME = "generate-parser-artifacts";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -296,11 +297,16 @@ serve(async (req) => {
   }
 
   const templateId = body.template_id as string;
-  const tenantId = body.tenant_id as string;
   const force = body.force === true;
 
   if (!templateId || !UUID_RE.test(templateId)) return errJson(400, "INVALID_TEMPLATE_ID", "template_id required");
-  if (!tenantId || !UUID_RE.test(tenantId)) return errJson(400, "INVALID_TENANT_ID", "tenant_id required");
+
+  // ── Authenticate caller; tenant comes from membership, never from the body ──
+  const auth = await requireUser(req, supabase);
+  if (!auth.ok) return errJson(auth.status, "UNAUTHORIZED", auth.error);
+  const tenantRes = requireTenantFor(auth.caller, body.tenant_id);
+  if (!tenantRes.ok) return errJson(tenantRes.status, "TENANT_ACCESS_DENIED", tenantRes.error);
+  const tenantId = tenantRes.tenantId;
 
   try {
     // Fetch template content

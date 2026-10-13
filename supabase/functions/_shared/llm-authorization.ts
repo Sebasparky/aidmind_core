@@ -73,12 +73,18 @@ export async function checkLLMAuthorization(
       };
     }
 
-    // Find latest relevant event for this tenant/scope
+    // Find latest relevant event for this tenant/scope.
+    // Only server-observed, verified supervisor events count as authorization
+    // evidence. Rows written by the former direct-browser path (unverified,
+    // caller-chosen tenant/actor) are ignored, see audit-event-design.md.
     const scopedEvents = (events || []).filter((e: any) => {
       const eventData = (e.event_data || {}) as Record<string, unknown>;
       return (
         eventData.tenant_id === tenantId &&
-        eventData.scope === scope
+        eventData.scope === scope &&
+        eventData.source === "server_observed" &&
+        eventData.verified === true &&
+        eventData.actor_role === "supervisor"
       );
     });
 

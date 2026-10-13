@@ -28,6 +28,10 @@ jobs:
 
       - name: Run tests
         run: npx vitest run
+        env:
+          # Placeholders only: the Supabase client module needs a URL at import time.
+          VITE_SUPABASE_URL: http://127.0.0.1:54321
+          VITE_SUPABASE_PUBLISHABLE_KEY: placeholder-anon-key
 
       - name: Build
         run: npm run build

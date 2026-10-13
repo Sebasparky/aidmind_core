@@ -8,12 +8,24 @@
  * For binary documents (.pdf, .docx): proxies to a Google Cloud Run
  * extraction service via CASE_NOTE_EXTRACTOR_URL.
  *
+ * Authorization:
+ *   - The caller must present a valid Supabase user JWT (Authorization: Bearer).
+ *   - `storage_path` must match `<tenant_id>/<session_id>/<review_document_id>.<ext>`.
+ *   - The caller must be a member (`tenant_users`) of the tenant in the path.
+ *   Storage is read with the service role only AFTER these checks pass.
+ *
  * Part of the Guidance Phase 2 pipeline.
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
+import {
+  isPathWithinMemberTenants,
+  parseReviewDocumentPath,
+  sessionIdMatchesPath,
+} from "../_shared/storage-path-authorization.ts";
+import { requireUser } from "../_shared/require-user.ts";
 
 const SERVICE_NAME = "extract-case-note-text";
 const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
@@ -41,28 +53,46 @@ Deno.serve(async (req) => {
     return json(400, { success: false, error: "Invalid JSON body" });
   }
 
-  const storagePath = body.storage_path;
-  if (!storagePath || typeof storagePath !== "string" || storagePath.trim().length === 0) {
-    return json(400, { success: false, error: "storage_path is required" });
-  }
-
-  const mimeType = (body.mime_type as string) || "application/octet-stream";
-  const sessionId = (body.session_id as string) || null;
-
+  // ── Authenticate caller (user JWT required; active profile; tenant membership) ──
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  // ── Download file from storage ───────────────────────────
+  const auth = await requireUser(req, supabase);
+  if (!auth.ok) return json(auth.status, { success: false, error: auth.error });
+
+  // ── Validate storage path shape ──────────────────────────
+  if (!body.storage_path || typeof body.storage_path !== "string" || body.storage_path.trim().length === 0) {
+    return json(400, { success: false, error: "storage_path is required" });
+  }
+  const parsedPath = parseReviewDocumentPath(body.storage_path);
+  if (!parsedPath) {
+    return json(400, { success: false, error: "storage_path is not a valid review document path" });
+  }
+  if (!sessionIdMatchesPath(parsedPath, body.session_id)) {
+    return json(400, { success: false, error: "session_id does not match storage_path" });
+  }
+  const storagePath = parsedPath.normalizedPath;
+
+  const mimeType = (body.mime_type as string) || "application/octet-stream";
+  const sessionId = parsedPath.sessionId;
+
+  // ── Authorize: caller must belong to the tenant in the path ──
+  if (!isPathWithinMemberTenants(parsedPath, auth.caller.tenantIds)) {
+    // Deliberately indistinguishable from "not found" to avoid confirming object existence.
+    return json(404, { success: false, error: "File not found in storage" });
+  }
+
+  // ── Download file from storage (service role, post-authorization) ──
   const { data: fileData, error: downloadErr } = await supabase.storage
     .from(STORAGE_BUCKET)
-    .download(storagePath.trim());
+    .download(storagePath);
 
   if (downloadErr || !fileData) {
     console.error(`[${SERVICE_NAME}] Download error:`, downloadErr?.message);
     return json(404, {
       success: false,
-      error: `File not found in storage: ${storagePath}`,
+      error: "File not found in storage",
     });
   }
 

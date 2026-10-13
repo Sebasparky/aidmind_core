@@ -11,6 +11,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { requireServiceCaller } from "../_shared/require-user.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
 
 const SERVICE_NAME = "ensure-phase2-schema";
@@ -789,12 +790,25 @@ Deno.serve(async (req) => {
     return json(400, { success: false, error: "template_id is required" });
   }
 
+  // ── Internal function: only callable with the service-role key (generate-guidance-phase1) ──
+  const serviceAuth = requireServiceCaller(req);
+  if (!serviceAuth.ok) return json(serviceAuth.status, { success: false, error: serviceAuth.error });
+
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
   try {
+    // ── 0. Session must exist; template must belong to its tenant (or be global) ──
+    const { data: sessionRow, error: sessionRowErr } = await supabase
+      .from("sessions")
+      .select("id, tenant_id")
+      .eq("id", sessionId)
+      .maybeSingle();
+    if (sessionRowErr) throw new Error(`Failed to fetch session: ${sessionRowErr.message}`);
+    if (!sessionRow) return json(404, { success: false, error: "Session not found" });
+
     // ── 1. Check for existing active schema ──
     const { data: existingSchema, error: schemaErr } = await supabase
       .from("template_phase2_schemas")
@@ -817,6 +831,9 @@ Deno.serve(async (req) => {
 
     if (templateErr) throw new Error(`Failed to fetch template: ${templateErr.message}`);
     if (!template) return json(404, { success: false, error: "Template not found" });
+    if (template.tenant_id && template.tenant_id !== sessionRow.tenant_id) {
+      return json(404, { success: false, error: "Template not found" });
+    }
 
     let schemaId: string;
 

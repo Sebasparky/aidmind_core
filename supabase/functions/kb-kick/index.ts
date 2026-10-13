@@ -8,7 +8,9 @@
  * Always returns JSON { ok, status, cloudRunStatus?, body?, error? }. Never throws uncaught.
  */
 
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { requireUser } from "../_shared/require-user.ts";
 
 Deno.serve(async (req) => {
   // CORS preflight
@@ -21,6 +23,16 @@ Deno.serve(async (req) => {
     return new Response(
       JSON.stringify({ ok: false, status: "method_not_allowed", error: "Method not allowed" }),
       { status: 405, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
+  }
+
+  // ── Authenticate caller: only active tenant members may trigger extraction runs ──
+  const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+  const auth = await requireUser(req, supabase);
+  if (!auth.ok) {
+    return new Response(
+      JSON.stringify({ ok: false, status: "unauthorized", error: auth.error }),
+      { status: auth.status, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
 

@@ -7,6 +7,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { AuditorAccess } from "@/lib/governance/types";
+import { isServerVerifiedEvent } from "@/lib/eye/clientEventContract";
+import { useTenant } from "./useTenant";
 
 interface UseAuditorAccessOptions {
   tenantId?: string;
@@ -19,7 +21,9 @@ interface AuditorAccessState {
 }
 
 export function useAuditorAccess(options: UseAuditorAccessOptions = {}) {
-  const { tenantId = "default" } = options;
+  // Tenant comes from the caller's membership (never a literal default).
+  const { tenant } = useTenant();
+  const tenantId = options.tenantId ?? tenant?.tenantId ?? null;
 
   const [state, setState] = useState<AuditorAccessState>({
     activeAccess: [],
@@ -60,7 +64,9 @@ export function useAuditorAccess(options: UseAuditorAccessOptions = {}) {
       // Process in reverse chronological order
       for (const event of (events || [])) {
         const eventData = (event.event_data || {}) as Record<string, unknown>;
-        if (eventData.tenant_id !== tenantId) continue;
+        if (!tenantId || eventData.tenant_id !== tenantId) continue;
+        // Only server-verified supervisor actions are authorization evidence.
+        if (!isServerVerifiedEvent(eventData) || eventData.actor_role !== "supervisor") continue;
 
         const auditorId = (eventData.auditor_id as string) || (eventData.operator_id as string);
         if (!auditorId) continue;
@@ -118,27 +124,15 @@ export function useAuditorAccess(options: UseAuditorAccessOptions = {}) {
   ) => {
     try {
       const expiresAt = new Date(Date.now() + expiresInHours * 60 * 60 * 1000).toISOString();
-      
-      const { error } = await supabase.from("eye_events").insert({
-        event_type: "AUDITOR_ACCESS_GRANTED",
-        session_id: null,
-        event_data: {
-          event_version: 1,
-          tenant_id: tenantId,
-          auditor_id: auditorId,
-          granted_by_role: "supervisor",
-          granted_by_id: operatorId,
-          actor_type: "user",
-          actor_id: operatorId,
-          actor_role: "supervisor",
-          expires_at: expiresAt,
-          confidence: "explicit_user_action",
-          request_id: crypto.randomUUID(),
-          result: "success",
-          severity: "NOTICE",
-          resource_type: "credential",
-          resource_id: auditorId,
-        },
+
+      // Server-verified via record_governance_event: supervisor role and the
+      // subject's auditor role are checked in the database. `operatorId` is
+      // retained for call-site compatibility; the actor is derived from auth.uid().
+      void operatorId;
+      const { error } = await supabase.rpc("record_governance_event", {
+        p_event_type: "AUDITOR_ACCESS_GRANTED",
+        p_subject_id: auditorId,
+        p_expires_at: expiresAt,
       });
 
       if (error) throw error;
@@ -151,25 +145,10 @@ export function useAuditorAccess(options: UseAuditorAccessOptions = {}) {
   // Revoke auditor access
   const revokeAccess = useCallback(async (operatorId: string, auditorId: string) => {
     try {
-      const { error } = await supabase.from("eye_events").insert({
-        event_type: "AUDITOR_ACCESS_REVOKED",
-        session_id: null,
-        event_data: {
-          event_version: 1,
-          tenant_id: tenantId,
-          auditor_id: auditorId,
-          revoked_by_role: "supervisor",
-          revoked_by_id: operatorId,
-          actor_type: "user",
-          actor_id: operatorId,
-          actor_role: "supervisor",
-          confidence: "explicit_user_action",
-          request_id: crypto.randomUUID(),
-          result: "success",
-          severity: "NOTICE",
-          resource_type: "credential",
-          resource_id: auditorId,
-        },
+      void operatorId; // actor derived server-side
+      const { error } = await supabase.rpc("record_governance_event", {
+        p_event_type: "AUDITOR_ACCESS_REVOKED",
+        p_subject_id: auditorId,
       });
 
       if (error) throw error;

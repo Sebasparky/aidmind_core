@@ -1,0 +1,290 @@
+{
+  "started_at": "2026-10-13T22:14:30.340Z",
+  "app_url": "http://127.0.0.1:55495",
+  "supabase_url": "http://127.0.0.1:55461",
+  "reviewer_mode": "fixture_replay",
+  "live_model_run": false,
+  "fixture_tool_name": "run_reviewer_v2_fixture",
+  "session_id": "7d2f3c1e-5a4b-4c8d-9e6f-0a1b2c3d4e5f",
+  "server_mode": "preview",
+  "warnings": [
+    "Synthetic data only: invented tenants, users (@example.test), template, schema, session and document.",
+    "Reviewer output is a labelled FIXTURE REPLAY (src/services/reviewerFixtureReplay.ts); no local or hosted model was called.",
+    "server_mode=preview: dist/ was produced by `vite build` with .env.local present, so VITE_REVIEWER_MODEL_SOURCE=fixture is baked into that bundle. Do not deploy or ship dist/ from a demo run.",
+    "The 'DEV: Cleanup Orphans' button on the supervisor header is pre-existing and not gated by import.meta.env.DEV; it may appear in either server mode."
+  ],
+  "chrome": {
+    "launched_via": "channel:chrome",
+    "version": "154.0.8037.98"
+  },
+  "screenshots": {
+    "01-caseworker-dashboard": "docs/recruiter/screenshots/01-caseworker-dashboard.png",
+    "02-reviewer-findings": "docs/recruiter/screenshots/02-reviewer-findings.png",
+    "03-supervisor-feed": "docs/recruiter/screenshots/03-supervisor-feed.png",
+    "04-supervisor-event-detail": "docs/recruiter/screenshots/04-supervisor-event-detail.png",
+    "05-crosstenant-denied": "docs/recruiter/screenshots/05-crosstenant-denied.png"
+  },
+  "rpc_requests": [
+    {
+      "event_type": "tool.run.started",
+      "session_id": "7d2f3c1e-5a4b-4c8d-9e6f-0a1b2c3d4e5f",
+      "metadata_keys": [
+        "file_size_bytes",
+        "page_count",
+        "text_length",
+        "structured_answers_count",
+        "review_worthy_count",
+        "unanswered_count",
+        "human_review_count",
+        "review_tier",
+        "notes_source",
+        "tool_name",
+        "result"
+      ],
+      "tool_name": "run_reviewer_v2_fixture",
+      "http_status": 200
+    },
+    {
+      "event_type": "tool.run.completed",
+      "session_id": "7d2f3c1e-5a4b-4c8d-9e6f-0a1b2c3d4e5f",
+      "metadata_keys": [
+        "issue_count",
+        "high_severity_count",
+        "overall_risk",
+        "review_tier",
+        "notes_source",
+        "reconciliation_filtered",
+        "tool_name",
+        "result"
+      ],
+      "tool_name": "run_reviewer_v2_fixture",
+      "http_status": 200
+    }
+  ],
+  "eye_events": [
+    {
+      "id": "0ad8066a-9fe8-4039-ad98-5de17e44d5da",
+      "event_type": "tool.run.completed",
+      "created_at": "2026-10-13T22:14:38.815685+00:00",
+      "event_data_keys": [
+        "result",
+        "source",
+        "actor_id",
+        "severity",
+        "verified",
+        "tenant_id",
+        "tool_name",
+        "actor_role",
+        "actor_type",
+        "request_id",
+        "issue_count",
+        "resource_id",
+        "review_tier",
+        "notes_source",
+        "overall_risk",
+        "event_version",
+        "resource_type",
+        "high_severity_count",
+        "reconciliation_filtered"
+      ],
+      "tool_name": "run_reviewer_v2_fixture",
+      "source": "client_reported",
+      "verified": false,
+      "actor_role": "caseworker"
+    },
+    {
+      "id": "04ceacdc-403c-4653-939d-adda244b50be",
+      "event_type": "tool.run.started",
+      "created_at": "2026-10-13T22:14:38.815077+00:00",
+      "event_data_keys": [
+        "result",
+        "source",
+        "actor_id",
+        "severity",
+        "verified",
+        "tenant_id",
+        "tool_name",
+        "actor_role",
+        "actor_type",
+        "page_count",
+        "request_id",
+        "resource_id",
+        "review_tier",
+        "text_length",
+        "notes_source",
+        "event_version",
+        "resource_type",
+        "file_size_bytes",
+        "unanswered_count",
+        "human_review_count",
+        "review_worthy_count",
+        "structured_answers_count"
+      ],
+      "tool_name": "run_reviewer_v2_fixture",
+      "source": "client_reported",
+      "verified": false,
+      "actor_role": "caseworker"
+    }
+  ],
+  "results": [
+    {
+      "name": "0 synthetic PDF rendered",
+      "pass": true,
+      "detail": ".cache/demo-stack/demo-document.pdf"
+    },
+    {
+      "name": "1 caseworker lands on /dashboard",
+      "pass": true,
+      "detail": "http://127.0.0.1:55495/dashboard"
+    },
+    {
+      "name": "2a parser artifact status settled",
+      "pass": true,
+      "detail": "ready"
+    },
+    {
+      "name": "2b fixture badge visible in header and findings",
+      "pass": true,
+      "detail": "badge count=2"
+    },
+    {
+      "name": "2c finding shown: \"Client is clearly lying about her income.\"",
+      "pass": true,
+      "detail": "matches=2"
+    },
+    {
+      "name": "2c finding shown: \"She will never follow through with the housing plan.\"",
+      "pass": true,
+      "detail": "matches=2"
+    },
+    {
+      "name": "2c finding shown: \"The client was rude and difficult during the whole visit.\"",
+      "pass": true,
+      "detail": "matches=2"
+    },
+    {
+      "name": "2d attributed quote not flagged",
+      "pass": true,
+      "detail": "flagged blockquotes=0"
+    },
+    {
+      "name": "3a tool.run.started sent",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "3b tool.run.completed sent",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "3c no tool.run.failed sent",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "3d no document sentence in any RPC body",
+      "pass": true,
+      "detail": "15 sentences checked against 2 bodies"
+    },
+    {
+      "name": "3e RPC metadata keys all allowlisted",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "3f RPC tool_name discloses fixture mode",
+      "pass": true,
+      "detail": "run_reviewer_v2_fixture,run_reviewer_v2_fixture"
+    },
+    {
+      "name": "3g RPC calls accepted by the server",
+      "pass": true,
+      "detail": "200,200"
+    },
+    {
+      "name": "4a caseworker signed out (at /login)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "4b supervisor lands on /supervisor",
+      "pass": true,
+      "detail": "http://127.0.0.1:55495/supervisor"
+    },
+    {
+      "name": "4c supervisor feed shows the session's tool.run.completed event",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "4d event detail drawer opened and settled in the viewport",
+      "pass": true,
+      "detail": "x=1056 w=384"
+    },
+    {
+      "name": "4e supervisor page renders no document sentence",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "4f drawer 'Tool' row discloses run_reviewer_v2_fixture",
+      "pass": true,
+      "detail": "matches=1"
+    },
+    {
+      "name": "5a supervisor A can read eye_events for the session",
+      "pass": true,
+      "detail": "HTTP 200, rows=2"
+    },
+    {
+      "name": "5b run_reviewer_v2_fixture started+completed rows present",
+      "pass": true,
+      "detail": "fixture rows=2"
+    },
+    {
+      "name": "5c no document sentence in any eye_events.event_data",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "5d event_data keys ⊆ allowlist ∪ server stamps",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "5e events stamped source=client_reported, verified=false",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "6a supervisor of tenant B sees 0 eye_events for the session (filtered)",
+      "pass": true,
+      "detail": "HTTP 200, rows=0"
+    },
+    {
+      "name": "6b same-tenant non-owner caseworker sees 0 sessions rows (owner-scoped)",
+      "pass": true,
+      "detail": "HTTP 200, rows=0"
+    },
+    {
+      "name": "6c non-owner caseworker UI shows 'Session not found'",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "6d owning caseworker sees 0 eye_events rows (no caseworker read policy)",
+      "pass": true,
+      "detail": "HTTP 200, rows=0"
+    },
+    {
+      "name": "6e supervisor navigating to /dashboard is redirected to /supervisor",
+      "pass": true,
+      "detail": "http://127.0.0.1:55495/supervisor"
+    }
+  ],
+  "parser_artifact_status": "ready",
+  "finished_at": "2026-10-13T22:14:42.456Z",
+  "pass_count": 31,
+  "fail_count": 0
+}

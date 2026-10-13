@@ -929,6 +929,25 @@ export type Database = {
         Returns: number
       }
       get_my_profile: { Args: never; Returns: Json }
+      record_governance_event: {
+        Args: {
+          p_event_type: string
+          p_subject_id?: string | null
+          p_scope?: string
+          p_expires_at?: string | null
+          p_metadata?: Json
+        }
+        Returns: string
+      }
+      report_client_event: {
+        Args: {
+          p_event_type: string
+          p_session_id?: string | null
+          p_request_id?: string | null
+          p_metadata?: Json
+        }
+        Returns: string
+      }
       get_my_role: {
         Args: never
         Returns: Database["public"]["Enums"]["app_role"]

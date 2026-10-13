@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
+import { requireUser, assertSessionAccess, requireTenantFor } from "../_shared/require-user.ts";
 
 interface StartSessionRequest {
   tenant_id?: string;
@@ -31,18 +32,22 @@ Deno.serve(async (req) => {
     return json(400, { success: false, error: "Invalid JSON body" });
   }
 
-  const { tenant_id, user_id, metadata } = payload;
+  const { tenant_id: requested_tenant_id, metadata } = payload;
 
-  if (!tenant_id) {
-    return json(400, { success: false, error: "tenant_id is required" });
-  }
+  // ── Authenticate caller; tenant from membership, owner = caller ──
+  const auth = await requireUser(req, supabase);
+  if (!auth.ok) return json(auth.status, { success: false, error: auth.error });
+  const tenantRes = requireTenantFor(auth.caller, requested_tenant_id);
+  if (!tenantRes.ok) return json(tenantRes.status, { success: false, error: tenantRes.error });
+  const tenant_id = tenantRes.tenantId;
+  const user_id = auth.caller.userId;
 
   try {
     const { data: session, error } = await supabase
       .from("sessions")
       .insert({
         tenant_id,
-        user_id: user_id ?? null,
+        user_id,
         status: "initialized",
         metadata: metadata && typeof metadata === "object" ? metadata : {},
       })
@@ -55,7 +60,7 @@ Deno.serve(async (req) => {
       session_id: session.id,
       event_type: "SESSION_STARTED",
       serviceName: "start-session",
-      payload: { tenant_id, user_id: user_id ?? null },
+      payload: { tenant_id, user_id },
     });
 
     return json(200, { success: true, session });

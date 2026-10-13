@@ -18,6 +18,8 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { AIAuthorizationStatus, AIApprovalScope, AIUsageApproval } from "@/lib/governance/types";
 import { EyeEvent } from "@/lib/eye/types";
+import { isServerVerifiedEvent } from "@/lib/eye/clientEventContract";
+import { useTenant } from "./useTenant";
 
 interface UseAIAuthorizationOptions {
   tenantId?: string;
@@ -32,7 +34,10 @@ interface AIAuthorizationState {
 }
 
 export function useAIAuthorization(options: UseAIAuthorizationOptions = {}) {
-  const { tenantId = "default", scope = "organization" } = options;
+  const { scope = "organization" } = options;
+  // Tenant comes from the caller's membership (never a literal default).
+  const { tenant } = useTenant();
+  const tenantId = options.tenantId ?? tenant?.tenantId ?? null;
 
   const [state, setState] = useState<AIAuthorizationState>({
     status: "missing",
@@ -43,6 +48,10 @@ export function useAIAuthorization(options: UseAIAuthorizationOptions = {}) {
 
   // Derive authorization status from Eye events
   const deriveAuthorizationStatus = useCallback(async () => {
+    if (!tenantId) {
+      setState({ status: "missing", approval: null, loading: false, error: null });
+      return;
+    }
     try {
       setState(prev => ({ ...prev, loading: true, error: null }));
 
@@ -66,12 +75,16 @@ export function useAIAuthorization(options: UseAIAuthorizationOptions = {}) {
         return;
       }
 
-      // Find latest relevant event for this scope
+      // Find latest relevant event for this scope.
+      // Only server-verified supervisor events count; rows written by the former
+      // direct-browser path (unverified) are ignored.
       const scopedEvents = (events || []).filter((e: any) => {
         const eventData = (e.event_data || {}) as Record<string, unknown>;
         return (
           eventData.tenant_id === tenantId &&
-          eventData.scope === scope
+          eventData.scope === scope &&
+          isServerVerifiedEvent(eventData) &&
+          eventData.actor_role === "supervisor"
         );
       });
 
@@ -150,68 +163,30 @@ export function useAIAuthorization(options: UseAIAuthorizationOptions = {}) {
     };
   }, [deriveAuthorizationStatus]);
 
-  // Approve AI usage (emits Eye event)
-  const approve = useCallback(async (operatorId: string, policyId: string = "default") => {
-    try {
-      const { error } = await supabase.from("eye_events").insert({
-        event_type: "AI_USAGE_APPROVED_BY_SUPERVISOR",
-        session_id: null,
-        event_data: {
-          event_version: 1,
-          tenant_id: tenantId,
-          scope,
-          approved_by_role: "supervisor",
-          operator_id: operatorId,
-          actor_type: "user",
-          actor_id: operatorId,
-          actor_role: "supervisor",
-          approval_policy_id: policyId,
-          confidence: "explicit_user_action",
-          request_id: crypto.randomUUID(),
-          result: "success",
-          severity: "NOTICE",
-          resource_type: "policy",
-          resource_id: policyId,
-        },
-      });
+  // Approve AI usage — server-verified via record_governance_event
+  // (supervisor role, active profile and tenant are checked in the database;
+  // the operatorId argument is retained for call-site compatibility only).
+  const approve = useCallback(async (_operatorId: string, policyId: string = "default") => {
+    const { error } = await supabase.rpc("record_governance_event", {
+      p_event_type: "AI_USAGE_APPROVED_BY_SUPERVISOR",
+      p_subject_id: policyId,
+      p_scope: scope,
+      p_metadata: { approval_policy_id: policyId },
+    });
+    if (error) throw error;
+    await deriveAuthorizationStatus();
+  }, [scope, deriveAuthorizationStatus]);
 
-      if (error) throw error;
-      await deriveAuthorizationStatus();
-    } catch (err) {
-      throw err;
-    }
-  }, [tenantId, scope, deriveAuthorizationStatus]);
-
-  // Revoke AI usage (emits Eye event)
-  const revoke = useCallback(async (operatorId: string) => {
-    try {
-      const { error } = await supabase.from("eye_events").insert({
-        event_type: "AI_USAGE_APPROVAL_REVOKED",
-        session_id: null,
-        event_data: {
-          event_version: 1,
-          tenant_id: tenantId,
-          scope,
-          revoked_by_role: "supervisor",
-          operator_id: operatorId,
-          actor_type: "user",
-          actor_id: operatorId,
-          actor_role: "supervisor",
-          confidence: "explicit_user_action",
-          request_id: crypto.randomUUID(),
-          result: "success",
-          severity: "HIGH",
-          resource_type: "policy",
-          resource_id: "ai_authorization",
-        },
-      });
-
-      if (error) throw error;
-      await deriveAuthorizationStatus();
-    } catch (err) {
-      throw err;
-    }
-  }, [tenantId, scope, deriveAuthorizationStatus]);
+  // Revoke AI usage — server-verified via record_governance_event
+  const revoke = useCallback(async (_operatorId: string) => {
+    const { error } = await supabase.rpc("record_governance_event", {
+      p_event_type: "AI_USAGE_APPROVAL_REVOKED",
+      p_subject_id: "ai_authorization",
+      p_scope: scope,
+    });
+    if (error) throw error;
+    await deriveAuthorizationStatus();
+  }, [scope, deriveAuthorizationStatus]);
 
   return {
     ...state,

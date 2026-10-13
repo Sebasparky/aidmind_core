@@ -67,6 +67,7 @@ import type {
 } from "@/lib/tools/parser-artifact-types";
 import type { CaseNotesComparisonPacket } from "@/lib/security/vault-types";
 import { runLocalReviewer } from "@/services/localReviewer";
+import { isFixtureReplayEnabled, runFixtureReviewer } from "@/services/reviewerFixtureReplay";
 
 /**
  * SECURITY NOTES — Reviewer Pipeline
@@ -107,6 +108,15 @@ interface SelectedFile {
 // ─── Constants ───────────────────────────────────────────
 const MAX_FILE_SIZE_MB = 20;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+
+/**
+ * Fixture replay (VITE_REVIEWER_MODEL_SOURCE=fixture): canned candidate spans
+ * for the synthetic demo document replace the local model call. Disclosed in
+ * the UI badges below and in the audit event's tool_name.
+ */
+const FIXTURE_REPLAY = isFixtureReplayEnabled();
+const REVIEWER_TOOL_NAME = FIXTURE_REPLAY ? "run_reviewer_v2_fixture" : "run_reviewer_v2";
+const FIXTURE_BADGE_TEXT = "Fixture replay — no live model";
 
 const SEVERITY_CONFIG: Record<ReviewSeverity, { variant: "destructive" | "default" | "secondary"; label: string; dotClass: string }> = {
   high: { variant: "destructive", label: "High", dotClass: "bg-[hsl(var(--status-danger))]" },
@@ -853,7 +863,12 @@ function ResultsMode({
                 <section className="space-y-6">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="text-lg font-semibold text-foreground">Primary Language Findings</h3>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-lg font-semibold text-foreground">Primary Language Findings</h3>
+                        {FIXTURE_REPLAY && (
+                          <Badge variant="outline" className="text-[10px] text-muted-foreground">{FIXTURE_BADGE_TEXT}</Badge>
+                        )}
+                      </div>
                       <p className="text-sm text-muted-foreground mt-1">
                         Tone, bias, unsupported conclusions, and policy-language concerns in authored narrative
                       </p>
@@ -1445,7 +1460,7 @@ export default function Reviewer() {
     setToolState("running");
     logEvent({
       eventType: "tool.run.started", sessionId, requestId,
-      toolName: "run_reviewer_v2",
+      toolName: REVIEWER_TOOL_NAME,
       metadata: {
         file_size_bytes: fileSize ?? 0, page_count: pageCount,
         text_length: extractedFullText.length,
@@ -1455,7 +1470,7 @@ export default function Reviewer() {
         human_review_count: human_review_fields.length,
         review_tier: tier,
         notes_source: usedNotesSource ?? "none",
-        ...diagnostics,
+        // diagnostics are not forwarded: only allowlisted primitive keys reach the audit log
       },
     });
 
@@ -1523,7 +1538,9 @@ export default function Reviewer() {
           has_trigger_metadata: !!payload.language_trigger_metadata,
         });
       }
-      const localResult = await runLocalReviewer(payload);
+      const localResult = FIXTURE_REPLAY
+        ? await runFixtureReviewer(payload)
+        : await runLocalReviewer(payload);
       if (!localResult.success) throw new Error("Local reviewer failed");
       if (!localResult.review_report) throw new Error("Invalid response from reviewer");
 
@@ -1569,7 +1586,7 @@ export default function Reviewer() {
       setPostProcessStats({ before: issuesBefore, after: filteredIssues.length, suppressed: completenessSuppressions, reclassified: discrepancyReclassifications });
 
       logEvent({
-        eventType: "tool.run.completed", sessionId, requestId, toolName: "run_reviewer_v2",
+        eventType: "tool.run.completed", sessionId, requestId, toolName: REVIEWER_TOOL_NAME,
         result: "success",
         metadata: {
           issue_count: report.metrics.issue_count,
@@ -1584,7 +1601,7 @@ export default function Reviewer() {
       setToolState("success");
     } catch (err: any) {
       console.error("[Reviewer] Run failed:", err);
-      logEvent({ eventType: "tool.run.failed", sessionId, requestId, toolName: "run_reviewer_v2", result: "failure", metadata: { error_message: err?.message?.slice(0, 100) ?? "unknown" } });
+      logEvent({ eventType: "tool.run.failed", sessionId, requestId, toolName: REVIEWER_TOOL_NAME, result: "failure", metadata: { error_code: "reviewer_run_failed" } });
       setErrorMessage(err?.message || "An unexpected error occurred.");
       setToolState("error");
     }
@@ -1753,6 +1770,9 @@ export default function Reviewer() {
                 ) : (
                   <span className="text-xs text-muted-foreground">Step 3 of 3</span>
                 )}
+                {FIXTURE_REPLAY && (
+                  <Badge variant="outline" className="text-[10px] text-muted-foreground">{FIXTURE_BADGE_TEXT}</Badge>
+                )}
               </div>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {sessionInfo.caseLabel}{sessionInfo.interactionType ? ` · ${sessionInfo.interactionType}` : ""}
@@ -1761,7 +1781,7 @@ export default function Reviewer() {
           </div>
           <div className="flex items-center gap-2">
             <Lock className="h-3 w-3 text-muted-foreground/40" />
-            <span className="text-[10px] text-muted-foreground/50">In-memory only · Nothing stored</span>
+            <span className="text-[10px] text-muted-foreground/50">In-memory only · Nothing stored{FIXTURE_REPLAY ? " · Fixture replay" : ""}</span>
           </div>
         </div>
       </header>

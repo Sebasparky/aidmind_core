@@ -50,23 +50,12 @@ export function useSessionHeartbeat({ sessionId, isActive }: UseSessionHeartbeat
     const requestId = `hb_${sessionId}_${now}`;
 
     try {
-      const { error } = await supabase.from("eye_events").insert({
-        session_id: sessionId,
-        event_type: "SESSION_HEARTBEAT",
-        event_data: {
-          event_version: 1,
-          tenant_id: "default",
-          environment: "dev",
-          actor_type: "user",
-          actor_id: "caseworker",
-          actor_role: "caseworker",
-          resource_type: "session",
-          resource_id: sessionId,
-          result: "success",
-          severity: "INFO",
-          request_id: requestId,
-          // No PHI is included
-        },
+      // Client-reported via constrained RPC; actor/tenant are derived server-side.
+      const { error } = await supabase.rpc("report_client_event", {
+        p_event_type: "SESSION_HEARTBEAT",
+        p_session_id: sessionId,
+        p_request_id: requestId,
+        p_metadata: {},
       });
 
       if (error) {

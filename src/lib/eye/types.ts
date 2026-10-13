@@ -522,6 +522,10 @@ export interface EyeEventOptional {
   temperature?: number;
   prompt_template_id?: string;
   data_retention_mode?: "zero_retention" | "standard" | "self_hosted";
+
+  // Tool runs (tool.run.* events): tool identifier reported in metadata, e.g.
+  // "run_reviewer_v2" (live local model) or "run_reviewer_v2_fixture" (labelled replay)
+  tool_name?: string;
   
   // Purge-specific
   remaining_count?: number;

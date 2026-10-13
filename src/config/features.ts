@@ -55,6 +55,13 @@ export const V1_SHOW_PLACEHOLDER_SCHEDULE = false;
  */
 export const V1_DASHBOARD_REDESIGN = true;
 
+/**
+ * Inject synthetic "coordination" events (prototype placeholders from
+ * src/lib/platform/coordination-events.ts) into the supervisor event feed.
+ * When false: the supervisor feed shows only rows read from eye_events.
+ */
+export const V1_SHOW_MOCK_COORDINATION_EVENTS = false;
+
 // ============================================================================
 // Helper
 // ============================================================================
@@ -69,6 +76,7 @@ export const FEATURES = {
   showPlaceholderTasks: V1_SHOW_PLACEHOLDER_TASKS,
   showPlaceholderSchedule: V1_SHOW_PLACEHOLDER_SCHEDULE,
   dashboardRedesign: V1_DASHBOARD_REDESIGN,
+  showMockCoordinationEvents: V1_SHOW_MOCK_COORDINATION_EVENTS,
 } as const;
 
 /**

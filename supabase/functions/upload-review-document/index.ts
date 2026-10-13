@@ -14,6 +14,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
+import { requireUser, assertSessionAccess, requireTenantFor } from "../_shared/require-user.ts";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -196,6 +197,13 @@ serve(async (req) => {
     if (typeof session_id !== "string" || !session_id) {
       return json(400, { success: false, error: "session_id is required" });
     }
+
+    // ── Authenticate caller and authorize the session before any privileged access ──
+    const auth = await requireUser(req, supabase);
+    if (!auth.ok) return json(auth.status, { success: false, error: auth.error });
+    const access = await assertSessionAccess(supabase, auth.caller, session_id, { allowSupervisor: true });
+    if (!access.ok) return json(access.status, { success: false, error: access.error });
+
     if (!(file instanceof File)) {
       return json(400, { success: false, error: "file is required" });
     }
@@ -294,7 +302,7 @@ serve(async (req) => {
       .from(bucket)
       .upload(objectKey, fileBytes, {
         contentType: mimeType,
-        upsert: true,
+        upsert: false, // object keys are fresh UUIDs; overwrite authority is not needed
       });
 
     if (storageErr) {

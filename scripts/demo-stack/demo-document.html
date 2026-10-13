@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Housing Stability Check-In - synthetic demo document</title>
+<!--
+  SYNTHETIC DEMO DOCUMENT. Entirely fictional: the client "J. Rivera", the agency,
+  the dates and every statement are invented for the AidMind recruiter demo.
+  The three deliberately problematic sentences are the fixture-replay targets
+  (see src/services/reviewerFixtureReplay.ts). The attributed quote must NOT be flagged.
+  Rendered to .demo-stack/demo-document.pdf by scripts/demo-stack/demo-browser.mjs.
+-->
+<style>
+  /* font-variant-ligatures: none keeps "ffi"/"fi" as separate glyphs so the PDF text layer
+     extracts verbatim sentences (e.g. "difficult") instead of ligature code points. */
+  body { font-family: Helvetica, Arial, sans-serif; font-size: 11.5pt; color: #1a1a1a; margin: 0.75in; line-height: 1.45; font-variant-ligatures: none; }
+  h1 { font-size: 16pt; margin: 0 0 2pt 0; }
+  .meta { font-size: 9.5pt; color: #555; margin-bottom: 14pt; }
+  h2 { font-size: 11pt; margin: 14pt 0 6pt 0; border-bottom: 1px solid #999; padding-bottom: 2pt; }
+  p { margin: 0 0 6pt 0; }
+  .label { font-weight: bold; }
+</style>
+</head>
+<body>
+  <h1>Housing Stability Check-In</h1>
+  <div class="meta">Riverside Family Services (fictional agency) - synthetic demo record - not a real client</div>
+
+  <h2>SECTION 1: Client Information</h2>
+  <p><span class="label">Client Name:</span> J. Rivera</p>
+  <p><span class="label">Visit Date:</span> 2026-09-14</p>
+
+  <h2>SECTION 2: Housing Status</h2>
+  <p><span class="label">Current Housing Status:</span> At risk of losing housing</p>
+  <p><span class="label">Rent Burden:</span> Over 50% of income</p>
+  <p><span class="label">Lease In Place:</span> Yes</p>
+
+  <h2>SECTION 3: Housing Narrative</h2>
+  <p><span class="label">Housing Narrative:</span> Home visit completed at the client's apartment on 2026-09-14. The unit was clean and the client reported that the monthly rent increased by 120 dollars this month. Client stated "I am worried about the rent increase." Client is clearly lying about her income. She has applied for the emergency rental assistance program and is waiting for a decision from the county office.</p>
+
+  <h2>SECTION 4: Worker Assessment</h2>
+  <p><span class="label">Worker Assessment:</span> Rent burden is above 50 percent of the reported household income, which places the household at risk of losing housing. She will never follow through with the housing plan. The client was rude and difficult during the whole visit. The household has no current eviction notice and the lease runs through March 2027.</p>
+
+  <h2>SECTION 5: Next Steps</h2>
+  <p><span class="label">Next Steps:</span> Follow up on the rental assistance application within two weeks. Provide the client with the utility assistance referral discussed during the visit. Schedule the next check-in for 2026-10-05 and review the household budget worksheet together at that visit.</p>
+
+  <p class="meta" style="margin-top:18pt">Prepared by caseworker D. Okafor (fictional). Synthetic demo content only.</p>
+</body>
+</html>

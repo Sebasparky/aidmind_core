@@ -1,14 +1,17 @@
 /**
  * Hook to fetch real Eye events from Supabase
  * Replaces mock data with real database queries
- * 
- * Also injects mock coordination events from The Platform for prototype.
+ *
+ * Mock coordination events (prototype placeholders) are only merged in when
+ * V1_SHOW_MOCK_COORDINATION_EVENTS is true; by default the feed shows only
+ * rows read from eye_events.
  */
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { EyeEvent, EyeEventType, EventSeverity, EventCategory, EVENT_SEVERITY_MAP } from "@/lib/eye/types";
 import { generateMockCoordinationEvents } from "@/lib/platform/coordination-events";
+import { V1_SHOW_MOCK_COORDINATION_EVENTS } from "@/config/features";
 
 interface RawEyeEvent {
   id: string;
@@ -60,11 +63,15 @@ function transformEvent(raw: RawEyeEvent): EyeEvent {
     bytes_in: eventData.bytes_in,
     bytes_out: eventData.bytes_out,
     ttl_seconds: eventData.ttl_seconds,
+    tool_name: eventData.tool_name,
   };
 }
 
-// Generate mock coordination events once on module load
-const MOCK_COORDINATION_EVENTS = generateMockCoordinationEvents();
+// Mock coordination events are generated once on module load, and only when the
+// feature flag is on (default off: the supervisor feed shows real eye_events only).
+const MOCK_COORDINATION_EVENTS: EyeEvent[] = V1_SHOW_MOCK_COORDINATION_EVENTS
+  ? generateMockCoordinationEvents()
+  : [];
 
 export interface UseEyeEventsOptions {
   timeRangeHours?: number;

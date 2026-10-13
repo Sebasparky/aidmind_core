@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
+import { requireUser, assertSessionAccess, requireTenantFor } from "../_shared/require-user.ts";
 
 type SessionAction = "create" | "get" | "update_status" | "close" | "cancel";
 
@@ -80,11 +81,22 @@ Deno.serve(async (req) => {
 
   const { action, session_id, data } = payload;
 
+  // ── Authenticate caller; every non-create action is bound to a session the caller may access ──
+  const auth = await requireUser(req, supabase);
+  if (!auth.ok) return json(auth.status, { success: false, error: auth.error });
+  if (action !== "create") {
+    const access = await assertSessionAccess(supabase, auth.caller, session_id, { allowSupervisor: true });
+    if (!access.ok) return json(access.status, { success: false, error: access.error });
+  }
+
   try {
     switch (action) {
       // ── CREATE ──────────────────────────────────────────────
       case "create": {
-        if (!data?.tenant_id) return json(400, { success: false, error: "data.tenant_id is required" });
+        const tenantRes = requireTenantFor(auth.caller, data?.tenant_id);
+        if (!tenantRes.ok) return json(tenantRes.status, { success: false, error: tenantRes.error });
+        const createTenantId = tenantRes.tenantId;
+        const createUserId = auth.caller.userId;
 
         // Validate guidance_scope
         const scope = data.guidance_scope;
@@ -99,8 +111,8 @@ Deno.serve(async (req) => {
         }
 
         const insertData: Record<string, unknown> = {
-          tenant_id: data.tenant_id,
-          user_id: data.user_id ?? null,
+          tenant_id: createTenantId,
+          user_id: createUserId,
           status: "initialized",
           metadata: {},
         };
@@ -113,7 +125,7 @@ Deno.serve(async (req) => {
         if (scope) {
           insertData.guidance_scope = scope;
           insertData.guidance_scope_other = scope === "other" ? (data.guidance_scope_other ?? "").trim() : null;
-          insertData.guidance_scope_set_by = data.user_id ?? null;
+          insertData.guidance_scope_set_by = createUserId;
         }
 
         const { data: session, error } = await supabase
@@ -129,8 +141,8 @@ Deno.serve(async (req) => {
           event_type: "session.created",
           serviceName: "session-manager",
           payload: {
-            tenant_id: data.tenant_id,
-            user_id: data.user_id ?? null,
+            tenant_id: createTenantId,
+            user_id: createUserId,
             guidance_scope: scope ?? null,
             ...(scope === "other" ? { guidance_scope_other: (data.guidance_scope_other ?? "").trim() } : {}),
             result: "success",

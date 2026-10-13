@@ -14,6 +14,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { logEyeEvent } from "../_shared/eye.ts";
+import { requireUser, assertSessionAccess, requireTenantFor } from "../_shared/require-user.ts";
 import {
   classifyAndDeduplicate,
   type CandidateIssue,
@@ -569,6 +570,12 @@ serve(async (req) => {
   if (!UUID_RE.test(v2.session_id)) {
     return errJson(400, "INVALID_SESSION_ID", "session_id must be a valid UUID");
   }
+
+  // ── Authenticate caller and authorize the session before any privileged access ──
+  const auth = await requireUser(req, supabase);
+  if (!auth.ok) return errJson(auth.status, "UNAUTHORIZED", auth.error);
+  const access = await assertSessionAccess(supabase, auth.caller, v2.session_id, { allowSupervisor: true });
+  if (!access.ok) return errJson(access.status, "SESSION_ACCESS_DENIED", access.error);
 
   if (v2.document_text.trim().length < MIN_DOC_TEXT_CHARS) {
     return errJson(400, "TEXT_TOO_SHORT", `document_text must be at least ${MIN_DOC_TEXT_CHARS} characters`);

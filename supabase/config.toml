@@ -2,6 +2,12 @@ project_id = "qdbfjxmxnxtubltahuqe"
 
 # V1 PIVOT: transcribe-audio and redact-transcript return 410 Gone
 # Original implementations preserved in supabase/functions/_future/
+#
+# verify_jwt = true is gateway-level only (the public anon key is itself a valid
+# project JWT). Caller identity is enforced in code via _shared/require-user.ts.
+# ensure-phase2-schema and ingest-kb-text are server-to-server (service-role
+# bearer / shared secret checked in code) and stay verify_jwt = false so the
+# gateway does not reject non-JWT secret formats.
 
 [functions.transcribe-audio]
 verify_jwt = false
@@ -19,43 +25,46 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.select-template]
-verify_jwt = false
+verify_jwt = true
 
 [functions.generate-guidance-phase1]
-verify_jwt = false
+verify_jwt = true
 
 [functions.run-reviewer]
-verify_jwt = false
+verify_jwt = true
 
 [functions.upload-review-document]
-verify_jwt = false
+verify_jwt = true
 
 [functions.kb-kick]
-verify_jwt = false
+verify_jwt = true
 
 [functions.upload-interview-notes-text]
-verify_jwt = false
+verify_jwt = true
 
 [functions.generate-guidance-phase2]
-verify_jwt = false
+verify_jwt = true
 
 [functions.ingest-kb-text]
 verify_jwt = false
 
 [functions.compile-policy-pack]
-verify_jwt = false
+verify_jwt = true
 
 [functions.get-citation-details]
-verify_jwt = false
+verify_jwt = true
 
 [functions.records-room]
-verify_jwt = false
+verify_jwt = true
 
 [functions.ensure-phase2-schema]
 verify_jwt = false
 
 [functions.extract-case-note-text]
-verify_jwt = false
+verify_jwt = true
 
 [functions.generate-parser-artifacts]
-verify_jwt = false
+verify_jwt = true
+
+[functions.start-session]
+verify_jwt = true

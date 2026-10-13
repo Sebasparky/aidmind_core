@@ -8,7 +8,8 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { logEyeEvent, deriveTenantId } from "../_shared/eye.ts";
+import { logEyeEvent } from "../_shared/eye.ts";
+import { requireUser, assertSessionAccess } from "../_shared/require-user.ts";
 import { 
   buildCorsSecurityHeaders, 
   enforceTransportSecurity,
@@ -146,7 +147,7 @@ Deno.serve(async (req) => {
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const requestId = crypto.randomUUID();
-  const tenantId = deriveTenantId(req);
+  let tenantId = "unresolved"; // set from the verified session below; never from a client header
 
   try {
     // Parse and validate request body
@@ -183,6 +184,19 @@ Deno.serve(async (req) => {
     // ============================================================
     // AUTHORIZATION CHECK (MANDATORY)
     // ============================================================
+    // ── Authenticate caller and bind the request to a session they may access ──
+    const callerAuth = await requireUser(req, supabase);
+    if (!callerAuth.ok) {
+      return new Response(JSON.stringify({ error: callerAuth.error, code: "UNAUTHORIZED" }),
+        { status: callerAuth.status, headers: createSecureJsonHeaders(req) });
+    }
+    const sessionAccess = await assertSessionAccess(supabase, callerAuth.caller, session_id, { allowSupervisor: true });
+    if (!sessionAccess.ok) {
+      return new Response(JSON.stringify({ error: sessionAccess.error, code: "SESSION_ACCESS_DENIED" }),
+        { status: sessionAccess.status, headers: createSecureJsonHeaders(req) });
+    }
+    tenantId = sessionAccess.tenantId;
+
     const authResult = await checkLLMAuthorization(supabase, {
       tenantId,
       scope: "organization",

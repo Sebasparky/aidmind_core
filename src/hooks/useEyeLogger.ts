@@ -1,18 +1,22 @@
 /**
- * useEyeLogger — Client-side Eye event logging for tool runs.
+ * useEyeLogger — Client-reported lifecycle/tool events.
  *
- * Provides a `logEvent` function that inserts metadata-only events
- * into eye_events via the Supabase client. Never includes content payloads.
- *
- * Uses supabase.functions.invoke() for privileged writes when needed,
- * but for eye_events (which have permissive RLS for service_role),
- * we log via edge function to maintain the security contract.
+ * Writes go through the constrained RPC `report_client_event`, which derives
+ * actor and tenant from the authenticated user and the referenced session,
+ * validates the event type and metadata against an allowlist, and stamps
+ * `source: "client_reported", verified: false`. The browser never supplies
+ * identity, tenant, or free text. Direct INSERTs into eye_events are not
+ * permitted for browser roles.
  */
 
 import { useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { useTenant } from "./useTenant";
+import {
+  isClientReportableEventType,
+  isValidRequestId,
+  sanitizeClientEventMetadata,
+} from "@/lib/eye/clientEventContract";
 
 interface LogEventParams {
   eventType: string;
@@ -25,40 +29,33 @@ interface LogEventParams {
 
 export function useEyeLogger() {
   const { user } = useAuth();
-  const { tenant } = useTenant();
 
   const logEvent = useCallback(
     async (params: LogEventParams) => {
       const { eventType, sessionId, requestId, result, toolName, metadata } = params;
 
-      // Build event_data (metadata only, no content)
-      const eventData: { [key: string]: string | number | boolean | null | undefined } = {
-        event_version: 1,
-        tenant_id: tenant?.tenantId ?? "unknown",
-        actor_type: "user",
-        actor_id: user?.id ?? "unknown",
+      if (!user) return; // nothing to attribute; the RPC would reject anyway
+      if (!isClientReportableEventType(eventType)) {
+        console.warn(`[EyeLogger] Event type not client-reportable, dropped: ${eventType}`);
+        return;
+      }
+
+      const { metadata: safeMetadata, dropped } = sanitizeClientEventMetadata({
+        ...(metadata ?? {}),
+        ...(toolName ? { tool_name: toolName } : {}),
         result: result ?? "success",
-      };
-
-      if (toolName) eventData.tool_name = toolName;
-      if (requestId) eventData.request_id = requestId;
-
-      // Flatten safe metadata fields (only primitives)
-      if (metadata) {
-        for (const [key, val] of Object.entries(metadata)) {
-          if (val === null || typeof val === "string" || typeof val === "number" || typeof val === "boolean") {
-            eventData[key] = val as string | number | boolean | null;
-          }
-        }
+      });
+      if (dropped.length > 0) {
+        console.warn(`[EyeLogger] Dropped metadata keys for ${eventType}:`, dropped.map((d) => `${d.key}(${d.reason})`).join(", "));
       }
 
       try {
-        const { error } = await supabase.from("eye_events").insert([{
-          session_id: sessionId ?? null,
-          event_type: eventType,
-          event_data: eventData,
-          request_id_text: requestId ?? null,
-        }]);
+        const { error } = await supabase.rpc("report_client_event", {
+          p_event_type: eventType,
+          p_session_id: sessionId ?? null,
+          p_request_id: isValidRequestId(requestId) ? requestId : null,
+          p_metadata: safeMetadata,
+        });
 
         if (error) {
           console.error(`[EyeLogger] Failed to log ${eventType}:`, error.message);
@@ -68,7 +65,7 @@ export function useEyeLogger() {
         console.error(`[EyeLogger] Exception logging ${eventType}:`, err);
       }
     },
-    [user?.id, tenant?.tenantId]
+    [user]
   );
 
   return { logEvent };

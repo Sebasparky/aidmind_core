@@ -14,10 +14,10 @@ Create 4 users via the Supabase dashboard (**Authentication → Users → Add us
 
 | Email | Password | Intended Role | Intended Status |
 |---|---|---|---|
-| `caseworker.test@aidmind.dev` | `Test1234!` | caseworker | active |
-| `supervisor.test@aidmind.dev` | `Test1234!` | supervisor | active |
-| `auditor.test@aidmind.dev` | `Test1234!` | auditor | active |
-| `pending.test@aidmind.dev` | `Test1234!` | caseworker (default) | pending |
+| `caseworker.test@aidmind.dev` | `<set-a-unique-test-password>` | caseworker | active |
+| `supervisor.test@aidmind.dev` | `<set-a-unique-test-password>` | supervisor | active |
+| `auditor.test@aidmind.dev` | `<set-a-unique-test-password>` | auditor | active |
+| `pending.test@aidmind.dev` | `<set-a-unique-test-password>` | caseworker (default) | pending |
 
 After signup, the `handle_new_user` trigger auto-creates:
 - A `profiles` row with `status = 'pending'`

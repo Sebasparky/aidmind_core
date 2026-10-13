@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { logEyeEvent } from "../_shared/eye.ts";
 import { buildCorsSecurityHeaders } from "../_shared/security-headers.ts";
 import { validateUuid, validatePlainText } from "../_shared/input-validation.ts";
+import { requireUser, assertSessionAccess, requireTenantFor } from "../_shared/require-user.ts";
 
 const MAX_TEMPLATE_SIZE = 20 * 1024 * 1024; // 20 MB
 
@@ -72,6 +73,12 @@ Deno.serve(async (req) => {
   if (!templateId && !uploadFile) {
     return json(req, 400, { success: false, error: "Provide template_id or template_upload", code: "TEMPLATE_INPUT_REQUIRED" });
   }
+
+  // ── Authenticate caller and authorize the session before any privileged access ──
+  const auth = await requireUser(req, supabase);
+  if (!auth.ok) return json(req, auth.status, { success: false, error: auth.error, code: "UNAUTHORIZED" });
+  const access = await assertSessionAccess(supabase, auth.caller, sessionIdResult.value, { allowSupervisor: true });
+  if (!access.ok) return json(req, access.status, { success: false, error: access.error, code: "SESSION_ACCESS_DENIED" });
 
   try {
     // ── 1. Fetch session ───────────────────────────────────────

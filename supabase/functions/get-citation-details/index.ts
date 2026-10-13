@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { requireUser, assertSessionAccess, requireTenantFor } from "../_shared/require-user.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -25,6 +26,18 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
+
+    // ── Authenticate caller and authorize the session before any privileged access ──
+    const auth = await requireUser(req, supabase);
+    if (!auth.ok) {
+      return new Response(JSON.stringify({ error: auth.error }),
+        { status: auth.status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+    const access = await assertSessionAccess(supabase, auth.caller, session_id, { allowSupervisor: true });
+    if (!access.ok) {
+      return new Response(JSON.stringify({ error: access.error }),
+        { status: access.status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
 
     // Separate real UUIDs from virtual citations (e.g. "TEMPLATE")
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
